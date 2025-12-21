@@ -386,8 +386,8 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - [ ] ListObjectsV2: marker compatibility (AWS-style)
 
 ### 19.4 Observability
-- [ ] `/v1/meta/stats` JSON endpoint
-- [ ] Structured request logs z request-id
+- [x] `/v1/meta/stats` JSON endpoint
+- [x] Structured request logs z request-id
 
 ### 19.5 Ops polish
 - [ ] GC plan file + `gc run --from-plan`
