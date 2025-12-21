@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,7 +162,7 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
-	file, man, err := e.openManifestByVersion(versionID)
+	file, man, err := e.openManifestByVersion(ctx, versionID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -181,7 +182,7 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 	if length <= 0 {
 		return nil, nil, errors.New("engine: invalid range length")
 	}
-	file, man, err := e.openManifestByVersion(versionID)
+	file, man, err := e.openManifestByVersion(ctx, versionID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -196,22 +197,50 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 	return reader, man, nil
 }
 
-func (e *Engine) openManifestByVersion(versionID string) (*os.File, *manifest.Manifest, error) {
-	paths := []string{
-		e.layout.ManifestPath(versionID),
-	}
-	if entries, err := os.ReadDir(e.layout.ManifestsDir); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if strings.HasSuffix(name, "__"+versionID) {
-				paths = append(paths, filepath.Join(e.layout.ManifestsDir, name))
-			}
-		}
+func (e *Engine) openManifestByVersion(ctx context.Context, versionID string) (*os.File, *manifest.Manifest, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	var lastErr error
+	seen := make(map[string]struct{})
+	paths := make([]string, 0, 4)
+	addPath := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	if e.metaStore != nil {
+		path, err := e.metaStore.ManifestPath(ctx, versionID)
+		if err == nil && path != "" {
+			addPath(path)
+		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			lastErr = err
+		}
+	}
+
+	addPath(e.layout.ManifestPath(versionID))
+
+	if err := filepath.WalkDir(e.layout.ManifestsDir, func(path string, d iofs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), "__"+versionID) {
+			addPath(path)
+		}
+		return nil
+	}); err != nil && lastErr == nil {
+		lastErr = err
+	}
+
 	for _, path := range paths {
 		file, err := os.Open(path)
 		if err != nil {

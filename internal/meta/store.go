@@ -428,6 +428,19 @@ func (s *Store) CurrentVersion(ctx context.Context, bucket, key string) (string,
 	return versionID, nil
 }
 
+// ManifestPath returns the manifest path for a version id.
+func (s *Store) ManifestPath(ctx context.Context, versionID string) (string, error) {
+	if versionID == "" {
+		return "", errors.New("meta: version id required")
+	}
+	var path string
+	err := s.db.QueryRowContext(ctx, "SELECT path FROM manifests WHERE version_id=?", versionID).Scan(&path)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // MultipartUpload holds upload metadata.
 type MultipartUpload struct {
 	UploadID  string
@@ -510,6 +523,30 @@ func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error
 	_, err := s.db.ExecContext(ctx, `
 UPDATE multipart_uploads SET state='ABORTED' WHERE upload_id=?`, uploadID)
 	return err
+}
+
+// CompleteMultipartUpload marks an upload as completed and clears its parts.
+func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string) error {
+	if uploadID == "" {
+		return errors.New("meta: upload id required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `
+UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // PutMultipartPart records or replaces a part.

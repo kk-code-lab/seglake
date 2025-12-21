@@ -153,9 +153,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			writeError(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID)
 			return
 		}
-		w.Header().Set("Content-Length", intToString(length))
-		w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
 		if headOnly {
+			w.Header().Set("Content-Length", intToString(length))
+			w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
 			w.WriteHeader(http.StatusPartialContent)
 			return
 		}
@@ -165,14 +165,16 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			return
 		}
 		defer func() { _ = reader.Close() }()
+		w.Header().Set("Content-Length", intToString(length))
+		w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = ioCopy(w, reader)
 		return
 	}
-	if meta.Size >= 0 {
-		w.Header().Set("Content-Length", intToString(meta.Size))
-	}
 	if headOnly {
+		if meta.Size >= 0 {
+			w.Header().Set("Content-Length", intToString(meta.Size))
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -182,6 +184,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 	defer func() { _ = reader.Close() }()
+	if meta.Size >= 0 {
+		w.Header().Set("Content-Length", intToString(meta.Size))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = ioCopy(w, reader)
 }
