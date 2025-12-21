@@ -37,6 +37,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleStats(r.Context(), w, requestID)
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
+		bucket, ok := parseBucket(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			return
+		}
+		_ = bucket
+		h.handleLocation(w, requestID)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
 		bucket, ok := parseBucket(r.URL.Path)
 		if !ok {
@@ -48,6 +58,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	bucket, key, ok := parsePath(r.URL.Path)
 	if !ok {
+		if r.Method == http.MethodGet {
+			if bucketOnly, ok := parseBucket(r.URL.Path); ok {
+				h.handleListV1(r.Context(), w, r, bucketOnly, requestID)
+				return
+			}
+		}
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID)
 		return
 	}
@@ -118,7 +134,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if result.ETag != "" {
 		w.Header().Set("ETag", `"`+result.ETag+`"`)
 	}
-	w.Header().Set("Last-Modified", result.CommittedAt.Format(time.RFC1123))
+	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -142,7 +158,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if meta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
-			w.Header().Set("Last-Modified", t.UTC().Format(time.RFC1123))
+			w.Header().Set("Last-Modified", formatHTTPTime(t))
 		}
 	}
 	rangeHeader := r.Header.Get("Range")
