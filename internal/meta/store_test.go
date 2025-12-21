@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStoreRecordPut(t *testing.T) {
@@ -81,5 +82,44 @@ func TestMarkDamaged(t *testing.T) {
 	}
 	if state != "DAMAGED" {
 		t.Fatalf("expected DAMAGED, got %s", state)
+	}
+}
+
+func TestStatsIncludesOpsRuns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if err := store.RecordOpsRun(context.Background(), "fsck", &ReportOps{
+		FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Errors:     1,
+	}); err != nil {
+		t.Fatalf("RecordOpsRun fsck: %v", err)
+	}
+	if err := store.RecordOpsRun(context.Background(), "gc-rewrite", &ReportOps{
+		FinishedAt:       time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
+		Errors:           0,
+		Deleted:          2,
+		ReclaimedBytes:   1024,
+		RewrittenSegments: 1,
+		RewrittenBytes:   2048,
+		NewSegments:      1,
+	}); err != nil {
+		t.Fatalf("RecordOpsRun gc: %v", err)
+	}
+
+	stats, err := store.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if stats.LastFsckAt == "" || stats.LastGCAt == "" {
+		t.Fatalf("expected last ops timestamps")
+	}
+	if stats.LastGCReclaimed != 1024 || stats.LastGCRewritten != 2048 || stats.LastGCNewSegments != 1 {
+		t.Fatalf("unexpected gc stats: %+v", stats)
 	}
 }
