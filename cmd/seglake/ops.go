@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -44,6 +45,9 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 	if err != nil {
 		return err
 	}
+	if jsonOut {
+		return writeJSONReport(report)
+	}
 	fmt.Printf("%s\n", formatReport(report))
 	return nil
 }
@@ -57,6 +61,18 @@ func formatReport(report *ops.Report) string {
 		return ""
 	}
 	return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d", report.Mode, report.Manifests, report.Segments, report.Errors)
+}
+
+func writeJSONReport(report *ops.Report) error {
+	if report == nil {
+		return nil
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func printModeHelp(mode string) {
