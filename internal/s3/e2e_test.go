@@ -394,6 +394,186 @@ func TestS3E2EPresignedPut(t *testing.T) {
 		t.Fatalf("GET body mismatch")
 	}
 }
+
+func TestS3E2EListV2(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	put := func(key string) {
+		url := server.URL + "/bucket/" + key
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader([]byte(key)))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT status: %d", resp.StatusCode)
+		}
+	}
+
+	put("a/one.txt")
+	put("a/two.txt")
+	put("b/three.txt")
+
+	listURL := server.URL + "/bucket?list-type=2&prefix=a&delimiter=/&max-keys=10"
+	listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	resp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("List status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes>")) {
+		t.Fatalf("expected common prefix")
+	}
+	if bytes.Contains(body, []byte("<Key>a/one.txt</Key>")) {
+		t.Fatalf("expected keys under prefix to be grouped by delimiter")
+	}
+}
+
+func TestS3E2EListV2Continuation(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	put := func(key string) {
+		url := server.URL + "/bucket/" + key
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader([]byte(key)))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT status: %d", resp.StatusCode)
+		}
+	}
+
+	put("a.txt")
+	put("b.txt")
+	put("c.txt")
+
+	listURL := server.URL + "/bucket?list-type=2&max-keys=1"
+	listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	resp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<IsTruncated>true</IsTruncated>")) {
+		t.Fatalf("expected truncated response")
+	}
+	tokenStart := bytes.Index(body, []byte("<NextContinuationToken>"))
+	if tokenStart < 0 {
+		t.Fatalf("missing token")
+	}
+	tokenStart += len("<NextContinuationToken>")
+	tokenEnd := bytes.Index(body[tokenStart:], []byte("</NextContinuationToken>"))
+	if tokenEnd < 0 {
+		t.Fatalf("missing token end")
+	}
+	token := string(body[tokenStart : tokenStart+tokenEnd])
+
+	listURL2 := server.URL + "/bucket?list-type=2&max-keys=2&continuation-token=" + url.QueryEscape(token)
+	listReq2, err := http.NewRequest(http.MethodGet, listURL2, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq2, "test", "testsecret", "us-east-1")
+	resp2, err := http.DefaultClient.Do(listReq2)
+	if err != nil {
+		t.Fatalf("List2 error: %v", err)
+	}
+	body2, err := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if bytes.Contains(body2, []byte("<Key>a.txt</Key>")) {
+		t.Fatalf("unexpected first key repeated")
+	}
+	if !bytes.Contains(body2, []byte("<Key>b.txt</Key>")) {
+		t.Fatalf("expected next key")
+	}
+}
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
 	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
 }

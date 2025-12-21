@@ -38,6 +38,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+		bucket, ok := parseBucket(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			return
+		}
+		h.handleListV2(r.Context(), w, r, bucket, requestID)
+		return
+	}
 	bucket, key, ok := parsePath(r.URL.Path)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID)
@@ -114,4 +123,16 @@ func parsePath(path string) (bucket string, key string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func parseBucket(path string) (string, bool) {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return "", false
+	}
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return "", false
+	}
+	return parts[0], true
 }
