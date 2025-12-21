@@ -23,8 +23,9 @@ func main() {
 	accessKey := flag.String("access-key", "", "S3 access key (enables SigV4)")
 	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
 	region := flag.String("region", "us-east-1", "S3 region")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
+	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
 
@@ -65,7 +66,11 @@ func main() {
 	}
 
 	if *mode != "server" {
-		if err := runOps(*mode, *dataDir, metaPath, *snapshotDir); err != nil {
+		metaArg := metaPath
+		if *rebuildMeta != "" {
+			metaArg = *rebuildMeta
+		}
+		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir); err != nil {
 			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
 			os.Exit(1)
 		}

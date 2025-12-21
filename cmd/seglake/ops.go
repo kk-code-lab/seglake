@@ -27,6 +27,8 @@ func runOps(mode, dataDir, metaPath, snapshotDir string) error {
 			snapshotDir = filepath.Join(dataDir, "snapshots", "snapshot-"+fmtTime())
 		}
 		report, err = ops.Snapshot(layout, metaPath, snapshotDir)
+	case "rebuild-index":
+		report, err = ops.Rebuild(layout, metaPath)
 	default:
 		return fmt.Errorf("unknown mode %q", mode)
 	}
@@ -62,6 +64,9 @@ func printModeHelp(mode string) {
 	case "snapshot":
 		fmt.Println("Mode snapshot: copies meta.db (+wal/shm) and writes snapshot.json.")
 		fmt.Println("Flags: -snapshot-dir (optional, default under data/snapshots).")
+	case "rebuild-index":
+		fmt.Println("Mode rebuild-index: rebuilds metadata DB from manifests.")
+		fmt.Println("Flags: -rebuild-meta (optional path to target meta.db).")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}
