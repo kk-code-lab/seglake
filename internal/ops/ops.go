@@ -147,6 +147,9 @@ func Fsck(layout fs.Layout) (*Report, error) {
 	}
 
 	report.FinishedAt = time.Now().UTC()
+	if store != nil {
+		_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
+	}
 	return report, nil
 }
 
@@ -215,6 +218,9 @@ func Scrub(layout fs.Layout, metaPath string) (*Report, error) {
 	}
 
 	report.FinishedAt = time.Now().UTC()
+	if store != nil {
+		_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
+	}
 	return report, nil
 }
 
@@ -357,7 +363,23 @@ func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool) 
 		report.Reclaimed += seg.Size
 	}
 	report.FinishedAt = time.Now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, nil
+}
+
+func reportOpsFrom(report *Report) *meta.ReportOps {
+	if report == nil || report.FinishedAt.IsZero() {
+		return nil
+	}
+	return &meta.ReportOps{
+		FinishedAt:       report.FinishedAt.UTC().Format(time.RFC3339Nano),
+		Errors:           report.Errors,
+		Deleted:          report.Deleted,
+		ReclaimedBytes:   report.Reclaimed,
+		RewrittenSegments: report.RewrittenSegments,
+		RewrittenBytes:   report.RewrittenBytes,
+		NewSegments:      report.NewSegments,
+	}
 }
 
 func listFiles(dir string) ([]string, error) {
