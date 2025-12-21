@@ -11,6 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/segment"
 )
 
 // RebuildIndex rebuilds sqlite metadata using manifests.
@@ -33,6 +34,7 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	}
 	defer store.Close()
 
+	segmentRefs := make(map[string]struct{})
 	if err := store.FlushWith([]func(tx *sql.Tx) error{
 		func(tx *sql.Tx) error {
 			for _, path := range manifests {
@@ -59,6 +61,31 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 					return err
 				}
 				report.RebuiltObjects++
+				for _, ch := range man.Chunks {
+					segmentRefs[ch.SegmentID] = struct{}{}
+				}
+			}
+			for segID := range segmentRefs {
+				segPath := layout.SegmentPath(segID)
+				info, err := os.Stat(segPath)
+				if err != nil {
+					report.MissingSegments++
+					continue
+				}
+				state := string(segment.StateOpen)
+				var footerChecksum []byte
+				reader, err := segment.NewReader(segPath)
+				if err == nil {
+					footer, err := reader.ReadFooter()
+					if err == nil {
+						state = string(segment.StateSealed)
+						footerChecksum = footer.ChecksumHash[:]
+					}
+					_ = reader.Close()
+				}
+				if err := store.RecordSegmentTx(tx, segID, segPath, state, info.Size(), footerChecksum); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
