@@ -24,6 +24,7 @@
 - Presigned URL testing can be done via `AuthConfig.Presign` helpers (see `internal/s3/presign.go`).
 - Crash-consistency harness: `scripts/crash_harness.sh <iterations>` (uses kill -9 + fsck + rebuild-index).
 - GC rewrite (2-phase): `gc-rewrite-plan` + `gc-rewrite-run` with `-gc-rewrite-plan/-gc-rewrite-from-plan`, throttle via `-gc-rewrite-bps`, pause via `-gc-pause-file`.
+- When auth is enabled, `/v1/meta/stats` also requires SigV4; use awscli `s3api` with `--endpoint-url` or a signed curl to fetch it.
 
 ## Commit & Pull Request Guidelines
 - Use imperative commit messages under 72 characters.

@@ -301,6 +301,7 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - barrier stats (count, last_duration)
 - auth failures, signature mismatches
 - status ostatniego scrub/gc/fsck
+- gdy auth włączony, `/v1/meta/stats` wymaga SigV4
 
 ---
 
