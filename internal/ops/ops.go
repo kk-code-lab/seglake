@@ -18,17 +18,22 @@ import (
 
 // Report summarizes an ops run.
 type Report struct {
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	Mode         string    `json:"mode"`
-	Manifests    int       `json:"manifests"`
-	Segments     int       `json:"segments"`
-	Errors       int       `json:"errors"`
-	ErrorSample  []string  `json:"error_sample,omitempty"`
-	Candidates   int       `json:"candidates,omitempty"`
-	Deleted      int       `json:"deleted,omitempty"`
-	Reclaimed    int64     `json:"reclaimed_bytes,omitempty"`
-	CandidateIDs []string  `json:"candidate_ids,omitempty"`
+	StartedAt         time.Time `json:"started_at"`
+	FinishedAt        time.Time `json:"finished_at"`
+	Mode              string    `json:"mode"`
+	Manifests         int       `json:"manifests"`
+	Segments          int       `json:"segments"`
+	Errors            int       `json:"errors"`
+	ErrorSample       []string  `json:"error_sample,omitempty"`
+	Candidates        int       `json:"candidates,omitempty"`
+	Deleted           int       `json:"deleted,omitempty"`
+	Reclaimed         int64     `json:"reclaimed_bytes,omitempty"`
+	CandidateIDs      []string  `json:"candidate_ids,omitempty"`
+	MissingSegments   int       `json:"missing_segments,omitempty"`
+	InvalidManifests  int       `json:"invalid_manifests,omitempty"`
+	OutOfBoundsChunks int       `json:"out_of_bounds_chunks,omitempty"`
+	RebuiltObjects    int       `json:"rebuilt_objects,omitempty"`
+	SkippedManifests  int       `json:"skipped_manifests,omitempty"`
 }
 
 // Status collects basic counts about storage state.
@@ -74,6 +79,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 		man, err := (&manifest.BinaryCodec{}).Decode(file)
 		_ = file.Close()
 		if err != nil {
+			report.InvalidManifests++
 			addError(err)
 			continue
 		}
@@ -83,6 +89,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 				segPath := layout.SegmentPath(ch.SegmentID)
 				info, err = os.Stat(segPath)
 				if err != nil {
+					report.MissingSegments++
 					addError(fmt.Errorf("missing segment %s", ch.SegmentID))
 					continue
 				}
@@ -103,6 +110,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 				dataEnd = info.Size() - segment.FooterLen()
 			}
 			if ch.Offset < segment.SegmentHeaderLen() || ch.Offset+int64(ch.Len) > dataEnd {
+				report.OutOfBoundsChunks++
 				addError(fmt.Errorf("chunk out of bounds segment=%s offset=%d len=%d", ch.SegmentID, ch.Offset, ch.Len))
 			}
 		}

@@ -52,11 +52,13 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 					key = man.Key
 				}
 				if bucket == "" || key == "" {
+					report.SkippedManifests++
 					continue
 				}
 				if err := store.RecordPutTx(tx, bucket, key, man.VersionID, "", man.Size, path); err != nil {
 					return err
 				}
+				report.RebuiltObjects++
 			}
 			return nil
 		},
