@@ -312,6 +312,36 @@ VALUES(?, ?, ?, ?, 'ACTIVE')`, uploadID, bucket, key, now)
 	return err
 }
 
+// ListMultipartUploads returns active uploads for a bucket and optional prefix.
+func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix string, limit int) ([]MultipartUpload, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	pattern := escapeLike(prefix) + "%"
+	rows, err := s.db.QueryContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state
+FROM multipart_uploads
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
+ORDER BY key
+LIMIT ?`, bucket, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MultipartUpload
+	for rows.Next() {
+		var up MultipartUpload
+		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+			return nil, err
+		}
+		out = append(out, up)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GetMultipartUpload returns upload metadata.
 func (s *Store) GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error) {
 	row := s.db.QueryRowContext(ctx, `

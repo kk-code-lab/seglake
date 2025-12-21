@@ -49,6 +49,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListV2(r.Context(), w, r, bucket, requestID)
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
+		bucket, ok := parseBucket(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			return
+		}
+		h.handleListMultipartUploads(r.Context(), w, r, bucket, requestID)
+		return
+	}
 	bucket, key, ok := parsePath(r.URL.Path)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID)
