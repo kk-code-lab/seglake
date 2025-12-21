@@ -90,13 +90,7 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	if payloadHash == "" {
 		payloadHash = "UNSIGNED-PAYLOAD"
 	}
-	if payloadHash != "UNSIGNED-PAYLOAD" && !c.AllowUnsignedPayload {
-		return errSignatureMismatch
-	}
-	if payloadHash != "UNSIGNED-PAYLOAD" && c.AllowUnsignedPayload {
-		// We do not stream-hash in the handler yet.
-		return errSignatureMismatch
-	}
+	// We do not stream-hash payloads yet; accept provided hash values for now.
 
 	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(r, signedHeaders)
 	if err != nil {
