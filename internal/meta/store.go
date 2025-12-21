@@ -381,6 +381,16 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 	return nil
 }
 
+// MarkDamaged sets version state to DAMAGED.
+func (s *Store) MarkDamaged(ctx context.Context, versionID string) error {
+	if versionID == "" {
+		return errors.New("meta: version id required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE versions SET state='DAMAGED' WHERE version_id=?`, versionID)
+	return err
+}
+
 // CurrentVersion returns the current version id for a key.
 func (s *Store) CurrentVersion(ctx context.Context, bucket, key string) (string, error) {
 	var versionID string
