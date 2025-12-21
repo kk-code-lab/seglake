@@ -104,6 +104,9 @@ func (b *writeBarrier) flush() {
 	b.mu.Unlock()
 
 	err := b.engine.flushMeta(commits)
+	if err == nil {
+		_ = b.engine.segments.sealIfIdle(context.Background())
+	}
 
 	b.mu.Lock()
 	b.flushRunning = false
