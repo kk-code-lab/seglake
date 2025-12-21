@@ -96,6 +96,29 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			w.Header().Set("Last-Modified", t.UTC().Format(time.RFC1123))
 		}
 	}
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader != "" {
+		start, length, ok := parseRange(rangeHeader, meta.Size)
+		if !ok {
+			writeError(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID)
+			return
+		}
+		w.Header().Set("Content-Length", intToString(length))
+		w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
+		if headOnly {
+			w.WriteHeader(http.StatusPartialContent)
+			return
+		}
+		reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+			return
+		}
+		defer reader.Close()
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = ioCopy(w, reader)
+		return
+	}
 	if meta.Size >= 0 {
 		w.Header().Set("Content-Length", intToString(meta.Size))
 	}

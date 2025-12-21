@@ -191,6 +191,34 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 	return reader, man, nil
 }
 
+// GetRange retrieves a byte range for a version id.
+func (e *Engine) GetRange(ctx context.Context, versionID string, start, length int64) (io.ReadCloser, *manifest.Manifest, error) {
+	if err := e.ensureDirs(); err != nil {
+		return nil, nil, err
+	}
+	if length <= 0 {
+		return nil, nil, errors.New("engine: invalid range length")
+	}
+	manifestPath := e.layout.ManifestPath(versionID)
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer file.Close()
+	man, err := e.manifestCodec.Decode(file)
+	if err != nil {
+		return nil, nil, err
+	}
+	reader, err := newRangeReader(e.layout, man, start, length)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ctx != nil {
+		reader.ctx = ctx
+	}
+	return reader, man, nil
+}
+
 // GetObject resolves the current version id using metadata and returns the stream.
 func (e *Engine) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *manifest.Manifest, error) {
 	if e.metaStore == nil {
