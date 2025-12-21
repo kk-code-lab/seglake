@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/ops"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -29,6 +30,14 @@ func runOps(mode, dataDir, metaPath, snapshotDir string) error {
 		report, err = ops.Snapshot(layout, metaPath, snapshotDir)
 	case "rebuild-index":
 		report, err = ops.Rebuild(layout, metaPath)
+	case "gc-plan":
+		var candidates []meta.Segment
+		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge)
+		if err == nil {
+			report.Candidates = len(candidates)
+		}
+	case "gc-run":
+		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
 	default:
 		return fmt.Errorf("unknown mode %q", mode)
 	}
@@ -67,6 +76,12 @@ func printModeHelp(mode string) {
 	case "rebuild-index":
 		fmt.Println("Mode rebuild-index: rebuilds metadata DB from manifests.")
 		fmt.Println("Flags: -rebuild-meta (optional path to target meta.db).")
+	case "gc-plan":
+		fmt.Println("Mode gc-plan: prints segments eligible for removal.")
+		fmt.Println("Flags: -gc-min-age (default 24h).")
+	case "gc-run":
+		fmt.Println("Mode gc-run: deletes 100% dead segments.")
+		fmt.Println("Flags: -gc-min-age, -gc-force (required).")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}

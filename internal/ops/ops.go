@@ -25,6 +25,9 @@ type Report struct {
 	Segments    int       `json:"segments"`
 	Errors      int       `json:"errors"`
 	ErrorSample []string  `json:"error_sample,omitempty"`
+	Candidates  int       `json:"candidates,omitempty"`
+	Deleted     int       `json:"deleted,omitempty"`
+	Reclaimed   int64     `json:"reclaimed_bytes,omitempty"`
 }
 
 // Status collects basic counts about storage state.
@@ -205,6 +208,95 @@ func Snapshot(layout fs.Layout, metaPath string, outDir string) (*Report, error)
 // Rebuild runs rebuild-index.
 func Rebuild(layout fs.Layout, metaPath string) (*Report, error) {
 	return RebuildIndex(layout, metaPath)
+}
+
+// GCPlan computes which sealed segments can be removed.
+func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, []meta.Segment, error) {
+	report := &Report{Mode: "gc-plan", StartedAt: time.Now().UTC()}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer store.Close()
+
+	livePaths, err := store.ListLiveManifestPaths(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	report.Manifests = len(livePaths)
+
+	liveBytes := make(map[string]int64)
+	for _, path := range livePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		man, err := (&manifest.BinaryCodec{}).Decode(file)
+		_ = file.Close()
+		if err != nil {
+			continue
+		}
+		for _, ch := range man.Chunks {
+			liveBytes[ch.SegmentID] += int64(ch.Len)
+		}
+	}
+
+	segments, err := store.ListSegments(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	report.Segments = len(segments)
+
+	var candidates []meta.Segment
+	for _, seg := range segments {
+		if seg.State != string(segment.StateSealed) {
+			continue
+		}
+		if seg.SealedAt == "" {
+			continue
+		}
+		sealedAt, err := time.Parse(time.RFC3339Nano, seg.SealedAt)
+		if err != nil {
+			continue
+		}
+		if time.Since(sealedAt) < minAge {
+			continue
+		}
+		if liveBytes[seg.ID] == 0 {
+			candidates = append(candidates, seg)
+		}
+	}
+	report.Candidates = len(candidates)
+	report.FinishedAt = time.Now().UTC()
+	return report, candidates, nil
+}
+
+// GCRun deletes candidate segments after verifying the plan.
+func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool) (*Report, error) {
+	if !force {
+		return nil, errors.New("gc: refuse to run without --force")
+	}
+	report, candidates, err := GCPlan(layout, metaPath, minAge)
+	if err != nil {
+		return nil, err
+	}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+
+	for _, seg := range candidates {
+		if err := os.Remove(seg.Path); err != nil {
+			report.Errors++
+			continue
+		}
+		_ = store.DeleteSegment(context.Background(), seg.ID)
+		report.Deleted++
+		report.Reclaimed += seg.Size
+	}
+	report.FinishedAt = time.Now().UTC()
+	return report, nil
 }
 
 func listFiles(dir string) ([]string, error) {

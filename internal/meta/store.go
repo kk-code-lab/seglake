@@ -628,3 +628,56 @@ WHERE segment_id=?`, segmentID)
 	}
 	return &seg, nil
 }
+
+// ListSegments returns segment metadata.
+func (s *Store) ListSegments(ctx context.Context) ([]Segment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT segment_id, path, state, created_at, COALESCE(sealed_at, ''), COALESCE(size, 0), COALESCE(footer_checksum, x'')
+FROM segments`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Segment
+	for rows.Next() {
+		var seg Segment
+		if err := rows.Scan(&seg.ID, &seg.Path, &seg.State, &seg.CreatedAt, &seg.SealedAt, &seg.Size, &seg.FooterChecksum); err != nil {
+			return nil, err
+		}
+		out = append(out, seg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListLiveManifestPaths returns manifest paths for current versions.
+func (s *Store) ListLiveManifestPaths(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT m.path
+FROM objects_current o
+JOIN manifests m ON m.version_id = o.version_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteSegment removes a segment row.
+func (s *Store) DeleteSegment(ctx context.Context, segmentID string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM segments WHERE segment_id=?", segmentID)
+	return err
+}
