@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"time"
 )
@@ -12,7 +13,9 @@ type writeBarrier struct {
 	maxBytes     int64
 	mu           sync.Mutex
 	pendingBytes int64
+	pendingOps   int
 	waiters      []chan error
+	commits      []func(tx *sql.Tx) error
 	timer        *time.Timer
 	flushRunning bool
 }
@@ -31,10 +34,24 @@ func newWriteBarrier(engine *Engine, interval time.Duration, maxBytes int64) *wr
 	}
 }
 
+func (b *writeBarrier) flushNow() error {
+	ch := make(chan error, 1)
+	b.mu.Lock()
+	b.waiters = append(b.waiters, ch)
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	b.mu.Unlock()
+	b.flush()
+	return <-ch
+}
+
 func (b *writeBarrier) wait(ctx context.Context) error {
 	ch := make(chan error, 1)
 	b.mu.Lock()
 	b.waiters = append(b.waiters, ch)
+	b.pendingOps++
 	if b.timer == nil {
 		b.timer = time.AfterFunc(b.interval, b.flush)
 	}
@@ -46,6 +63,16 @@ func (b *writeBarrier) wait(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (b *writeBarrier) register(commit func(tx *sql.Tx) error) error {
+	if commit == nil {
+		return nil
+	}
+	b.mu.Lock()
+	b.commits = append(b.commits, commit)
+	b.mu.Unlock()
+	return nil
 }
 
 func (b *writeBarrier) addBytes(n int64) {
@@ -69,11 +96,14 @@ func (b *writeBarrier) flush() {
 		b.timer = nil
 	}
 	waiters := b.waiters
+	commits := b.commits
 	b.waiters = nil
+	b.commits = nil
 	b.pendingBytes = 0
+	b.pendingOps = 0
 	b.mu.Unlock()
 
-	err := b.engine.flushMeta()
+	err := b.engine.flushMeta(commits)
 
 	b.mu.Lock()
 	b.flushRunning = false
