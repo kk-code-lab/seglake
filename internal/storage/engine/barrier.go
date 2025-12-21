@@ -34,19 +34,6 @@ func newWriteBarrier(engine *Engine, interval time.Duration, maxBytes int64) *wr
 	}
 }
 
-func (b *writeBarrier) flushNow() error {
-	ch := make(chan error, 1)
-	b.mu.Lock()
-	b.waiters = append(b.waiters, ch)
-	if b.timer != nil {
-		b.timer.Stop()
-		b.timer = nil
-	}
-	b.mu.Unlock()
-	b.flush()
-	return <-ch
-}
-
 func (b *writeBarrier) wait(ctx context.Context) error {
 	ch := make(chan error, 1)
 	b.mu.Lock()

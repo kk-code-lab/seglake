@@ -2,9 +2,7 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -156,18 +154,3 @@ func (m *segmentManager) sealCurrentLocked(ctx context.Context) error {
 	m.size = 0
 	return nil
 }
-
-func (m *segmentManager) close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.writer == nil {
-		return nil
-	}
-	return m.writer.Close()
-}
-
-func (m *segmentManager) pathForSegment(segmentID string) string {
-	return filepath.Join(m.layout.SegmentsDir, segmentID)
-}
-
-var errNoSegment = errors.New("engine: no open segment")
