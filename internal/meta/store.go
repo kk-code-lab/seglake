@@ -44,6 +44,48 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// ExecTx executes a statement within a provided transaction.
+func ExecTx(tx *sql.Tx, query string, args ...any) error {
+	_, err := tx.Exec(query, args...)
+	return err
+}
+
+// Begin starts a transaction.
+func (s *Store) Begin() (*sql.Tx, error) {
+	return s.db.Begin()
+}
+
+// FlushWith executes commits within a transaction and flushes WAL.
+func (s *Store) FlushWith(commits []func(tx *sql.Tx) error) error {
+	tx, err := s.Begin()
+	if err != nil {
+		return err
+	}
+	for _, commit := range commits {
+		if err := commit(tx); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.Flush()
+}
+
+// WithTx runs fn in a single transaction.
+func (s *Store) WithTx(fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 // Flush forces a WAL checkpoint to durably persist changes.
 func (s *Store) Flush() error {
 	if s == nil || s.db == nil {
@@ -278,6 +320,40 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 		}
 	}
 	return tx.Commit()
+}
+
+// RecordPutTx inserts a new version and updates objects_current within a transaction.
+func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, size int64, manifestPath string) error {
+	if bucket == "" || key == "" {
+		return errors.New("meta: bucket and key required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, '', '', 'ACTIVE')`,
+		versionID, bucket, key, etag, size, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT INTO objects_current(bucket, key, version_id)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
+		bucket, key, versionID); err != nil {
+		return err
+	}
+	if manifestPath != "" {
+		if _, err := tx.Exec(`
+INSERT INTO manifests(version_id, path) VALUES(?, ?)
+ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
+			versionID, manifestPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CurrentVersion returns the current version id for a key.

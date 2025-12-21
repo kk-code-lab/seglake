@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -120,30 +121,33 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 	}
 	man.Size = size
 
+	result := &PutResult{
+		VersionID: versionID,
+		ETag:      hex.EncodeToString(hasher.Sum(nil)),
+		Size:      size,
+	}
+	manifestPath := e.layout.ManifestPath(versionID)
+	commit := func(tx *sql.Tx) error {
+		if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
+			return err
+		}
+		if e.metaStore != nil && bucket != "" && key != "" {
+			if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := e.barrier.register(commit); err != nil {
+		return nil, nil, err
+	}
 	if err := e.segments.sync(); err != nil {
 		return nil, nil, err
 	}
-
 	if err := e.barrier.wait(ctx); err != nil {
 		return nil, nil, err
 	}
-
-	manifestPath := e.layout.ManifestPath(versionID)
-	if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
-		return nil, nil, err
-	}
-
-	result := &PutResult{
-		VersionID:   versionID,
-		ETag:        hex.EncodeToString(hasher.Sum(nil)),
-		Size:        size,
-		CommittedAt: time.Now().UTC(),
-	}
-	if e.metaStore != nil && bucket != "" && key != "" {
-		if err := e.metaStore.RecordPut(ctx, bucket, key, versionID, result.ETag, size, manifestPath); err != nil {
-			return nil, nil, err
-		}
-	}
+	result.CommittedAt = time.Now().UTC()
 	return man, result, nil
 }
 
@@ -219,11 +223,16 @@ func (e *Engine) ensureDirs() error {
 	return nil
 }
 
-func (e *Engine) flushMeta() error {
+func (e *Engine) flushMeta(commits []func(tx *sql.Tx) error) error {
 	if e.metaStore == nil {
+		for _, commit := range commits {
+			if err := commit(nil); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	return e.metaStore.Flush()
+	return e.metaStore.FlushWith(commits)
 }
 
 func writeManifestFile(path string, codec manifest.Codec, man *manifest.Manifest) error {
