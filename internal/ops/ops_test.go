@@ -146,6 +146,41 @@ func TestFsckReportsInvalidFooter(t *testing.T) {
 	}
 }
 
+func TestSnapshotWritesFiles(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	if err := os.MkdirAll(layout.SegmentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segments: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll manifests: %v", err)
+	}
+
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	outDir := filepath.Join(dir, "snapshot")
+	report, err := Snapshot(layout, metaPath, outDir)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if report.Mode != "snapshot" {
+		t.Fatalf("expected snapshot mode, got %s", report.Mode)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "snapshot.json")); err != nil {
+		t.Fatalf("snapshot.json missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "meta.db")); err != nil {
+		t.Fatalf("meta.db missing: %v", err)
+	}
+}
+
 func TestGCPlanAndRun(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))
