@@ -63,6 +63,14 @@ func Fsck(layout fs.Layout) (*Report, error) {
 	report.Manifests = len(manifests)
 
 	segmentInfo := make(map[string]os.FileInfo)
+	segmentSeen := make(map[string]struct{})
+	store, err := meta.Open(filepath.Join(layout.Root, "meta.db"))
+	if err != nil {
+		store = nil
+	}
+	if store != nil {
+		defer store.Close()
+	}
 	addError := func(err error) {
 		report.Errors++
 		if len(report.ErrorSample) < 5 {
@@ -105,6 +113,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 				segmentInfo[ch.SegmentID] = info
 				report.Segments++
 			}
+			segmentSeen[ch.SegmentID] = struct{}{}
 			dataEnd := info.Size()
 			if dataEnd > segment.FooterLen() {
 				dataEnd = info.Size() - segment.FooterLen()
@@ -112,6 +121,17 @@ func Fsck(layout fs.Layout) (*Report, error) {
 			if ch.Offset < segment.SegmentHeaderLen() || ch.Offset+int64(ch.Len) > dataEnd {
 				report.OutOfBoundsChunks++
 				addError(fmt.Errorf("chunk out of bounds segment=%s offset=%d len=%d", ch.SegmentID, ch.Offset, ch.Len))
+			}
+		}
+	}
+
+	if store != nil {
+		segments, err := store.ListSegments(context.Background())
+		if err == nil {
+			for _, seg := range segments {
+				if _, ok := segmentSeen[seg.ID]; !ok && seg.State == string(segment.StateSealed) {
+					report.MissingSegments++
+				}
 			}
 		}
 	}
