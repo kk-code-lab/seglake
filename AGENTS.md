@@ -22,6 +22,7 @@
 - Example awscli: `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000 s3://demo`.
 - Example s3cmd: `s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret ls s3://demo`.
 - Presigned URL testing can be done via `AuthConfig.Presign` helpers (see `internal/s3/presign.go`).
+- Crash-consistency harness: `scripts/crash_harness.sh <iterations>` (uses kill -9 + fsck + rebuild-index).
 
 ## Commit & Pull Request Guidelines
 - Use imperative commit messages under 72 characters.
