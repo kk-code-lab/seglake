@@ -202,6 +202,7 @@ func GCRewriteFromPlan(layout fs.Layout, metaPath string, plan *GCRewritePlan, f
 	}
 
 	report.FinishedAt = time.Now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, nil
 }
 

@@ -158,6 +158,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 4 {
+		if err = applyV4(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -257,6 +265,29 @@ func applyV3(ctx context.Context, tx *sql.Tx) error {
 			status TEXT NOT NULL,
 			message TEXT
 		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV4(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS ops_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mode TEXT NOT NULL,
+			finished_at TEXT NOT NULL,
+			errors INTEGER NOT NULL,
+			deleted INTEGER,
+			reclaimed_bytes INTEGER,
+			rewritten_segments INTEGER,
+			rewritten_bytes INTEGER,
+			new_segments INTEGER
+		)`,
+		`CREATE INDEX IF NOT EXISTS ops_runs_mode_finished_idx ON ops_runs(mode, finished_at)`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -724,11 +755,46 @@ FROM segments`)
 	return out, nil
 }
 
+// RecordOpsRun stores a completed ops report for observability.
+func (s *Store) RecordOpsRun(ctx context.Context, mode string, report *ReportOps) error {
+	if s == nil || s.db == nil || report == nil {
+		return nil
+	}
+	if mode == "" || report.FinishedAt == "" {
+		return errors.New("meta: ops run requires mode and finished_at")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO ops_runs(mode, finished_at, errors, deleted, reclaimed_bytes, rewritten_segments, rewritten_bytes, new_segments)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		mode, report.FinishedAt, report.Errors, report.Deleted, report.ReclaimedBytes, report.RewrittenSegments, report.RewrittenBytes, report.NewSegments)
+	return err
+}
+
+// ReportOps is a slimmed view of ops.Report for storage.
+type ReportOps struct {
+	FinishedAt       string
+	Errors           int
+	Deleted          int
+	ReclaimedBytes   int64
+	RewrittenSegments int
+	RewrittenBytes   int64
+	NewSegments      int
+}
+
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
 	Objects   int64 `json:"objects"`
 	Segments  int64 `json:"segments"`
 	BytesLive int64 `json:"bytes_live"`
+	LastFsckAt        string `json:"last_fsck_at,omitempty"`
+	LastFsckErrors    int    `json:"last_fsck_errors,omitempty"`
+	LastScrubAt       string `json:"last_scrub_at,omitempty"`
+	LastScrubErrors   int    `json:"last_scrub_errors,omitempty"`
+	LastGCAt          string `json:"last_gc_at,omitempty"`
+	LastGCErrors      int    `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed   int64  `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten   int64  `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments int    `json:"last_gc_new_segments,omitempty"`
 }
 
 // GetStats returns aggregate counts.
@@ -743,6 +809,24 @@ func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM versions WHERE state='ACTIVE'").Scan(&stats.BytesLive); err != nil {
 		return nil, err
 	}
+	_ = s.db.QueryRowContext(ctx, `
+SELECT finished_at, errors
+FROM ops_runs
+WHERE mode='fsck'
+ORDER BY finished_at DESC
+LIMIT 1`).Scan(&stats.LastFsckAt, &stats.LastFsckErrors)
+	_ = s.db.QueryRowContext(ctx, `
+SELECT finished_at, errors
+FROM ops_runs
+WHERE mode='scrub'
+ORDER BY finished_at DESC
+LIMIT 1`).Scan(&stats.LastScrubAt, &stats.LastScrubErrors)
+	_ = s.db.QueryRowContext(ctx, `
+SELECT finished_at, errors, COALESCE(reclaimed_bytes,0), COALESCE(rewritten_bytes,0), COALESCE(new_segments,0)
+FROM ops_runs
+WHERE mode LIKE 'gc-%' AND mode NOT LIKE 'gc-plan%'
+ORDER BY finished_at DESC
+LIMIT 1`).Scan(&stats.LastGCAt, &stats.LastGCErrors, &stats.LastGCReclaimed, &stats.LastGCRewritten, &stats.LastGCNewSegments)
 	return stats, nil
 }
 
