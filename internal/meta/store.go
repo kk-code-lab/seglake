@@ -679,6 +679,28 @@ FROM segments`)
 	return out, nil
 }
 
+// Stats aggregates minimal metrics for /v1/meta/stats.
+type Stats struct {
+	Objects   int64 `json:"objects"`
+	Segments  int64 `json:"segments"`
+	BytesLive int64 `json:"bytes_live"`
+}
+
+// GetStats returns aggregate counts.
+func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
+	stats := &Stats{}
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM objects_current").Scan(&stats.Objects); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM segments").Scan(&stats.Segments); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM versions WHERE state='ACTIVE'").Scan(&stats.BytesLive); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
 // ListLiveManifestPaths returns manifest paths for current versions.
 func (s *Store) ListLiveManifestPaths(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
