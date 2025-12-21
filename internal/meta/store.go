@@ -304,6 +304,33 @@ ON CONFLICT(segment_id) DO UPDATE SET
 	return err
 }
 
+// RecordSegmentTx inserts or updates segment metadata within a transaction.
+func (s *Store) RecordSegmentTx(tx *sql.Tx, segmentID, path, state string, size int64, footerChecksum []byte) error {
+	if segmentID == "" || path == "" {
+		return errors.New("meta: segment id and path required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	sealedAt := ""
+	if state == "SEALED" {
+		sealedAt = now
+	}
+	_, err := tx.Exec(`
+INSERT INTO segments(segment_id, path, state, created_at, sealed_at, size, footer_checksum)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(segment_id) DO UPDATE SET
+	path=excluded.path,
+	state=excluded.state,
+	size=excluded.size,
+	footer_checksum=excluded.footer_checksum,
+	created_at=segments.created_at,
+	sealed_at=CASE
+		WHEN excluded.state='SEALED' THEN excluded.sealed_at
+		ELSE segments.sealed_at
+	END`,
+		segmentID, path, state, now, sealedAt, size, footerChecksum)
+	return err
+}
+
 // RecordPut inserts a new version and updates objects_current.
 func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag string, size int64, manifestPath string) error {
 	if bucket == "" || key == "" {
