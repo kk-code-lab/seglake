@@ -157,6 +157,13 @@ func TestSnapshotWritesFiles(t *testing.T) {
 	}
 
 	metaPath := filepath.Join(layout.Root, "meta.db")
+	t.Logf("metaPath=%s root=%s segments=%s manifests=%s", metaPath, layout.Root, layout.SegmentsDir, layout.ManifestsDir)
+	if err := os.MkdirAll(layout.Root, 0o755); err != nil {
+		t.Fatalf("MkdirAll root: %v", err)
+	}
+	if err := os.MkdirAll(layout.Root, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
@@ -253,6 +260,115 @@ func TestGCPlanAndRun(t *testing.T) {
 	}
 	if len(segments) != 1 || segments[0].ID != liveSegID {
 		t.Fatalf("expected only live segment, got %+v", segments)
+	}
+}
+
+func TestGCRewritePlanRun(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	if err := os.MkdirAll(layout.Root, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll manifests: %v", err)
+	}
+	if err := os.MkdirAll(layout.SegmentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segments: %v", err)
+	}
+
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	segID := "seg-gc"
+	segPath := layout.SegmentPath(segID)
+	writer, err := segment.NewWriter(segPath, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	liveData := []byte("hello")
+	offset, err := writer.AppendRecord(segment.ChunkRecordHeader{Hash: [32]byte{1}, Len: uint32(len(liveData))}, liveData)
+	if err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	deadData := []byte("dead!")
+	if _, err := writer.AppendRecord(segment.ChunkRecordHeader{Hash: [32]byte{2}, Len: uint32(len(deadData))}, deadData); err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	footer := segment.FinalizeFooter(segment.NewFooter(1))
+	if err := writer.Seal(footer); err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	info, err := os.Stat(segPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if err := store.RecordSegment(context.Background(), segID, segPath, "SEALED", info.Size(), footer.ChecksumHash[:]); err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+
+	man := &manifest.Manifest{
+		Bucket:    "b",
+		Key:       "k1",
+		VersionID: "v1",
+		Size:      int64(len(liveData)),
+		Chunks: []manifest.ChunkRef{
+			{Index: 0, SegmentID: segID, Offset: offset, Len: uint32(len(liveData))},
+		},
+	}
+	manPath := layout.ManifestPath(man.VersionID)
+	if err := writeManifest(manPath, man); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := store.RecordPut(context.Background(), "b", "k1", man.VersionID, "", man.Size, manPath); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+
+	plan, report, err := GCRewritePlanBuild(layout, metaPath, 0, 1.0)
+	if err != nil {
+		t.Fatalf("GCRewritePlanBuild: %v", err)
+	}
+	if report.Candidates == 0 || len(plan.Candidates) == 0 {
+		t.Fatalf("expected candidates")
+	}
+
+	path := filepath.Join(dir, "gc-plan.json")
+	if err := WriteGCRewritePlan(path, plan); err != nil {
+		t.Fatalf("WriteGCRewritePlan: %v", err)
+	}
+	readPlan, err := ReadGCRewritePlan(path)
+	if err != nil {
+		t.Fatalf("ReadGCRewritePlan: %v", err)
+	}
+
+	gcReport, err := GCRewriteFromPlan(layout, metaPath, readPlan, true, 0, "")
+	if err != nil {
+		t.Fatalf("GCRewriteFromPlan: %v", err)
+	}
+	if gcReport.RewrittenSegments == 0 {
+		t.Fatalf("expected rewritten segments")
+	}
+
+	manFile, err := os.Open(manPath)
+	if err != nil {
+		t.Fatalf("Open manifest: %v", err)
+	}
+	updated, err := (&manifest.BinaryCodec{}).Decode(manFile)
+	_ = manFile.Close()
+	if err != nil {
+		t.Fatalf("Decode manifest: %v", err)
+	}
+	if len(updated.Chunks) != 1 {
+		t.Fatalf("unexpected chunks: %d", len(updated.Chunks))
+	}
+	if updated.Chunks[0].SegmentID == segID {
+		t.Fatalf("expected chunk to move to new segment")
 	}
 }
 
