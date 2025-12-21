@@ -32,7 +32,7 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	segmentRefs := make(map[string]struct{})
 	if err := store.FlushWith([]func(tx *sql.Tx) error{

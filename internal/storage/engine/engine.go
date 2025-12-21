@@ -165,7 +165,7 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 	if err != nil {
 		return nil, nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	reader := newManifestReader(e.layout, man)
 	if ctx != nil {
 		reader.ctx = ctx
@@ -185,7 +185,7 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 	if err != nil {
 		return nil, nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	reader, err := newRangeReader(e.layout, man, start, length)
 	if err != nil {
 		return nil, nil, err
@@ -274,7 +274,7 @@ func writeManifestFile(path string, codec manifest.Codec, man *manifest.Manifest
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return codec.Encode(file, man)
 }
 
