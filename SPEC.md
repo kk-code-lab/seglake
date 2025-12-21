@@ -354,6 +354,10 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - consensus/strong consistency: nie
 - erasure coding: odłożone
 
+### 17.1 Minimalny stack (MVP, deps minimalne)
+- wymagane zewnętrzne: `modernc.org/sqlite` (pure Go) + `github.com/zeebo/blake3`
+- reszta: stdlib + własna implementacja (router/CLI/config/logi)
+
 ---
 
 ## 18) Ryzyka i mitigacje
@@ -363,4 +367,3 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - GC rewrite correctness → etapowanie + 2-phase + fsck
 - clock skew → HLC persist + wall-clock tylko dla LastModified
 - fsync koszt → group commit + limity concurrency
-

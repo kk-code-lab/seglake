@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+build/
 
 # Test binary, built with `go test -c`
 *.test
@@ -16,6 +17,9 @@
 coverage.*
 *.coverprofile
 profile.cov
+*.pprof
+*.log
+.DS_Store
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
