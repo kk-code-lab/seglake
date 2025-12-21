@@ -20,25 +20,9 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	requestID := newRequestID()
-	w.Header().Set("x-amz-request-id", requestID)
-	w.Header().Set("x-amz-id-2", hostID())
-	if h.Engine == nil || h.Meta == nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
+	requestID, ok := h.prepareRequest(w, r)
+	if !ok {
 		return
-	}
-	if h.Auth != nil {
-		if err := h.Auth.VerifyRequest(r); err != nil {
-			switch err {
-			case errAccessDenied:
-				writeError(w, http.StatusForbidden, "AccessDenied", "access denied", requestID)
-			case errTimeSkew:
-				writeError(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID)
-			default:
-				writeError(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID)
-			}
-			return
-		}
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		bucket, ok := parseBucket(r.URL.Path)
@@ -97,6 +81,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID)
 	}
+}
+
+func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	requestID := newRequestID()
+	w.Header().Set("x-amz-request-id", requestID)
+	w.Header().Set("x-amz-id-2", hostID())
+	if h.Engine == nil || h.Meta == nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
+		return requestID, false
+	}
+	if h.Auth == nil {
+		return requestID, true
+	}
+	if err := h.Auth.VerifyRequest(r); err != nil {
+		switch err {
+		case errAccessDenied:
+			writeError(w, http.StatusForbidden, "AccessDenied", "access denied", requestID)
+		case errTimeSkew:
+			writeError(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID)
+		default:
+			writeError(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID)
+		}
+		return requestID, false
+	}
+	return requestID, true
 }
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
