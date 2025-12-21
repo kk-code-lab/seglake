@@ -29,6 +29,13 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
 		return c.verifyPresigned(r)
 	}
+	if r.Header.Get("X-Amz-Date") == "" {
+		if date := r.Header.Get("Date"); date != "" {
+			if t, err := time.Parse(time.RFC1123, date); err == nil {
+				r.Header.Set("X-Amz-Date", t.UTC().Format("20060102T150405Z"))
+			}
+		}
+	}
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return errAccessDenied
