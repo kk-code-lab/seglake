@@ -70,6 +70,18 @@ func (m *segmentManager) sync() error {
 	return m.writer.Sync()
 }
 
+func (m *segmentManager) sealIfIdle(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.writer == nil {
+		return nil
+	}
+	if time.Since(m.createdAt) < m.maxAge {
+		return nil
+	}
+	return m.sealCurrentLocked(ctx)
+}
+
 func (m *segmentManager) ensureSegment(ctx context.Context, nextBytes int64) error {
 	if m.writer == nil {
 		return m.openNewSegment(ctx)
@@ -112,6 +124,10 @@ func (m *segmentManager) sealCurrent(ctx context.Context) error {
 	if m.writer == nil {
 		return nil
 	}
+	return m.sealCurrentLocked(ctx)
+}
+
+func (m *segmentManager) sealCurrentLocked(ctx context.Context) error {
 	footer := segment.FinalizeFooter(segment.NewFooter(m.segmentVersion))
 	if err := m.writer.Seal(footer); err != nil {
 		return err
