@@ -215,6 +215,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		Key:    upload.Key,
 		ETag:   `"` + multiETag + `"`,
 	}
+	w.Header().Set("ETag", `"`+multiETag+`"`)
 	if result != nil {
 		_ = result
 	}

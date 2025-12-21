@@ -2,10 +2,13 @@ package s3
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func newRequestID() string {
@@ -67,4 +70,19 @@ func parseRange(header string, size int64) (start int64, length int64, ok bool) 
 func formatContentRange(start, length, size int64) string {
 	end := start + length - 1
 	return "bytes " + strconv.FormatInt(start, 10) + "-" + strconv.FormatInt(end, 10) + "/" + strconv.FormatInt(size, 10)
+}
+
+var hostIDOnce sync.Once
+var hostIDValue string
+
+func hostID() string {
+	hostIDOnce.Do(func() {
+		host, _ := os.Hostname()
+		sum := sha256.Sum256([]byte(host))
+		hostIDValue = hex.EncodeToString(sum[:8])
+		if hostIDValue == "" {
+			hostIDValue = "seglake"
+		}
+	})
+	return hostIDValue
 }
