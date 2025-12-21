@@ -347,6 +347,35 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 
 ---
 
+## 16.1) Backlog po MVP (priorytety)
+
+### P0 (stabilność i correctness)
+- testy crash-consistency (kill -9 + invariants)
+- obsługa niezamkniętych segmentów po crash (recovery + audit)
+- weryfikacja end-to-end durability (fsync/flush)
+
+### P1 (GC i storage efficiency)
+- GC v1: rewrite segmentów >50% martwe (2-phase)
+- throttling GC i pause-if-load
+- metryki GC (time/bytes reclaimed) + raporty trendów
+
+### P2 (S3 compat & API polish)
+- bucket listing + region headers
+- lepsza obsługa Range (multipart ranges)
+- pełniejsze błędy AWS (Message/Code/Resource/RequestId)
+
+### P3 (observability & operability)
+- bardziej szczegółowe metryki (p95/p99, bytes in/out)
+- structured logs: obcinanie payloadów, pełna redakcja sekretów
+- support bundle: automatyczna redakcja kluczy i tokenów
+
+### P4 (multi-site)
+- HLC state persistence + clock skew handling
+- replika op/manifest sync + watermarks
+- snapshot bootstrap + peer recovery
+
+---
+
 ## 17) Alternatywy
 
 - metadane: SQLite (MVP) → ewentualnie RocksDB (później)
