@@ -21,6 +21,8 @@ type Handler struct {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := newRequestID()
+	w.Header().Set("x-amz-request-id", requestID)
+	w.Header().Set("x-amz-id-2", hostID())
 	if h.Engine == nil || h.Meta == nil {
 		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
 		return
@@ -120,6 +122,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	if rangeHeader != "" {
 		start, length, ok := parseRange(rangeHeader, meta.Size)
 		if !ok {
+			w.Header().Set("Content-Range", "bytes */"+intToString(meta.Size))
 			writeError(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID)
 			return
 		}

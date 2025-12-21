@@ -20,7 +20,7 @@ func writeError(w http.ResponseWriter, status int, code, message, requestID stri
 		Code:      code,
 		Message:   message,
 		RequestID: requestID,
-		HostID:    "seglake",
+		HostID:    hostID(),
 	}
 	_ = xml.NewEncoder(w).Encode(resp)
 }
