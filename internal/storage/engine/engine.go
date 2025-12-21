@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
@@ -126,7 +127,7 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 		ETag:      hex.EncodeToString(hasher.Sum(nil)),
 		Size:      size,
 	}
-	manifestPath := e.layout.ManifestPath(versionID)
+	manifestPath := e.layout.ManifestPath(formatManifestName(bucket, key, versionID))
 	commit := func(tx *sql.Tx) error {
 		if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
 			return err
@@ -156,16 +157,11 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
-	manifestPath := e.layout.ManifestPath(versionID)
-	file, err := os.Open(manifestPath)
+	file, man, err := e.openManifestByVersion(versionID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer file.Close()
-	man, err := e.manifestCodec.Decode(file)
-	if err != nil {
-		return nil, nil, err
-	}
 	reader := newManifestReader(e.layout, man)
 	if ctx != nil {
 		reader.ctx = ctx
@@ -181,16 +177,11 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 	if length <= 0 {
 		return nil, nil, errors.New("engine: invalid range length")
 	}
-	manifestPath := e.layout.ManifestPath(versionID)
-	file, err := os.Open(manifestPath)
+	file, man, err := e.openManifestByVersion(versionID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer file.Close()
-	man, err := e.manifestCodec.Decode(file)
-	if err != nil {
-		return nil, nil, err
-	}
 	reader, err := newRangeReader(e.layout, man, start, length)
 	if err != nil {
 		return nil, nil, err
@@ -199,6 +190,42 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 		reader.ctx = ctx
 	}
 	return reader, man, nil
+}
+
+func (e *Engine) openManifestByVersion(versionID string) (*os.File, *manifest.Manifest, error) {
+	paths := []string{
+		e.layout.ManifestPath(versionID),
+	}
+	if entries, err := os.ReadDir(e.layout.ManifestsDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasSuffix(name, "__"+versionID) {
+				paths = append(paths, filepath.Join(e.layout.ManifestsDir, name))
+			}
+		}
+	}
+	var lastErr error
+	for _, path := range paths {
+		file, err := os.Open(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		man, err := e.manifestCodec.Decode(file)
+		if err != nil {
+			_ = file.Close()
+			lastErr = err
+			continue
+		}
+		return file, man, nil
+	}
+	if lastErr == nil {
+		lastErr = os.ErrNotExist
+	}
+	return nil, nil, lastErr
 }
 
 // GetObject resolves the current version id using metadata and returns the stream.
@@ -253,4 +280,11 @@ func newID() string {
 		panic(fmt.Sprintf("engine: rand failure: %v", err))
 	}
 	return hex.EncodeToString(buf[:])
+}
+
+func formatManifestName(bucket, key, versionID string) string {
+	if bucket == "" || key == "" {
+		return versionID
+	}
+	return bucket + "__" + key + "__" + versionID
 }
