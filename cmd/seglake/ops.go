@@ -21,7 +21,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir string) error {
 	case "fsck":
 		report, err = ops.Fsck(layout)
 	case "scrub":
-		report, err = ops.Scrub(layout)
+		report, err = ops.Scrub(layout, metaPath)
 	case "snapshot":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "snapshots", "snapshot-"+fmtTime())

@@ -58,3 +58,28 @@ func TestRecordSegmentSealedAt(t *testing.T) {
 		t.Fatalf("size mismatch: %d", seg.Size)
 	}
 }
+
+func TestMarkDamaged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 12, "/tmp/manifest"); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.MarkDamaged(ctx, "v1"); err != nil {
+		t.Fatalf("MarkDamaged: %v", err)
+	}
+	var state string
+	if err := store.db.QueryRowContext(ctx, "SELECT state FROM versions WHERE version_id=?", "v1").Scan(&state); err != nil {
+		t.Fatalf("query state: %v", err)
+	}
+	if state != "DAMAGED" {
+		t.Fatalf("expected DAMAGED, got %s", state)
+	}
+}

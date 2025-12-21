@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
@@ -107,13 +109,22 @@ func Fsck(layout fs.Layout) (*Report, error) {
 }
 
 // Scrub verifies chunk hashes against stored data.
-func Scrub(layout fs.Layout) (*Report, error) {
+func Scrub(layout fs.Layout, metaPath string) (*Report, error) {
 	report := &Report{Mode: "scrub", StartedAt: time.Now().UTC()}
 	manifests, err := listFiles(layout.ManifestsDir)
 	if err != nil {
 		return nil, err
 	}
 	report.Manifests = len(manifests)
+
+	var store *meta.Store
+	if metaPath != "" {
+		store, err = meta.Open(metaPath)
+		if err != nil {
+			return nil, err
+		}
+		defer store.Close()
+	}
 
 	addError := func(err error) {
 		report.Errors++
@@ -154,6 +165,9 @@ func Scrub(layout fs.Layout) (*Report, error) {
 			}
 			if segmentHash := segment.HashChunk(buf); segmentHash != ch.Hash {
 				addError(fmt.Errorf("hash mismatch segment=%s", ch.SegmentID))
+				if store != nil {
+					_ = store.MarkDamaged(context.Background(), man.VersionID)
+				}
 			}
 		}
 	}
