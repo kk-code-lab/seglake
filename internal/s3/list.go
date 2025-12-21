@@ -161,7 +161,8 @@ func decodeContinuation(raw string) (string, string) {
 	}
 	data, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return "", ""
+		// Fallback: treat token as raw key for compatibility.
+		return raw, ""
 	}
 	parts := strings.SplitN(string(data), "\n", 2)
 	if len(parts) == 1 {
