@@ -209,6 +209,13 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		return
 	}
 
+	if h.Meta != nil {
+		if err := h.Meta.CompleteMultipartUpload(ctx, uploadID); err != nil {
+			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+			return
+		}
+	}
+
 	multiETag := multipartETag(ordered)
 	resp := completeMultipartResult{
 		Bucket: upload.Bucket,
