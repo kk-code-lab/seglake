@@ -173,8 +173,9 @@ Przechowywanie:
 - canonical request zgodnie z AWS
 - region konfigurowalny
 - skew czasu ±5 min
-- wspierasz `x-amz-content-sha256: UNSIGNED-PAYLOAD` (streaming PUT)
+- wspierasz `x-amz-content-sha256: UNSIGNED-PAYLOAD` oraz pełny hash payloadu (weryfikowany streamingowo)
 - path‑style: `/<bucket>/<key>` (tylko)
+ - wspierasz `?location` (GetBucketLocation) dla kompatybilności tooling/SDK
 
 ### 8.2 Presigned URLs
 - GET i PUT obiektów
@@ -187,6 +188,7 @@ Przechowywanie:
 - parametry:
   - `prefix`, `delimiter=/`, `max-keys` (domyślnie 1000, max 1000), `continuation-token`
 - token: stateless, base64(last_key[, last_version_id])
+- kompatybilność z ListObjectsV1 (`marker`, `max-keys`, `prefix`, `delimiter`)
 
 ### 8.4 Range GET
 - `Range: bytes=...` mapowany na zakres chunków + offsety
