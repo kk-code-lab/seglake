@@ -11,6 +11,7 @@ import (
 const (
 	magic       = 0x53474c4d // "SGLM"
 	versionV1   = 1
+	versionV2   = 2
 	headerLen   = 4 + 4
 	checksumLen = 32
 )
@@ -31,7 +32,13 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 	}
 	buf := make([]byte, 0, 256)
 	buf = appendU32(buf, magic)
-	buf = appendU32(buf, versionV1)
+	if m.Bucket != "" || m.Key != "" {
+		buf = appendU32(buf, versionV2)
+		buf = appendString(buf, m.Bucket)
+		buf = appendString(buf, m.Key)
+	} else {
+		buf = appendU32(buf, versionV1)
+	}
 	buf = appendString(buf, m.VersionID)
 	buf = appendU64(buf, uint64(m.Size))
 	buf = appendU32(buf, uint32(len(m.Chunks)))
@@ -68,10 +75,27 @@ func (c *BinaryCodec) Decode(r io.Reader) (*Manifest, error) {
 	if binary.LittleEndian.Uint32(body[0:4]) != magic {
 		return nil, errors.New("manifest: bad magic")
 	}
-	if binary.LittleEndian.Uint32(body[4:8]) != versionV1 {
+	version := binary.LittleEndian.Uint32(body[4:8])
+	if version != versionV1 && version != versionV2 {
 		return nil, errors.New("manifest: unsupported version")
 	}
 	offset := headerLen
+	bucket := ""
+	key := ""
+	if version == versionV2 {
+		var n int
+		var err error
+		bucket, n, err = readString(body[offset:])
+		if err != nil {
+			return nil, err
+		}
+		offset += n
+		key, n, err = readString(body[offset:])
+		if err != nil {
+			return nil, err
+		}
+		offset += n
+	}
 	versionID, n, err := readString(body[offset:])
 	if err != nil {
 		return nil, err
@@ -118,6 +142,8 @@ func (c *BinaryCodec) Decode(r io.Reader) (*Manifest, error) {
 		return nil, errors.New("manifest: trailing bytes")
 	}
 	return &Manifest{
+		Bucket:    bucket,
+		Key:       key,
 		VersionID: versionID,
 		Size:      size,
 		Chunks:    chunks,

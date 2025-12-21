@@ -92,6 +92,8 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 	versionID := newID()
 
 	man := &manifest.Manifest{
+		Bucket:    bucket,
+		Key:       key,
 		VersionID: versionID,
 	}
 	var size int64

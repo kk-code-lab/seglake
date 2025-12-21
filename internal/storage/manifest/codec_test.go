@@ -8,6 +8,8 @@ import (
 func TestBinaryCodecRoundTrip(t *testing.T) {
 	c := &BinaryCodec{}
 	manifest := &Manifest{
+		Bucket:    "bucket",
+		Key:       "key",
 		VersionID: "v1",
 		Size:      12,
 		Chunks: []ChunkRef{
@@ -40,6 +42,9 @@ func TestBinaryCodecRoundTrip(t *testing.T) {
 
 	if got.VersionID != manifest.VersionID || got.Size != manifest.Size || len(got.Chunks) != len(manifest.Chunks) {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if got.Bucket != manifest.Bucket || got.Key != manifest.Key {
+		t.Fatalf("bucket/key mismatch: %+v", got)
 	}
 	for i := range manifest.Chunks {
 		if got.Chunks[i] != manifest.Chunks[i] {

@@ -11,6 +11,8 @@ type ChunkRef struct {
 
 // Manifest describes the layout of an object version.
 type Manifest struct {
+	Bucket    string
+	Key       string
 	VersionID string
 	Size      int64
 	Chunks    []ChunkRef
