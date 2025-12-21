@@ -74,22 +74,22 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, requestID string) {
 	partNumber, ok := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if !ok {
-		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid part number", requestID)
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid part number", requestID, r.URL.Path)
 		return
 	}
 	if _, err := h.Meta.GetMultipartUpload(ctx, uploadID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID)
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	reader := io.Reader(r.Body)
 	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
 		expected, verify, err := parsePayloadHash(hashHeader)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
 			return
 		}
 		if verify {
@@ -99,10 +99,10 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	_, result, err := h.Engine.PutObject(ctx, "", "", reader)
 	if err != nil {
 		if errors.Is(err, errPayloadHashMismatch) {
-			writeError(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	if err := h.Meta.PutMultipartPart(ctx, uploadID, partNumber, result.VersionID, result.ETag, result.Size); err != nil {
@@ -113,19 +113,19 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handler) handleListParts(ctx context.Context, w http.ResponseWriter, bucket, key, uploadID string, requestID string) {
+func (h *Handler) handleListParts(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, requestID string) {
 	upload, err := h.Meta.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID)
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	parts, err := h.Meta.ListMultipartParts(ctx, uploadID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	out := make([]listPartContent, 0, len(parts))
@@ -152,20 +152,20 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	upload, err := h.Meta.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID)
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 
 	var req completeMultipartRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid xml", requestID)
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid xml", requestID, r.URL.Path)
 		return
 	}
 	if len(req.Parts) == 0 {
-		writeError(w, http.StatusBadRequest, "InvalidArgument", "no parts", requestID)
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "no parts", requestID, r.URL.Path)
 		return
 	}
 	sort.Slice(req.Parts, func(i, j int) bool {
@@ -174,7 +174,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 
 	parts, err := h.Meta.ListMultipartParts(ctx, uploadID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	partMap := make(map[int]meta.MultipartPart, len(parts))
@@ -186,17 +186,17 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	for _, p := range req.Parts {
 		part, ok := partMap[p.PartNumber]
 		if !ok {
-			writeError(w, http.StatusBadRequest, "InvalidPart", "missing part", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidPart", "missing part", requestID, r.URL.Path)
 			return
 		}
 		if normalizeETag(p.ETag) != part.ETag {
-			writeError(w, http.StatusBadRequest, "InvalidPart", "etag mismatch", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidPart", "etag mismatch", requestID, r.URL.Path)
 			return
 		}
 		ordered = append(ordered, part)
 	}
 	if err := validatePartSizes(ordered); err != nil {
-		writeError(w, http.StatusBadRequest, "InvalidPart", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidPart", err.Error(), requestID, r.URL.Path)
 		return
 	}
 
@@ -220,13 +220,13 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 
 	_, result, err := h.Engine.PutObject(ctx, upload.Bucket, upload.Key, pr)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 
 	if h.Meta != nil {
 		if err := h.Meta.CompleteMultipartUpload(ctx, uploadID); err != nil {
-			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 			return
 		}
 	}

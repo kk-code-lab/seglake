@@ -33,7 +33,7 @@ func (h *Handler) handleListMultipartUploads(ctx context.Context, w http.Respons
 
 	uploads, err := h.Meta.ListMultipartUploads(ctx, bucket, prefix, maxUploads)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	out := make([]multipartUploadOut, 0, len(uploads))

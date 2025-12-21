@@ -105,9 +105,43 @@ func parseRange(header string, size int64) (start int64, length int64, ok bool) 
 	if len(parts) != 2 {
 		return 0, 0, false
 	}
-	if parts[0] == "" {
+	return parseRangeSpec(parts[0], parts[1], size)
+}
+
+type byteRange struct {
+	start  int64
+	length int64
+}
+
+func parseRanges(header string, size int64) ([]byteRange, bool) {
+	if !strings.HasPrefix(header, "bytes=") || size < 0 {
+		return nil, false
+	}
+	spec := strings.TrimPrefix(header, "bytes=")
+	parts := strings.Split(spec, ",")
+	ranges := make([]byteRange, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, false
+		}
+		specParts := strings.SplitN(part, "-", 2)
+		if len(specParts) != 2 {
+			return nil, false
+		}
+		start, length, ok := parseRangeSpec(specParts[0], specParts[1], size)
+		if !ok {
+			return nil, false
+		}
+		ranges = append(ranges, byteRange{start: start, length: length})
+	}
+	return ranges, true
+}
+
+func parseRangeSpec(startStr, endStr string, size int64) (start int64, length int64, ok bool) {
+	if startStr == "" {
 		// suffix: -N
-		n, err := strconv.ParseInt(parts[1], 10, 64)
+		n, err := strconv.ParseInt(endStr, 10, 64)
 		if err != nil || n <= 0 {
 			return 0, 0, false
 		}
@@ -116,14 +150,14 @@ func parseRange(header string, size int64) (start int64, length int64, ok bool) 
 		}
 		return size - n, n, true
 	}
-	start, err := strconv.ParseInt(parts[0], 10, 64)
+	start, err := strconv.ParseInt(startStr, 10, 64)
 	if err != nil || start < 0 || start >= size {
 		return 0, 0, false
 	}
-	if parts[1] == "" {
+	if endStr == "" {
 		return start, size - start, true
 	}
-	end, err := strconv.ParseInt(parts[1], 10, 64)
+	end, err := strconv.ParseInt(endStr, 10, 64)
 	if err != nil || end < start {
 		return 0, 0, false
 	}

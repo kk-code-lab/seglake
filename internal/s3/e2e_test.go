@@ -892,6 +892,149 @@ func TestS3E2ERangeGetNestedKey(t *testing.T) {
 	}
 }
 
+func TestS3E2EMultiRangeGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/range"
+	data := []byte("0123456789")
+	putReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	getReq.Header.Set("Range", "bytes=0-1,3-4")
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	ct := getResp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "multipart/byteranges") {
+		t.Fatalf("expected multipart content-type, got %q", ct)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("Content-Range: bytes 0-1/10")) {
+		t.Fatalf("missing range 0-1")
+	}
+	if !bytes.Contains(body, []byte("Content-Range: bytes 3-4/10")) {
+		t.Fatalf("missing range 3-4")
+	}
+}
+
+func TestS3E2EListBuckets(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/obj"
+	putReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("x")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	listReq, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("List status: %d", listResp.StatusCode)
+	}
+	body, err := io.ReadAll(listResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<Name>bucket</Name>")) {
+		t.Fatalf("expected bucket name in list")
+	}
+}
+
 func TestS3E2EPayloadHashMismatch(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

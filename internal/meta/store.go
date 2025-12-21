@@ -772,20 +772,20 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 
 // ReportOps is a slimmed view of ops.Report for storage.
 type ReportOps struct {
-	FinishedAt       string
-	Errors           int
-	Deleted          int
-	ReclaimedBytes   int64
+	FinishedAt        string
+	Errors            int
+	Deleted           int
+	ReclaimedBytes    int64
 	RewrittenSegments int
-	RewrittenBytes   int64
-	NewSegments      int
+	RewrittenBytes    int64
+	NewSegments       int
 }
 
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
-	Objects   int64 `json:"objects"`
-	Segments  int64 `json:"segments"`
-	BytesLive int64 `json:"bytes_live"`
+	Objects           int64  `json:"objects"`
+	Segments          int64  `json:"segments"`
+	BytesLive         int64  `json:"bytes_live"`
 	LastFsckAt        string `json:"last_fsck_at,omitempty"`
 	LastFsckErrors    int    `json:"last_fsck_errors,omitempty"`
 	LastScrubAt       string `json:"last_scrub_at,omitempty"`
@@ -850,6 +850,30 @@ JOIN manifests m ON m.version_id = o.version_id`)
 			return nil, err
 		}
 		out = append(out, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListBuckets returns bucket names in lexical order.
+func (s *Store) ListBuckets(ctx context.Context) (out []string, err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT bucket FROM buckets ORDER BY bucket`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		var bucket string
+		if err := rows.Scan(&bucket); err != nil {
+			return nil, err
+		}
+		out = append(out, bucket)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
