@@ -67,7 +67,7 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 
 	contents, common, count, truncated, lastKey, lastVersion, err := h.listObjects(ctx, bucket, prefix, delimiter, afterKey, afterVersion, maxKeys)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 
@@ -99,7 +99,7 @@ func (h *Handler) handleListV1(ctx context.Context, w http.ResponseWriter, r *ht
 
 	contents, common, _, truncated, lastKey, _, err := h.listObjects(ctx, bucket, prefix, delimiter, marker, "", maxKeys)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 

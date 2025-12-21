@@ -6,14 +6,14 @@ import (
 	"net/http"
 )
 
-func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string) {
+func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
 	if h.Meta == nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
 		return
 	}
 	stats, err := h.Meta.GetStats(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

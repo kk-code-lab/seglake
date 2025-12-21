@@ -25,17 +25,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/" {
+		h.handleListBuckets(r.Context(), w, requestID)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		bucket, ok := parseBucket(r.URL.Path)
 		if !ok {
-			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
 			return
 		}
 		h.handleListV2(r.Context(), w, r, bucket, requestID)
 		return
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
-		h.handleStats(r.Context(), w, requestID)
+		h.handleStats(r.Context(), w, requestID, r.URL.Path)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
@@ -51,7 +55,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
 		bucket, ok := parseBucket(r.URL.Path)
 		if !ok {
-			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
 			return
 		}
 		h.handleListMultipartUploads(r.Context(), w, r, bucket, requestID)
@@ -65,7 +69,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID)
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID, r.URL.Path)
 		return
 	}
 	switch r.Method {
@@ -77,7 +81,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePut(r.Context(), w, r, bucket, key, requestID)
 	case http.MethodGet:
 		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
-			h.handleListParts(r.Context(), w, bucket, key, uploadID, requestID)
+			h.handleListParts(r.Context(), w, r, bucket, key, uploadID, requestID)
 			return
 		}
 		h.handleGet(r.Context(), w, r, bucket, key, requestID, false)
@@ -96,7 +100,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.handleAbortMultipart(r.Context(), w, r.URL.Query().Get("uploadId"), requestID)
 			return
 		}
-		writeError(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID)
+		writeErrorWithResource(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID, r.URL.Path)
 	}
 }
 
@@ -104,8 +108,16 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	requestID := newRequestID()
 	w.Header().Set("x-amz-request-id", requestID)
 	w.Header().Set("x-amz-id-2", hostID())
+	if bucket, ok := parseBucket(r.URL.Path); ok {
+		region := "us-east-1"
+		if h.Auth != nil && h.Auth.Region != "" {
+			region = h.Auth.Region
+		}
+		w.Header().Set("x-amz-bucket-region", region)
+		_ = bucket
+	}
 	if h.Engine == nil || h.Meta == nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID, r.URL.Path)
 		return requestID, false
 	}
 	if h.Auth == nil {
@@ -114,11 +126,11 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	if err := h.Auth.VerifyRequest(r); err != nil {
 		switch err {
 		case errAccessDenied:
-			writeError(w, http.StatusForbidden, "AccessDenied", "access denied", requestID)
+			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
 		case errTimeSkew:
-			writeError(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID)
+			writeErrorWithResource(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID, r.URL.Path)
 		default:
-			writeError(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID)
+			writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
 		}
 		return requestID, false
 	}
@@ -131,7 +143,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
 		expected, verify, err := parsePayloadHash(hashHeader)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
 			return
 		}
 		if verify {
@@ -141,10 +153,10 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	_, result, err := h.Engine.PutObject(ctx, bucket, key, reader)
 	if err != nil {
 		if errors.Is(err, errPayloadHashMismatch) {
-			writeError(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID)
+			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	if result.ETag != "" {
@@ -158,15 +170,15 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	meta, err := h.Meta.GetObjectMeta(ctx, bucket, key)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID)
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID, r.URL.Path)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	if strings.EqualFold(meta.State, "DAMAGED") {
 		w.Header().Set("X-Error", "DamagedObject")
-		writeError(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID, r.URL.Path)
 		return
 	}
 	if meta.ETag != "" {
@@ -179,28 +191,52 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader != "" {
-		start, length, ok := parseRange(rangeHeader, meta.Size)
-		if !ok {
+		ranges, ok := parseRanges(rangeHeader, meta.Size)
+		if !ok || len(ranges) == 0 {
 			w.Header().Set("Content-Range", "bytes */"+intToString(meta.Size))
-			writeError(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID)
+			writeErrorWithResource(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID, r.URL.Path)
 			return
 		}
-		if headOnly {
+		if len(ranges) == 1 {
+			start, length := ranges[0].start, ranges[0].length
+			if headOnly {
+				w.Header().Set("Content-Length", intToString(length))
+				w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
+				w.WriteHeader(http.StatusPartialContent)
+				return
+			}
+			reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+				return
+			}
+			defer func() { _ = reader.Close() }()
 			w.Header().Set("Content-Length", intToString(length))
 			w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
 			w.WriteHeader(http.StatusPartialContent)
+			_, _ = ioCopy(w, reader)
 			return
 		}
-		reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
-			return
-		}
-		defer func() { _ = reader.Close() }()
-		w.Header().Set("Content-Length", intToString(length))
-		w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
+		boundary := "seglake-" + requestID
+		w.Header().Set("Content-Type", "multipart/byteranges; boundary="+boundary)
 		w.WriteHeader(http.StatusPartialContent)
-		_, _ = ioCopy(w, reader)
+		if headOnly {
+			return
+		}
+		for _, br := range ranges {
+			start, length := br.start, br.length
+			_, _ = io.WriteString(w, "--"+boundary+"\r\n")
+			_, _ = io.WriteString(w, "Content-Type: application/octet-stream\r\n")
+			_, _ = io.WriteString(w, "Content-Range: "+formatContentRange(start, length, meta.Size)+"\r\n\r\n")
+			reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
+			if err != nil {
+				return
+			}
+			_, _ = ioCopy(w, reader)
+			_ = reader.Close()
+			_, _ = io.WriteString(w, "\r\n")
+		}
+		_, _ = io.WriteString(w, "--"+boundary+"--\r\n")
 		return
 	}
 	if headOnly {
@@ -212,7 +248,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	reader, _, err := h.Engine.Get(ctx, meta.VersionID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	defer func() { _ = reader.Close() }()
