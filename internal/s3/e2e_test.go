@@ -1,0 +1,330 @@
+//go:build e2e
+// +build e2e
+
+package s3
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/storage/engine"
+	"github.com/kk-code-lab/seglake/internal/storage/fs"
+)
+
+func TestS3E2EUnsignedPayload(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/key"
+	body := []byte("hello world")
+	req, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(req, "test", "testsecret", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", resp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	got, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("GET body mismatch")
+	}
+}
+
+func TestS3E2ENoAuth(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket-noauth/key"
+	body := []byte("hello no auth")
+	req, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", resp.StatusCode)
+	}
+
+	headReq, err := http.NewRequest(http.MethodHead, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	headResp, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		t.Fatalf("HEAD error: %v", err)
+	}
+	headResp.Body.Close()
+	if headResp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD status: %d", headResp.StatusCode)
+	}
+	if headResp.Header.Get("ETag") == "" {
+		t.Fatalf("expected ETag")
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	got, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("GET body mismatch")
+	}
+}
+
+func TestS3E2EBadSignature(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/badsig"
+	req, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("x")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(req, "test", "wrongsecret", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestS3E2ETimeSkew(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   1 * time.Second,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/skew"
+	req, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("x")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestWithTime(req, "test", "testsecret", "us-east-1", time.Now().UTC().Add(-10*time.Second))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+func signRequest(r *http.Request, accessKey, secretKey, region string) {
+	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
+}
+
+func signRequestWithTime(r *http.Request, accessKey, secretKey, region string, now time.Time) {
+	amzDate := now.Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	r.Header.Set("Host", r.URL.Host)
+
+	canonicalHeaders, signedHeaders := canonicalHeadersForRequest(r)
+	canonicalRequest := strings.Join([]string{
+		r.Method,
+		canonicalURI(r),
+		canonicalQueryFromURL(r.URL),
+		canonicalHeaders,
+		strings.Join(signedHeaders, ";"),
+		"UNSIGNED-PAYLOAD",
+	}, "\n")
+
+	hash := sha256.Sum256([]byte(canonicalRequest))
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hash[:]),
+	}, "\n")
+
+	signingKey := deriveSigningKey(secretKey, dateScope, region, "s3")
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=" + accessKey + "/" + scope + "," +
+		"SignedHeaders=" + strings.Join(signedHeaders, ";") + "," +
+		"Signature=" + signature
+	r.Header.Set("Authorization", auth)
+}
+
+func canonicalHeadersForRequest(r *http.Request) (string, []string) {
+	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	var b strings.Builder
+	for _, h := range headers {
+		var value string
+		if h == "host" {
+			value = r.Host
+		} else {
+			value = r.Header.Get(h)
+		}
+		b.WriteString(h)
+		b.WriteByte(':')
+		b.WriteString(value)
+		b.WriteByte('\n')
+	}
+	return b.String(), headers
+}
+
+func canonicalQueryFromURL(u *url.URL) string {
+	if u.RawQuery == "" {
+		return ""
+	}
+	values := u.Query()
+	var pairs []string
+	for k, vs := range values {
+		for _, v := range vs {
+			pairs = append(pairs, encodeRfc3986(k)+"="+encodeRfc3986(v))
+		}
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, "&")
+}
