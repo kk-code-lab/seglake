@@ -50,3 +50,38 @@ func TestBarrierConcurrentPuts(t *testing.T) {
 		}
 	}
 }
+
+func TestBarrierWaitFlushesOnInterval(t *testing.T) {
+	dir := t.TempDir()
+	engine, err := New(Options{
+		Layout:          fs.NewLayout(dir + "/data"),
+		BarrierInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	start := time.Now()
+	if err := engine.barrier.wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("wait took too long: %v", elapsed)
+	}
+}
+
+func TestBarrierWaitContextCanceled(t *testing.T) {
+	dir := t.TempDir()
+	engine, err := New(Options{
+		Layout:          fs.NewLayout(dir + "/data"),
+		BarrierInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := engine.barrier.wait(ctx); err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
