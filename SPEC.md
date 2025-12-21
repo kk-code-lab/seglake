@@ -374,8 +374,8 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 
 ### 19.1 Core durability i storage
 - [x] Doprecyzowany group commit: sync_interval/sync_bytes z realnym batchingiem
-- [ ] Reuse open segmentów (nie zawsze “segment per PUT”)
-- [ ] Footer: bloom + sparse index (na razie stub)
+- [x] Reuse open segmentów (nie zawsze “segment per PUT”)
+- [x] Footer: bloom + sparse index (na razie stub)
 
 ### 19.2 Metadata / recovery
 - [ ] FSCK: pełna spójność manifest↔segment↔DB (raporty + naprawy)

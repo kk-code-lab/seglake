@@ -118,12 +118,14 @@ type Footer struct {
 	Version      uint32
 	BloomOffset  int64
 	IndexOffset  int64
+	BloomBytes   uint32
+	IndexBytes   uint32
 	ChecksumHash [32]byte
 }
 
 const (
 	footerMagic = 0x53474c4b // "SGLK"
-	footerLen   = 4 + 4 + 8 + 8 + 32
+	footerLen   = 4 + 4 + 8 + 8 + 4 + 4 + 32
 )
 
 // SegmentHeaderLen returns the size of the segment header in bytes.
@@ -143,7 +145,9 @@ func EncodeFooter(w io.Writer, footer Footer) error {
 	binary.LittleEndian.PutUint32(buf[4:8], footer.Version)
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(footer.BloomOffset))
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(footer.IndexOffset))
-	copy(buf[24:], footer.ChecksumHash[:])
+	binary.LittleEndian.PutUint32(buf[24:28], footer.BloomBytes)
+	binary.LittleEndian.PutUint32(buf[28:32], footer.IndexBytes)
+	copy(buf[32:], footer.ChecksumHash[:])
 	_, err := w.Write(buf[:])
 	return err
 }
@@ -159,7 +163,9 @@ func DecodeFooter(r io.Reader) (Footer, error) {
 	footer.Version = binary.LittleEndian.Uint32(buf[4:8])
 	footer.BloomOffset = int64(binary.LittleEndian.Uint64(buf[8:16]))
 	footer.IndexOffset = int64(binary.LittleEndian.Uint64(buf[16:24]))
-	copy(footer.ChecksumHash[:], buf[24:])
+	footer.BloomBytes = binary.LittleEndian.Uint32(buf[24:28])
+	footer.IndexBytes = binary.LittleEndian.Uint32(buf[28:32])
+	copy(footer.ChecksumHash[:], buf[32:])
 	return footer, nil
 }
 
@@ -192,7 +198,9 @@ func FooterChecksum(f Footer) [32]byte {
 	binary.LittleEndian.PutUint32(buf[4:8], f.Version)
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(f.BloomOffset))
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(f.IndexOffset))
-	copy(buf[24:], f.ChecksumHash[:])
+	binary.LittleEndian.PutUint32(buf[24:28], f.BloomBytes)
+	binary.LittleEndian.PutUint32(buf[28:32], f.IndexBytes)
+	copy(buf[32:], f.ChecksumHash[:])
 	return blake3.Sum256(buf[:])
 }
 
