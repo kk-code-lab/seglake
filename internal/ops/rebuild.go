@@ -48,6 +48,10 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 				// Derive bucket/key from manifest filename: expects "<bucket>__<key>__<version>".
 				bucket, key := parseManifestName(filepath.Base(path))
 				if bucket == "" || key == "" {
+					bucket = man.Bucket
+					key = man.Key
+				}
+				if bucket == "" || key == "" {
 					continue
 				}
 				if err := store.RecordPutTx(tx, bucket, key, man.VersionID, "", man.Size, path); err != nil {
