@@ -34,6 +34,7 @@ type Report struct {
 	OutOfBoundsChunks int       `json:"out_of_bounds_chunks,omitempty"`
 	RebuiltObjects    int       `json:"rebuilt_objects,omitempty"`
 	SkippedManifests  int       `json:"skipped_manifests,omitempty"`
+	MissingSegmentIDs []string  `json:"missing_segment_ids,omitempty"`
 }
 
 // Status collects basic counts about storage state.
@@ -98,6 +99,9 @@ func Fsck(layout fs.Layout) (*Report, error) {
 				info, err = os.Stat(segPath)
 				if err != nil {
 					report.MissingSegments++
+					if len(report.MissingSegmentIDs) < 100 {
+						report.MissingSegmentIDs = append(report.MissingSegmentIDs, ch.SegmentID)
+					}
 					addError(fmt.Errorf("missing segment %s", ch.SegmentID))
 					continue
 				}
@@ -131,6 +135,9 @@ func Fsck(layout fs.Layout) (*Report, error) {
 			for _, seg := range segments {
 				if _, ok := segmentSeen[seg.ID]; !ok && seg.State == string(segment.StateSealed) {
 					report.MissingSegments++
+					if len(report.MissingSegmentIDs) < 100 {
+						report.MissingSegmentIDs = append(report.MissingSegmentIDs, seg.ID)
+					}
 				}
 			}
 		}
