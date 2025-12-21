@@ -282,18 +282,6 @@ func createSegment(t *testing.T, layout fs.Layout, segID string) (string, int64,
 	return segPath, offset, info.Size()
 }
 
-func writeManifest(path string, man *manifest.Manifest) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-	return (&manifest.BinaryCodec{}).Encode(file, man)
-}
-
 func TestGCPlanMinAgeRespected(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))
