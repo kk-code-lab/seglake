@@ -86,13 +86,17 @@ func Fsck(layout fs.Layout) (*Report, error) {
 					continue
 				}
 				if _, err := reader.ReadFooter(); err != nil {
-					addError(fmt.Errorf("segment footer invalid %s", ch.SegmentID))
+					// Treat missing/invalid footer as OPEN segment.
 				}
 				_ = reader.Close()
 				segmentInfo[ch.SegmentID] = info
 				report.Segments++
 			}
-			if ch.Offset < segment.SegmentHeaderLen() || ch.Offset+int64(ch.Len) > info.Size()-segment.FooterLen() {
+			dataEnd := info.Size()
+			if dataEnd > segment.FooterLen() {
+				dataEnd = info.Size() - segment.FooterLen()
+			}
+			if ch.Offset < segment.SegmentHeaderLen() || ch.Offset+int64(ch.Len) > dataEnd {
 				addError(fmt.Errorf("chunk out of bounds segment=%s offset=%d len=%d", ch.SegmentID, ch.Offset, ch.Len))
 			}
 		}

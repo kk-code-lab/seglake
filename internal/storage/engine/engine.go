@@ -16,7 +16,6 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/chunk"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
-	"github.com/kk-code-lab/seglake/internal/storage/segment"
 )
 
 // PutResult captures metadata for a successful write.
@@ -29,11 +28,13 @@ type PutResult struct {
 
 // Options configures the storage engine.
 type Options struct {
-	Layout         fs.Layout
-	SegmentVersion uint32
-	Splitter       chunk.Splitter
-	ManifestCodec  manifest.Codec
-	MetaStore      *meta.Store
+	Layout          fs.Layout
+	SegmentVersion  uint32
+	Splitter        chunk.Splitter
+	ManifestCodec   manifest.Codec
+	MetaStore       *meta.Store
+	SegmentMaxBytes int64
+	SegmentMaxAge   time.Duration
 }
 
 // Engine owns the storage read/write path.
@@ -43,6 +44,7 @@ type Engine struct {
 	splitter       chunk.Splitter
 	manifestCodec  manifest.Codec
 	metaStore      *meta.Store
+	segments       *segmentManager
 }
 
 // New creates a storage engine instance.
@@ -65,6 +67,7 @@ func New(opts Options) (*Engine, error) {
 		splitter:       opts.Splitter,
 		manifestCodec:  opts.ManifestCodec,
 		metaStore:      opts.MetaStore,
+		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge),
 	}
 	if err := engine.ensureDirs(); err != nil {
 		return nil, err
@@ -83,20 +86,6 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 		return nil, nil, err
 	}
 	versionID := newID()
-	segmentID := "seg-" + newID()
-	segmentPath := e.layout.SegmentPath(segmentID)
-
-	writer, err := segment.NewWriter(segmentPath, e.segmentVersion)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer writer.Close()
-
-	if e.metaStore != nil {
-		if err := e.metaStore.RecordSegment(ctx, segmentID, segmentPath, string(segment.StateOpen), 0, nil); err != nil {
-			return nil, nil, err
-		}
-	}
 
 	man := &manifest.Manifest{
 		VersionID: versionID,
@@ -109,10 +98,7 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 			return ctx.Err()
 		default:
 		}
-		offset, err := writer.AppendRecord(segment.ChunkRecordHeader{
-			Hash: ch.Hash,
-			Len:  uint32(len(ch.Data)),
-		}, ch.Data)
+		segmentID, offset, err := e.segments.appendChunk(ctx, ch.Hash, ch.Data)
 		if err != nil {
 			return err
 		}
@@ -131,23 +117,8 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 	}
 	man.Size = size
 
-	footer := segment.NewFooter(e.segmentVersion)
-	footer = segment.FinalizeFooter(footer)
-	if err := writer.Seal(footer); err != nil {
+	if err := e.segments.sync(); err != nil {
 		return nil, nil, err
-	}
-	if err := writer.Close(); err != nil {
-		return nil, nil, err
-	}
-
-	if e.metaStore != nil {
-		info, err := os.Stat(segmentPath)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := e.metaStore.RecordSegment(ctx, segmentID, segmentPath, string(segment.StateSealed), info.Size(), footer.ChecksumHash[:]); err != nil {
-			return nil, nil, err
-		}
 	}
 
 	manifestPath := e.layout.ManifestPath(versionID)
