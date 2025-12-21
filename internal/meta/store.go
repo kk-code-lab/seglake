@@ -91,6 +91,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 2 {
+		if err = applyV2(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -144,6 +152,34 @@ func applyV1(ctx context.Context, tx *sql.Tx) error {
 			access_key TEXT NOT NULL,
 			bucket TEXT NOT NULL,
 			PRIMARY KEY(access_key, bucket)
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV2(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS multipart_uploads (
+			upload_id TEXT PRIMARY KEY,
+			bucket TEXT NOT NULL,
+			key TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			state TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS multipart_uploads_bucket_key_idx ON multipart_uploads(bucket, key)`,
+		`CREATE TABLE IF NOT EXISTS multipart_parts (
+			upload_id TEXT NOT NULL,
+			part_number INTEGER NOT NULL,
+			version_id TEXT NOT NULL,
+			etag TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			last_modified_utc TEXT NOT NULL,
+			PRIMARY KEY(upload_id, part_number)
 		)`,
 	}
 	for _, stmt := range ddl {
@@ -243,6 +279,100 @@ func (s *Store) CurrentVersion(ctx context.Context, bucket, key string) (string,
 		return "", err
 	}
 	return versionID, nil
+}
+
+// MultipartUpload holds upload metadata.
+type MultipartUpload struct {
+	UploadID  string
+	Bucket    string
+	Key       string
+	CreatedAt string
+	State     string
+}
+
+// MultipartPart holds part metadata.
+type MultipartPart struct {
+	UploadID     string
+	PartNumber   int
+	VersionID    string
+	ETag         string
+	Size         int64
+	LastModified string
+}
+
+// CreateMultipartUpload creates an upload and returns its id.
+func (s *Store) CreateMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
+	if bucket == "" || key == "" || uploadID == "" {
+		return errors.New("meta: bucket, key, and upload id required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state)
+VALUES(?, ?, ?, ?, 'ACTIVE')`, uploadID, bucket, key, now)
+	return err
+}
+
+// GetMultipartUpload returns upload metadata.
+func (s *Store) GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state
+FROM multipart_uploads
+WHERE upload_id=?`, uploadID)
+	var up MultipartUpload
+	if err := row.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+		return nil, err
+	}
+	return &up, nil
+}
+
+// AbortMultipartUpload marks an upload as aborted.
+func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE multipart_uploads SET state='ABORTED' WHERE upload_id=?`, uploadID)
+	return err
+}
+
+// PutMultipartPart records or replaces a part.
+func (s *Store) PutMultipartPart(ctx context.Context, uploadID string, partNumber int, versionID, etag string, size int64) error {
+	if uploadID == "" || partNumber <= 0 || versionID == "" {
+		return errors.New("meta: invalid part")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO multipart_parts(upload_id, part_number, version_id, etag, size, last_modified_utc)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(upload_id, part_number) DO UPDATE SET
+	version_id=excluded.version_id,
+	etag=excluded.etag,
+	size=excluded.size,
+	last_modified_utc=excluded.last_modified_utc`,
+		uploadID, partNumber, versionID, etag, size, now)
+	return err
+}
+
+// ListMultipartParts returns parts ordered by part number.
+func (s *Store) ListMultipartParts(ctx context.Context, uploadID string) ([]MultipartPart, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT upload_id, part_number, version_id, etag, size, last_modified_utc
+FROM multipart_parts
+WHERE upload_id=?
+ORDER BY part_number`, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MultipartPart
+	for rows.Next() {
+		var part MultipartPart
+		if err := rows.Scan(&part.UploadID, &part.PartNumber, &part.VersionID, &part.ETag, &part.Size, &part.LastModified); err != nil {
+			return nil, err
+		}
+		out = append(out, part)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ObjectMeta describes the current object version metadata.
