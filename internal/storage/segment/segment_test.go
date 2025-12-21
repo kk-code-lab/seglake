@@ -1,6 +1,7 @@
 package segment
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -106,5 +107,35 @@ func TestReadFooterWithMissingFooter(t *testing.T) {
 
 	if _, err := reader.ReadFooter(); err == nil {
 		t.Fatalf("expected error for invalid footer")
+	}
+}
+
+func TestFooterRoundTripFields(t *testing.T) {
+	footer := NewFooter(2)
+	footer.BloomOffset = 1234
+	footer.IndexOffset = 5678
+	footer.BloomBytes = 64
+	footer.IndexBytes = 128
+	footer = FinalizeFooter(footer)
+
+	var buf bytes.Buffer
+	if err := EncodeFooter(&buf, footer); err != nil {
+		t.Fatalf("EncodeFooter: %v", err)
+	}
+	got, err := DecodeFooter(&buf)
+	if err != nil {
+		t.Fatalf("DecodeFooter: %v", err)
+	}
+	if err := ValidateFooter(got); err != nil {
+		t.Fatalf("ValidateFooter: %v", err)
+	}
+	if got.BloomOffset != footer.BloomOffset || got.IndexOffset != footer.IndexOffset {
+		t.Fatalf("offsets mismatch: %+v", got)
+	}
+	if got.BloomBytes != footer.BloomBytes || got.IndexBytes != footer.IndexBytes {
+		t.Fatalf("bytes mismatch: %+v", got)
+	}
+	if got.ChecksumHash != footer.ChecksumHash {
+		t.Fatalf("checksum mismatch")
 	}
 }
