@@ -367,3 +367,28 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - GC rewrite correctness → etapowanie + 2-phase + fsck
 - clock skew → HLC persist + wall-clock tylko dla LastModified
 - fsync koszt → group commit + limity concurrency
+
+---
+
+## 19) Pozostałe elementy MVP (checklista)
+
+### 19.1 Core durability i storage
+- [ ] Doprecyzowany group commit: sync_interval/sync_bytes z realnym batchingiem
+- [ ] Reuse open segmentów (nie zawsze “segment per PUT”)
+- [ ] Footer: bloom + sparse index (na razie stub)
+
+### 19.2 Metadata / recovery
+- [ ] FSCK: pełna spójność manifest↔segment↔DB (raporty + naprawy)
+- [ ] Rebuild-index: weryfikacja wersji vs. stan w DB (DAMAGED/ACTIVE)
+
+### 19.3 S3 polish
+- [ ] SigV4 edge cases (canonicalization test vectors)
+- [ ] ListObjectsV2: marker compatibility (AWS-style)
+
+### 19.4 Observability
+- [ ] `/v1/meta/stats` JSON endpoint
+- [ ] Structured request logs z request-id
+
+### 19.5 Ops polish
+- [ ] GC plan file + `gc run --from-plan`
+- [ ] Support bundle z redakcją sekretów
