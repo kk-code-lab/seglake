@@ -49,6 +49,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListV2(r.Context(), w, r, bucket, requestID)
 		return
 	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
+		h.handleStats(r.Context(), w, requestID)
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
+		h.handleStats(r.Context(), w, requestID)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
 		bucket, ok := parseBucket(r.URL.Path)
 		if !ok {
