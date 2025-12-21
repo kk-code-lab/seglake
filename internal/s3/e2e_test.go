@@ -574,6 +574,78 @@ func TestS3E2EListV2Continuation(t *testing.T) {
 		t.Fatalf("expected next key")
 	}
 }
+
+func TestS3E2ERangeGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/range"
+	data := []byte("0123456789")
+	putReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	getReq.Header.Set("Range", "bytes=3-6")
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "3456" {
+		t.Fatalf("range body mismatch: %q", string(body))
+	}
+	if getResp.Header.Get("Content-Range") == "" {
+		t.Fatalf("missing Content-Range")
+	}
+}
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
 	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
 }

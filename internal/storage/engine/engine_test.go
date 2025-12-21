@@ -92,3 +92,32 @@ func TestEnginePutObjectRecordsMetadata(t *testing.T) {
 		t.Fatalf("data mismatch")
 	}
 }
+
+func TestEngineGetRange(t *testing.T) {
+	dir := t.TempDir()
+	engine, err := New(Options{
+		Layout: fs.NewLayout(filepath.Join(dir, "data")),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := bytes.Repeat([]byte("abcd"), 8)
+	_, result, err := engine.Put(context.Background(), bytes.NewReader(input))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	reader, _, err := engine.GetRange(context.Background(), result.VersionID, 3, 7)
+	if err != nil {
+		t.Fatalf("GetRange: %v", err)
+	}
+	defer reader.Close()
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != string(input[3:10]) {
+		t.Fatalf("range mismatch: %q", string(got))
+	}
+}
