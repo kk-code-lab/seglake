@@ -23,6 +23,8 @@ func main() {
 	accessKey := flag.String("access-key", "", "S3 access key (enables SigV4)")
 	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
 	region := flag.String("region", "us-east-1", "S3 region")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status")
+	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	flag.Parse()
 
 	if *showVersion || *showVersionShort {
@@ -55,6 +57,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "engine init error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *mode != "server" {
+		if err := runOps(*mode, *dataDir, metaPath, *snapshotDir); err != nil {
+			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	fmt.Printf("seglake %s (commit %s)\n", app.Version, app.BuildCommit)
