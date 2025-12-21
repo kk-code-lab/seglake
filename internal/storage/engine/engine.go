@@ -37,6 +37,8 @@ type Options struct {
 	MetaStore       *meta.Store
 	SegmentMaxBytes int64
 	SegmentMaxAge   time.Duration
+	BarrierInterval time.Duration
+	BarrierMaxBytes int64
 }
 
 // Engine owns the storage read/write path.
@@ -72,7 +74,7 @@ func New(opts Options) (*Engine, error) {
 		metaStore:      opts.MetaStore,
 		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge),
 	}
-	engine.barrier = newWriteBarrier(engine, 100*time.Millisecond, 128<<20)
+	engine.barrier = newWriteBarrier(engine, opts.BarrierInterval, opts.BarrierMaxBytes)
 	if err := engine.ensureDirs(); err != nil {
 		return nil, err
 	}

@@ -52,7 +52,9 @@ func (b *writeBarrier) wait(ctx context.Context) error {
 	b.mu.Lock()
 	b.waiters = append(b.waiters, ch)
 	b.pendingOps++
-	if b.timer == nil {
+	if b.pendingBytes >= b.maxBytes {
+		go b.flush()
+	} else if b.timer == nil {
 		b.timer = time.AfterFunc(b.interval, b.flush)
 	}
 	b.mu.Unlock()
@@ -79,7 +81,7 @@ func (b *writeBarrier) addBytes(n int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pendingBytes += n
-	if b.pendingBytes >= b.maxBytes && !b.flushRunning {
+	if b.pendingBytes >= b.maxBytes && len(b.waiters) > 0 && !b.flushRunning {
 		go b.flush()
 	}
 }
