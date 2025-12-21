@@ -25,10 +25,15 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
+	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
 
 	if *showVersion || *showVersionShort {
 		fmt.Printf("seglake %s (commit %s)\n", app.Version, app.BuildCommit)
+		return
+	}
+	if *showModeHelp {
+		printModeHelp(*mode)
 		return
 	}
 
