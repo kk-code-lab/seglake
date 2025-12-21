@@ -129,3 +129,21 @@ func TestRebuildIndexSkipsManifestWithoutKey(t *testing.T) {
 		t.Fatalf("expected no current version")
 	}
 }
+
+func TestRebuildIndexSkipsCorruptManifest(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	path := filepath.Join(layout.ManifestsDir, "bucket__key__v1")
+	if err := os.WriteFile(path, []byte("corrupt"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := RebuildIndex(layout, metaPath); err == nil {
+		t.Fatalf("expected rebuild error for corrupt manifest")
+	}
+}
