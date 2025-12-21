@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"hash"
 	"io"
 	"os"
 	"strconv"
@@ -32,6 +34,63 @@ var httpTimeZone = time.FixedZone("GMT", 0)
 
 func formatHTTPTime(t time.Time) string {
 	return t.In(httpTimeZone).Format(time.RFC1123)
+}
+
+var errPayloadHashMismatch = errors.New("payload hash mismatch")
+var errPayloadHashInvalid = errors.New("invalid payload hash")
+
+type payloadHashReader struct {
+	reader   io.Reader
+	hasher   hash.Hash
+	expected string
+	done     bool
+}
+
+func newPayloadHashReader(reader io.Reader, expected string) *payloadHashReader {
+	return &payloadHashReader{
+		reader:   reader,
+		hasher:   sha256.New(),
+		expected: strings.ToLower(expected),
+	}
+}
+
+func (r *payloadHashReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		_, _ = r.hasher.Write(p[:n])
+	}
+	if err == io.EOF {
+		sum := hex.EncodeToString(r.hasher.Sum(nil))
+		r.done = true
+		if sum != r.expected {
+			return 0, errPayloadHashMismatch
+		}
+		return n, io.EOF
+	}
+	return n, err
+}
+
+func parsePayloadHash(header string) (string, bool, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "", false, nil
+	}
+	if header == "UNSIGNED-PAYLOAD" {
+		return header, false, nil
+	}
+	if strings.HasPrefix(header, "STREAMING-") {
+		return "", false, errPayloadHashInvalid
+	}
+	if len(header) != 64 {
+		return "", false, errPayloadHashInvalid
+	}
+	if _, err := hex.DecodeString(header); err != nil {
+		return "", false, errPayloadHashInvalid
+	}
+	return strings.ToLower(header), true, nil
 }
 
 func parseRange(header string, size int64) (start int64, length int64, ok bool) {
