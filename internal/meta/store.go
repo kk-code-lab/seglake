@@ -44,6 +44,15 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Flush forces a WAL checkpoint to durably persist changes.
+func (s *Store) Flush() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
+
 func (s *Store) applyPragmas(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
 		return err

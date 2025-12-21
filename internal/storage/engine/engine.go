@@ -45,6 +45,7 @@ type Engine struct {
 	manifestCodec  manifest.Codec
 	metaStore      *meta.Store
 	segments       *segmentManager
+	barrier        *writeBarrier
 }
 
 // New creates a storage engine instance.
@@ -69,6 +70,7 @@ func New(opts Options) (*Engine, error) {
 		metaStore:      opts.MetaStore,
 		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge),
 	}
+	engine.barrier = newWriteBarrier(engine, 100*time.Millisecond, 128<<20)
 	if err := engine.ensureDirs(); err != nil {
 		return nil, err
 	}
@@ -102,6 +104,7 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 		if err != nil {
 			return err
 		}
+		e.barrier.addBytes(int64(len(ch.Data)))
 		man.Chunks = append(man.Chunks, manifest.ChunkRef{
 			Index:     ch.Index,
 			Hash:      ch.Hash,
@@ -118,6 +121,10 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 	man.Size = size
 
 	if err := e.segments.sync(); err != nil {
+		return nil, nil, err
+	}
+
+	if err := e.barrier.wait(ctx); err != nil {
 		return nil, nil, err
 	}
 
@@ -210,6 +217,13 @@ func (e *Engine) ensureDirs() error {
 		return err
 	}
 	return nil
+}
+
+func (e *Engine) flushMeta() error {
+	if e.metaStore == nil {
+		return nil
+	}
+	return e.metaStore.Flush()
 }
 
 func writeManifestFile(path string, codec manifest.Codec, man *manifest.Manifest) error {
