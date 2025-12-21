@@ -35,7 +35,7 @@ try {
         return 'unknown'
     }
 
-    $buildFlag = "-X github.com/kk-code-lab/seglake/internal/app.BuildCommit=$(Get-GitCommit)"
+    $buildFlag = "-X github.com/kk-code-lab/seglake/internal/app.BuildCommit=$(Get-GitCommit) -X github.com/kk-code-lab/seglake/internal/app.Version=dev"
 
     function Invoke-CommandChecked {
         param([Parameter(Mandatory)][string]$Description, [Parameter(Mandatory)][scriptblock]$Action)
