@@ -28,6 +28,9 @@ type Report struct {
 	Candidates        int       `json:"candidates,omitempty"`
 	Deleted           int       `json:"deleted,omitempty"`
 	Reclaimed         int64     `json:"reclaimed_bytes,omitempty"`
+	RewrittenSegments int       `json:"rewritten_segments,omitempty"`
+	RewrittenBytes    int64     `json:"rewritten_bytes,omitempty"`
+	NewSegments       int       `json:"new_segments,omitempty"`
 	CandidateIDs      []string  `json:"candidate_ids,omitempty"`
 	MissingSegments   int       `json:"missing_segments,omitempty"`
 	InvalidManifests  int       `json:"invalid_manifests,omitempty"`

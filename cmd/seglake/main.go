@@ -24,11 +24,12 @@ func main() {
 	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
 	region := flag.String("region", "us-east-1", "S3 region")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|support-bundle")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|support-bundle")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
 	gcForce := flag.Bool("gc-force", false, "GC delete segments (required for gc-run)")
+	gcLiveThreshold := flag.Float64("gc-live-threshold", 0.5, "GC rewrite live-bytes ratio threshold (<= value)")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -74,7 +75,7 @@ func main() {
 		if *rebuildMeta != "" {
 			metaArg = *rebuildMeta
 		}
-		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *jsonOut); err != nil {
+		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
 			os.Exit(1)
 		}
