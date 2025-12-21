@@ -104,7 +104,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	_, result, err := h.Engine.PutObject(ctx, bucket, key, r.Body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
@@ -159,7 +159,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 			return
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = ioCopy(w, reader)
 		return
@@ -176,7 +176,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 		return
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	w.WriteHeader(http.StatusOK)
 	_, _ = ioCopy(w, reader)
 }

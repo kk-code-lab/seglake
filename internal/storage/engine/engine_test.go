@@ -36,7 +36,7 @@ func TestEnginePutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if gotManifest.VersionID != manifest.VersionID {
 		t.Fatalf("manifest id mismatch")
@@ -56,7 +56,7 @@ func TestEnginePutObjectRecordsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open meta: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	engine, err := New(Options{
 		Layout:    fs.NewLayout(filepath.Join(dir, "data")),
@@ -83,7 +83,7 @@ func TestEnginePutObjectRecordsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
@@ -112,7 +112,7 @@ func TestEngineGetRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRange: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	got, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)

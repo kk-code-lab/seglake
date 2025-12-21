@@ -58,7 +58,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "meta open error: %v\n", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(filepath.Join(*dataDir, "objects")),

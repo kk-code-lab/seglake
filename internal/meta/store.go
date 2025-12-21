@@ -460,7 +460,7 @@ VALUES(?, ?, ?, ?, 'ACTIVE')`, uploadID, bucket, key, now)
 }
 
 // ListMultipartUploads returns active uploads for a bucket and optional prefix.
-func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix string, limit int) ([]MultipartUpload, error) {
+func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix string, limit int) (out []MultipartUpload, err error) {
 	if limit <= 0 {
 		limit = 1000
 	}
@@ -474,8 +474,11 @@ LIMIT ?`, bucket, pattern, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []MultipartUpload
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	for rows.Next() {
 		var up MultipartUpload
 		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
@@ -528,7 +531,7 @@ ON CONFLICT(upload_id, part_number) DO UPDATE SET
 }
 
 // ListMultipartParts returns parts ordered by part number.
-func (s *Store) ListMultipartParts(ctx context.Context, uploadID string) ([]MultipartPart, error) {
+func (s *Store) ListMultipartParts(ctx context.Context, uploadID string) (out []MultipartPart, err error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT upload_id, part_number, version_id, etag, size, last_modified_utc
 FROM multipart_parts
@@ -537,8 +540,11 @@ ORDER BY part_number`, uploadID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []MultipartPart
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	for rows.Next() {
 		var part MultipartPart
 		if err := rows.Scan(&part.UploadID, &part.PartNumber, &part.VersionID, &part.ETag, &part.Size, &part.LastModified); err != nil {
@@ -578,15 +584,12 @@ WHERE o.bucket=? AND o.key=?`, bucket, key)
 }
 
 // ListObjects returns current objects for a bucket with optional prefix and continuation key/version.
-func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, afterVersion string, limit int) ([]ObjectMeta, error) {
+func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, afterVersion string, limit int) (out []ObjectMeta, err error) {
 	if limit <= 0 {
 		limit = 1000
 	}
 	pattern := escapeLike(prefix) + "%"
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	var rows *sql.Rows
 	if afterKey != "" && afterVersion != "" {
 		rows, err = s.db.QueryContext(ctx, `
 SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
@@ -615,9 +618,11 @@ LIMIT ?`, bucket, pattern, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []ObjectMeta
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	for rows.Next() {
 		var meta ObjectMeta
 		if err := rows.Scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
@@ -657,15 +662,18 @@ WHERE segment_id=?`, segmentID)
 }
 
 // ListSegments returns segment metadata.
-func (s *Store) ListSegments(ctx context.Context) ([]Segment, error) {
+func (s *Store) ListSegments(ctx context.Context) (out []Segment, err error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT segment_id, path, state, created_at, COALESCE(sealed_at, ''), COALESCE(size, 0), COALESCE(footer_checksum, x'')
 FROM segments`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Segment
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	for rows.Next() {
 		var seg Segment
 		if err := rows.Scan(&seg.ID, &seg.Path, &seg.State, &seg.CreatedAt, &seg.SealedAt, &seg.Size, &seg.FooterChecksum); err != nil {
@@ -702,7 +710,7 @@ func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 }
 
 // ListLiveManifestPaths returns manifest paths for current versions.
-func (s *Store) ListLiveManifestPaths(ctx context.Context) ([]string, error) {
+func (s *Store) ListLiveManifestPaths(ctx context.Context) (out []string, err error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT m.path
 FROM objects_current o
@@ -710,8 +718,11 @@ JOIN manifests m ON m.version_id = o.version_id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []string
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {

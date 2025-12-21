@@ -17,7 +17,7 @@ func TestBarrierConcurrentPuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	engine, err := New(Options{
 		Layout:          fs.NewLayout(dir + "/data"),

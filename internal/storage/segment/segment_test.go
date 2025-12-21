@@ -40,7 +40,7 @@ func TestSegmentHeaderAndFooter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if got := reader.Header(); got.Magic != segmentMagic || got.Version != 1 {
 		t.Fatalf("Header: unexpected header: %+v", got)
@@ -102,7 +102,7 @@ func TestReadFooterWithMissingFooter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if _, err := reader.ReadFooter(); err == nil {
 		t.Fatalf("expected error for invalid footer")

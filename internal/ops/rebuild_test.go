@@ -25,7 +25,7 @@ func TestRebuildIndexReconstructsSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	eng, err := engine.New(engine.Options{
 		Layout:    layout,
@@ -47,7 +47,7 @@ func TestRebuildIndexReconstructsSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	segments, err := store2.ListSegments(context.Background())
 	if err != nil {

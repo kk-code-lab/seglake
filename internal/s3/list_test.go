@@ -16,7 +16,7 @@ func TestListV2DelimiterUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(dir + "/objects"),

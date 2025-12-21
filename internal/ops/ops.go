@@ -70,7 +70,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 		store = nil
 	}
 	if store != nil {
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 	}
 	addError := func(err error) {
 		report.Errors++
@@ -111,7 +111,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 					continue
 				}
 				if _, err := reader.ReadFooter(); err != nil {
-					// Treat missing/invalid footer as OPEN segment.
+					addError(fmt.Errorf("segment footer invalid %s: %w", ch.SegmentID, err))
 				}
 				_ = reader.Close()
 				segmentInfo[ch.SegmentID] = info
@@ -162,7 +162,7 @@ func Scrub(layout fs.Layout, metaPath string) (*Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 	}
 
 	addError := func(err error) {
@@ -272,7 +272,7 @@ func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, [
 	if err != nil {
 		return nil, nil, err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	livePaths, err := store.ListLiveManifestPaths(context.Background())
 	if err != nil {
@@ -342,7 +342,7 @@ func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool) 
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	for _, seg := range candidates {
 		if err := os.Remove(seg.Path); err != nil {
@@ -375,28 +375,40 @@ func listFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-func writeJSON(path string, v any) error {
+func writeJSON(path string, v any) (err error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if cerr := file.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	enc := json.NewEncoder(file)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		if cerr := in.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if cerr := out.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 	_, err = io.Copy(out, in)
 	return err
 }
