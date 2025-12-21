@@ -11,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -43,6 +43,8 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		}
 	case "gc-run":
 		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
+	case "gc-rewrite":
+		report, err = ops.GCRewrite(layout, metaPath, gcMinAge, gcLiveThreshold, gcForce)
 	case "support-bundle":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
@@ -107,6 +109,9 @@ func printModeHelp(mode string) {
 	case "gc-run":
 		fmt.Println("Mode gc-run: deletes 100% dead segments.")
 		fmt.Println("Flags: -gc-min-age, -gc-force (required).")
+	case "gc-rewrite":
+		fmt.Println("Mode gc-rewrite: rewrites partially-dead sealed segments.")
+		fmt.Println("Flags: -gc-min-age, -gc-live-threshold (default 0.5), -gc-force (required).")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 		fmt.Println("Flags: -snapshot-dir (output directory).")
