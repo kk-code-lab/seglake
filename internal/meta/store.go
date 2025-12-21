@@ -532,18 +532,19 @@ type ObjectMeta struct {
 	ETag         string
 	Size         int64
 	LastModified string
+	State        string
 }
 
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT v.version_id, v.etag, v.size, v.last_modified_utc
+SELECT v.version_id, v.etag, v.size, v.last_modified_utc, v.state
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key=?`, bucket, key)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified, &meta.State); err != nil {
 		return nil, err
 	}
 	return &meta, nil
