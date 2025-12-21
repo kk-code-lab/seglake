@@ -957,6 +957,119 @@ func TestS3E2EPayloadHashMismatch(t *testing.T) {
 	}
 }
 
+func TestS3E2EPresignedExpiry(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	auth := &AuthConfig{
+		AccessKey: "test",
+		SecretKey: "testsecret",
+		Region:    "us-east-1",
+		MaxSkew:   5 * time.Minute,
+	}
+	handler := &Handler{Engine: eng, Meta: store, Auth: auth}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL, err := auth.Presign(http.MethodPut, server.URL+"/bucket/presign-expire", 1*time.Second)
+	if err != nil {
+		t.Fatalf("presign put: %v", err)
+	}
+	getURL, err := auth.Presign(http.MethodGet, server.URL+"/bucket/presign-expire", 1*time.Second)
+	if err != nil {
+		t.Fatalf("presign get: %v", err)
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, putURL, strings.NewReader("hello"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	time.Sleep(2 * time.Second)
+	getResp, err := http.Get(getURL)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	body, _ := io.ReadAll(getResp.Body)
+	if !bytes.Contains(body, []byte("SignatureDoesNotMatch")) {
+		t.Fatalf("expected signature mismatch")
+	}
+}
+
+func TestS3E2ERequestTimeSkewed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   2 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/hello", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestWithTime(req, "test", "testsecret", "us-east-1", time.Now().Add(-10*time.Minute))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("RequestTimeTooSkewed")) {
+		t.Fatalf("expected skew error")
+	}
+}
+
 func TestS3E2EMultipart(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
