@@ -257,6 +257,143 @@ func TestS3E2ETimeSkew(t *testing.T) {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }
+
+func TestS3E2EPresignedGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/presigned"
+	putReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("presigned")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	presigned, err := handler.Auth.Presign(http.MethodGet, putURL, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Presign: %v", err)
+	}
+	getResp, err := http.Get(presigned)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	data, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(data) != "presigned" {
+		t.Fatalf("GET body mismatch")
+	}
+}
+
+func TestS3E2EPresignedPut(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/presigned-put"
+	presigned, err := handler.Auth.Presign(http.MethodPut, putURL, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Presign: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, presigned, bytes.NewReader([]byte("presigned-put")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", resp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	data, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(data) != "presigned-put" {
+		t.Fatalf("GET body mismatch")
+	}
+}
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
 	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
 }

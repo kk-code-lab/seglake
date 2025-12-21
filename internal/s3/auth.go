@@ -26,6 +26,9 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	if c == nil || c.AccessKey == "" || c.SecretKey == "" {
 		return nil
 	}
+	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
+		return c.verifyPresigned(r)
+	}
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return errAccessDenied
@@ -118,6 +121,84 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	return nil
 }
 
+func (c *AuthConfig) verifyPresigned(r *http.Request) error {
+	query := r.URL.Query()
+	alg := query.Get("X-Amz-Algorithm")
+	cred := query.Get("X-Amz-Credential")
+	amzDate := query.Get("X-Amz-Date")
+	signedHeaders := query.Get("X-Amz-SignedHeaders")
+	signature := query.Get("X-Amz-Signature")
+	expires := query.Get("X-Amz-Expires")
+	if alg == "" || cred == "" || amzDate == "" || signedHeaders == "" || signature == "" || expires == "" {
+		return errSignatureMismatch
+	}
+	if alg != "AWS4-HMAC-SHA256" {
+		return errSignatureMismatch
+	}
+
+	credParts := strings.Split(cred, "/")
+	if len(credParts) != 5 {
+		return errSignatureMismatch
+	}
+	accessKey := credParts[0]
+	dateScope := credParts[1]
+	region := credParts[2]
+	service := credParts[3]
+	term := credParts[4]
+	if accessKey != c.AccessKey || term != "aws4_request" || service != "s3" {
+		return errSignatureMismatch
+	}
+	if c.Region != "" && region != c.Region {
+		return errSignatureMismatch
+	}
+
+	reqTime, err := time.Parse("20060102T150405Z", amzDate)
+	if err != nil {
+		return errSignatureMismatch
+	}
+	expSeconds, err := parseInt(expires)
+	if err != nil || expSeconds < 1 || expSeconds > 604800 {
+		return errSignatureMismatch
+	}
+	if time.Since(reqTime) > time.Duration(expSeconds)*time.Second {
+		return errSignatureMismatch
+	}
+	if !strings.HasPrefix(amzDate, dateScope) {
+		return errSignatureMismatch
+	}
+
+	payloadHash := "UNSIGNED-PAYLOAD"
+	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(r, signedHeaders)
+	if err != nil {
+		return errSignatureMismatch
+	}
+
+	canonicalRequest := strings.Join([]string{
+		r.Method,
+		canonicalURI(r),
+		canonicalQueryPresigned(r),
+		canonicalHeaders,
+		strings.Join(signedHeadersLower, ";"),
+		payloadHash,
+	}, "\n")
+
+	hashed := sha256.Sum256([]byte(canonicalRequest))
+	scope := fmt.Sprintf("%s/%s/s3/aws4_request", dateScope, region)
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hashed[:]),
+	}, "\n")
+
+	signingKey := deriveSigningKey(c.SecretKey, dateScope, region, "s3")
+	expected := hmacSHA256Hex(signingKey, stringToSign)
+	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
+		return errSignatureMismatch
+	}
+	return nil
+}
+
 var (
 	errSignatureMismatch = errors.New("signature mismatch")
 	errAccessDenied      = errors.New("access denied")
@@ -154,6 +235,37 @@ func canonicalQuery(r *http.Request) string {
 		return ""
 	}
 	values := r.URL.Query()
+	type pair struct {
+		k string
+		v string
+	}
+	var pairs []pair
+	for k, vs := range values {
+		for _, v := range vs {
+			pairs = append(pairs, pair{encodeRfc3986(k), encodeRfc3986(v)})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].k == pairs[j].k {
+			return pairs[i].v < pairs[j].v
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	var b strings.Builder
+	for i, p := range pairs {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString(p.k)
+		b.WriteByte('=')
+		b.WriteString(p.v)
+	}
+	return b.String()
+}
+
+func canonicalQueryPresigned(r *http.Request) string {
+	values := r.URL.Query()
+	values.Del("X-Amz-Signature")
 	type pair struct {
 		k string
 		v string
@@ -228,6 +340,17 @@ func encodeRfc3986(s string) string {
 		b.WriteString(fmt.Sprintf("%%%02X", c))
 	}
 	return b.String()
+}
+
+func parseInt(s string) (int64, error) {
+	var v int64
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, errors.New("invalid integer")
+		}
+		v = v*10 + int64(s[i]-'0')
+	}
+	return v, nil
 }
 
 func deriveSigningKey(secret, date, region, service string) []byte {
