@@ -43,6 +43,11 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		}
 	case "gc-run":
 		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
+	case "support-bundle":
+		if snapshotDir == "" {
+			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
+		}
+		report, err = ops.SupportBundle(layout, metaPath, snapshotDir)
 	default:
 		return fmt.Errorf("unknown mode %q", mode)
 	}
@@ -102,6 +107,9 @@ func printModeHelp(mode string) {
 	case "gc-run":
 		fmt.Println("Mode gc-run: deletes 100% dead segments.")
 		fmt.Println("Flags: -gc-min-age, -gc-force (required).")
+	case "support-bundle":
+		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
+		fmt.Println("Flags: -snapshot-dir (output directory).")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}
