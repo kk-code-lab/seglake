@@ -280,6 +280,8 @@ Raport:
 - rewrite dla segmentów >50% martwe
 - 2-phase, throttling, pause-if-load
 - `gc plan` + `gc run`
+- rewrite plan/run: `gc-rewrite-plan` (JSON) + `gc-rewrite-run` (`-gc-force`)
+- throttling: `-gc-rewrite-bps`, pauza przez `-gc-pause-file`
 
 ---
 

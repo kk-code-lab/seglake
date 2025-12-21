@@ -11,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -44,7 +44,24 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 	case "gc-run":
 		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
 	case "gc-rewrite":
-		report, err = ops.GCRewrite(layout, metaPath, gcMinAge, gcLiveThreshold, gcForce)
+		report, err = ops.GCRewrite(layout, metaPath, gcMinAge, gcLiveThreshold, gcForce, gcRewriteBps, gcPauseFile)
+	case "gc-rewrite-plan":
+		var plan *ops.GCRewritePlan
+		plan, report, err = ops.GCRewritePlanBuild(layout, metaPath, gcMinAge, gcLiveThreshold)
+		if err == nil && gcRewritePlanFile != "" {
+			if err := ops.WriteGCRewritePlan(gcRewritePlanFile, plan); err != nil {
+				return err
+			}
+		}
+	case "gc-rewrite-run":
+		if gcRewriteFromPlan == "" {
+			return fmt.Errorf("gc-rewrite-run requires -gc-rewrite-from-plan")
+		}
+		var plan *ops.GCRewritePlan
+		plan, err = ops.ReadGCRewritePlan(gcRewriteFromPlan)
+		if err == nil {
+			report, err = ops.GCRewriteFromPlan(layout, metaPath, plan, gcForce, gcRewriteBps, gcPauseFile)
+		}
 	case "support-bundle":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
@@ -111,7 +128,13 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -gc-min-age, -gc-force (required).")
 	case "gc-rewrite":
 		fmt.Println("Mode gc-rewrite: rewrites partially-dead sealed segments.")
-		fmt.Println("Flags: -gc-min-age, -gc-live-threshold (default 0.5), -gc-force (required).")
+		fmt.Println("Flags: -gc-min-age, -gc-live-threshold (default 0.5), -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
+	case "gc-rewrite-plan":
+		fmt.Println("Mode gc-rewrite-plan: writes rewrite plan for partially-dead segments.")
+		fmt.Println("Flags: -gc-min-age, -gc-live-threshold, -gc-rewrite-plan (output file).")
+	case "gc-rewrite-run":
+		fmt.Println("Mode gc-rewrite-run: executes rewrite from plan.")
+		fmt.Println("Flags: -gc-rewrite-from-plan, -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 		fmt.Println("Flags: -snapshot-dir (output directory).")

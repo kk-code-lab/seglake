@@ -23,6 +23,7 @@
 - Example s3cmd: `s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret ls s3://demo`.
 - Presigned URL testing can be done via `AuthConfig.Presign` helpers (see `internal/s3/presign.go`).
 - Crash-consistency harness: `scripts/crash_harness.sh <iterations>` (uses kill -9 + fsck + rebuild-index).
+- GC rewrite (2-phase): `gc-rewrite-plan` + `gc-rewrite-run` with `-gc-rewrite-plan/-gc-rewrite-from-plan`, throttle via `-gc-rewrite-bps`, pause via `-gc-pause-file`.
 
 ## Commit & Pull Request Guidelines
 - Use imperative commit messages under 72 characters.
