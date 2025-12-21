@@ -18,16 +18,17 @@ import (
 
 // Report summarizes an ops run.
 type Report struct {
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  time.Time `json:"finished_at"`
-	Mode        string    `json:"mode"`
-	Manifests   int       `json:"manifests"`
-	Segments    int       `json:"segments"`
-	Errors      int       `json:"errors"`
-	ErrorSample []string  `json:"error_sample,omitempty"`
-	Candidates  int       `json:"candidates,omitempty"`
-	Deleted     int       `json:"deleted,omitempty"`
-	Reclaimed   int64     `json:"reclaimed_bytes,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	FinishedAt   time.Time `json:"finished_at"`
+	Mode         string    `json:"mode"`
+	Manifests    int       `json:"manifests"`
+	Segments     int       `json:"segments"`
+	Errors       int       `json:"errors"`
+	ErrorSample  []string  `json:"error_sample,omitempty"`
+	Candidates   int       `json:"candidates,omitempty"`
+	Deleted      int       `json:"deleted,omitempty"`
+	Reclaimed    int64     `json:"reclaimed_bytes,omitempty"`
+	CandidateIDs []string  `json:"candidate_ids,omitempty"`
 }
 
 // Status collects basic counts about storage state.
@@ -267,6 +268,9 @@ func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, [
 		}
 	}
 	report.Candidates = len(candidates)
+	for _, seg := range candidates {
+		report.CandidateIDs = append(report.CandidateIDs, seg.ID)
+	}
 	report.FinishedAt = time.Now().UTC()
 	return report, candidates, nil
 }

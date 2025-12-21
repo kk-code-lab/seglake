@@ -36,6 +36,10 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge)
 		if err == nil {
 			report.Candidates = len(candidates)
+			report.CandidateIDs = nil
+			for _, seg := range candidates {
+				report.CandidateIDs = append(report.CandidateIDs, seg.ID)
+			}
 		}
 	case "gc-run":
 		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
