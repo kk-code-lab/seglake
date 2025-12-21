@@ -373,7 +373,7 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 ## 19) Pozostałe elementy MVP (checklista)
 
 ### 19.1 Core durability i storage
-- [ ] Doprecyzowany group commit: sync_interval/sync_bytes z realnym batchingiem
+- [x] Doprecyzowany group commit: sync_interval/sync_bytes z realnym batchingiem
 - [ ] Reuse open segmentów (nie zawsze “segment per PUT”)
 - [ ] Footer: bloom + sparse index (na razie stub)
 
