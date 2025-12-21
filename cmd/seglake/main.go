@@ -23,7 +23,7 @@ func main() {
 	accessKey := flag.String("access-key", "", "S3 access key (enables SigV4)")
 	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
 	region := flag.String("region", "us-east-1", "S3 region")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|support-bundle")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")

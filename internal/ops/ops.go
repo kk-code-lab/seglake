@@ -246,6 +246,25 @@ func Rebuild(layout fs.Layout, metaPath string) (*Report, error) {
 	return RebuildIndex(layout, metaPath)
 }
 
+// SupportBundle gathers snapshot and reports into a directory.
+func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, error) {
+	if outDir == "" {
+		return nil, errors.New("ops: support bundle output dir required")
+	}
+	report := &Report{Mode: "support-bundle", StartedAt: time.Now().UTC()}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	snapDir := filepath.Join(outDir, "snapshot")
+	_, _ = Snapshot(layout, metaPath, snapDir)
+	fsck, _ := Fsck(layout)
+	_ = writeJSON(filepath.Join(outDir, "fsck.json"), fsck)
+	scrub, _ := Scrub(layout, metaPath)
+	_ = writeJSON(filepath.Join(outDir, "scrub.json"), scrub)
+	report.FinishedAt = time.Now().UTC()
+	return report, nil
+}
+
 // GCPlan computes which sealed segments can be removed.
 func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, []meta.Segment, error) {
 	report := &Report{Mode: "gc-plan", StartedAt: time.Now().UTC()}
