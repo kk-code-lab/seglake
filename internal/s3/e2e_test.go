@@ -577,6 +577,80 @@ func TestS3E2EListV2Continuation(t *testing.T) {
 	}
 }
 
+func TestS3E2EListV2StartAfter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	put := func(key string) {
+		url := server.URL + "/bucket/" + key
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader([]byte(key)))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT status: %d", resp.StatusCode)
+		}
+	}
+
+	put("a.txt")
+	put("b.txt")
+	put("c.txt")
+
+	listURL := server.URL + "/bucket?list-type=2&start-after=a.txt"
+	listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	resp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if bytes.Contains(body, []byte("<Key>a.txt</Key>")) {
+		t.Fatalf("start-after should exclude a.txt")
+	}
+	if !bytes.Contains(body, []byte("<Key>b.txt</Key>")) {
+		t.Fatalf("expected b.txt")
+	}
+}
+
 func TestS3E2ERangeGet(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

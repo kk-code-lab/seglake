@@ -17,6 +17,7 @@ type listBucketResult struct {
 	Name                  string         `xml:"Name"`
 	Prefix                string         `xml:"Prefix"`
 	Delimiter             string         `xml:"Delimiter,omitempty"`
+	StartAfter            string         `xml:"StartAfter,omitempty"`
 	KeyCount              int            `xml:"KeyCount"`
 	MaxKeys               int            `xml:"MaxKeys"`
 	IsTruncated           bool           `xml:"IsTruncated"`
@@ -43,6 +44,9 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 	delimiter := q.Get("delimiter")
 	maxKeys := parseMaxKeys(q.Get("max-keys"))
 	afterKey, afterVersion := decodeContinuation(q.Get("continuation-token"))
+	if afterKey == "" {
+		afterKey = q.Get("start-after")
+	}
 
 	pageLimit := maxKeys
 	if pageLimit <= 0 {
@@ -115,6 +119,7 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 		Name:           bucket,
 		Prefix:         prefix,
 		Delimiter:      delimiter,
+		StartAfter:     q.Get("start-after"),
 		KeyCount:       count,
 		MaxKeys:        maxKeys,
 		IsTruncated:    truncated,
