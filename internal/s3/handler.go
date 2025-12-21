@@ -119,6 +119,11 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 		return
 	}
+	if strings.EqualFold(meta.State, "DAMAGED") {
+		w.Header().Set("X-Error", "DamagedObject")
+		writeError(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID)
+		return
+	}
 	if meta.ETag != "" {
 		w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	}
