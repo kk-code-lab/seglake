@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 func newRequestID() string {
@@ -25,6 +26,12 @@ func intToString(v int64) string {
 
 func ioCopy(dst io.Writer, src io.Reader) (int64, error) {
 	return io.Copy(dst, src)
+}
+
+var httpTimeZone = time.FixedZone("GMT", 0)
+
+func formatHTTPTime(t time.Time) string {
+	return t.In(httpTimeZone).Format(time.RFC1123)
 }
 
 func parseRange(header string, size int64) (start int64, length int64, ok bool) {

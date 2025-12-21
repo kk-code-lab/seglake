@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/kk-code-lab/seglake/internal/meta"
 )
 
 type listBucketResult struct {
@@ -26,6 +24,19 @@ type listBucketResult struct {
 	CommonPrefixes        []commonPrefix `xml:"CommonPrefixes,omitempty"`
 }
 
+type listBucketResultV1 struct {
+	XMLName        xml.Name       `xml:"ListBucketResult"`
+	Name           string         `xml:"Name"`
+	Prefix         string         `xml:"Prefix"`
+	Marker         string         `xml:"Marker,omitempty"`
+	NextMarker     string         `xml:"NextMarker,omitempty"`
+	Delimiter      string         `xml:"Delimiter,omitempty"`
+	MaxKeys        int            `xml:"MaxKeys"`
+	IsTruncated    bool           `xml:"IsTruncated"`
+	Contents       []listContents `xml:"Contents,omitempty"`
+	CommonPrefixes []commonPrefix `xml:"CommonPrefixes,omitempty"`
+}
+
 type listContents struct {
 	Key          string `xml:"Key"`
 	ETag         string `xml:"ETag"`
@@ -38,6 +49,12 @@ type commonPrefix struct {
 	Prefix string `xml:"Prefix"`
 }
 
+type locationResult struct {
+	XMLName xml.Name `xml:"LocationConstraint"`
+	XMLNS   string   `xml:"xmlns,attr,omitempty"`
+	Value   string   `xml:",chardata"`
+}
+
 func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
@@ -48,25 +65,94 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 		afterKey = q.Get("start-after")
 	}
 
+	contents, common, count, truncated, lastKey, lastVersion, err := h.listObjects(ctx, bucket, prefix, delimiter, afterKey, afterVersion, maxKeys)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		return
+	}
+
+	resp := listBucketResult{
+		Name:           bucket,
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		StartAfter:     q.Get("start-after"),
+		KeyCount:       count,
+		MaxKeys:        maxKeys,
+		IsTruncated:    truncated,
+		Contents:       contents,
+		CommonPrefixes: common,
+	}
+	if truncated && lastKey != "" {
+		resp.NextContinuationToken = encodeContinuation(lastKey, lastVersion)
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) handleListV1(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
+	q := r.URL.Query()
+	prefix := q.Get("prefix")
+	delimiter := q.Get("delimiter")
+	maxKeys := parseMaxKeys(q.Get("max-keys"))
+	marker := q.Get("marker")
+
+	contents, common, _, truncated, lastKey, _, err := h.listObjects(ctx, bucket, prefix, delimiter, marker, "", maxKeys)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		return
+	}
+
+	resp := listBucketResultV1{
+		Name:           bucket,
+		Prefix:         prefix,
+		Marker:         marker,
+		Delimiter:      delimiter,
+		MaxKeys:        maxKeys,
+		IsTruncated:    truncated,
+		Contents:       contents,
+		CommonPrefixes: common,
+	}
+	if truncated && lastKey != "" {
+		resp.NextMarker = lastKey
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) handleLocation(w http.ResponseWriter, requestID string) {
+	region := ""
+	if h.Auth != nil && h.Auth.Region != "" && h.Auth.Region != "us-east-1" {
+		region = h.Auth.Region
+	}
+	resp := locationResult{
+		XMLNS: "http://s3.amazonaws.com/doc/2006-03-01/",
+		Value: region,
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) listObjects(ctx context.Context, bucket, prefix, delimiter, afterKey, afterVersion string, maxKeys int) ([]listContents, []commonPrefix, int, bool, string, string, error) {
 	pageLimit := maxKeys
 	if pageLimit <= 0 {
 		pageLimit = 1000
 	}
-	var objs []meta.ObjectMeta
-	var err error
 
-	contents := make([]listContents, 0, len(objs))
+	contents := make([]listContents, 0)
 	common := make([]commonPrefix, 0)
 	commonSet := make(map[string]struct{})
 	count := 0
 	truncated := false
 	var lastKey string
 	var lastVersion string
+
 	for {
-		objs, err = h.Meta.ListObjects(ctx, bucket, prefix, afterKey, afterVersion, pageLimit)
+		objs, err := h.Meta.ListObjects(ctx, bucket, prefix, afterKey, afterVersion, pageLimit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
-			return
+			return nil, nil, 0, false, "", "", err
 		}
 		if len(objs) == 0 {
 			break
@@ -114,24 +200,7 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 		afterKey = lastKey
 		afterVersion = lastVersion
 	}
-
-	resp := listBucketResult{
-		Name:           bucket,
-		Prefix:         prefix,
-		Delimiter:      delimiter,
-		StartAfter:     q.Get("start-after"),
-		KeyCount:       count,
-		MaxKeys:        maxKeys,
-		IsTruncated:    truncated,
-		Contents:       contents,
-		CommonPrefixes: common,
-	}
-	if truncated && lastKey != "" {
-		resp.NextContinuationToken = encodeContinuation(lastKey, lastVersion)
-	}
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_ = xml.NewEncoder(w).Encode(resp)
+	return contents, common, count, truncated, lastKey, lastVersion, nil
 }
 
 func parseMaxKeys(raw string) int {
