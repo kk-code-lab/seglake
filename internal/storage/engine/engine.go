@@ -79,6 +79,9 @@ func New(opts Options) (*Engine, error) {
 	if err := engine.ensureDirs(); err != nil {
 		return nil, err
 	}
+	if err := engine.recoverOpenSegments(context.Background()); err != nil {
+		return nil, err
+	}
 	return engine, nil
 }
 
