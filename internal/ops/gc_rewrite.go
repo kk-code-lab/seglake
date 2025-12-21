@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -17,24 +18,35 @@ import (
 
 const gcRewriteMaxSegmentBytes int64 = 1 << 30
 
-// GCRewrite compacts partially-dead segments by rewriting live chunks into new segments.
-func GCRewrite(layout fs.Layout, metaPath string, minAge time.Duration, liveThreshold float64, force bool) (*Report, error) {
-	if !force {
-		return nil, errors.New("gc: refuse to run without --force")
-	}
+type GCRewritePlan struct {
+	GeneratedAt   time.Time            `json:"generated_at"`
+	MinAge        time.Duration        `json:"min_age"`
+	LiveThreshold float64              `json:"live_threshold"`
+	Candidates    []GCRewriteCandidate `json:"candidates"`
+}
+
+type GCRewriteCandidate struct {
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	LiveBytes int64  `json:"live_bytes"`
+}
+
+// GCRewritePlanBuild computes a rewrite plan for partially-dead segments.
+func GCRewritePlanBuild(layout fs.Layout, metaPath string, minAge time.Duration, liveThreshold float64) (*GCRewritePlan, *Report, error) {
 	if liveThreshold <= 0 || liveThreshold > 1 {
-		return nil, errors.New("gc: live threshold must be (0,1]")
+		return nil, nil, errors.New("gc: live threshold must be (0,1]")
 	}
-	report := &Report{Mode: "gc-rewrite", StartedAt: time.Now().UTC()}
+	report := &Report{Mode: "gc-rewrite-plan", StartedAt: time.Now().UTC()}
 	store, err := meta.Open(metaPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = store.Close() }()
 
 	livePaths, err := store.ListLiveManifestPaths(context.Background())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	report.Manifests = len(livePaths)
 
@@ -56,12 +68,11 @@ func GCRewrite(layout fs.Layout, metaPath string, minAge time.Duration, liveThre
 
 	segments, err := store.ListSegments(context.Background())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	report.Segments = len(segments)
 
-	rewriteCandidates := make(map[string]meta.Segment)
-	var fullyDead []meta.Segment
+	var candidates []GCRewriteCandidate
 	for _, seg := range segments {
 		if seg.State != string(segment.StateSealed) || seg.SealedAt == "" {
 			continue
@@ -74,40 +85,110 @@ func GCRewrite(layout fs.Layout, metaPath string, minAge time.Duration, liveThre
 			continue
 		}
 		live := liveBytes[seg.ID]
-		if live == 0 {
-			fullyDead = append(fullyDead, seg)
-			continue
-		}
-		if seg.Size <= 0 {
+		if seg.Size <= 0 || live == 0 {
 			continue
 		}
 		ratio := float64(live) / float64(seg.Size)
 		if ratio <= liveThreshold {
-			rewriteCandidates[seg.ID] = seg
+			candidates = append(candidates, GCRewriteCandidate{
+				ID:        seg.ID,
+				Path:      seg.Path,
+				Size:      seg.Size,
+				LiveBytes: live,
+			})
 		}
 	}
-	report.Candidates = len(rewriteCandidates) + len(fullyDead)
-	for id := range rewriteCandidates {
-		report.CandidateIDs = append(report.CandidateIDs, id)
+	report.Candidates = len(candidates)
+	for _, cand := range candidates {
+		report.CandidateIDs = append(report.CandidateIDs, cand.ID)
 	}
-	for _, seg := range fullyDead {
-		report.CandidateIDs = append(report.CandidateIDs, seg.ID)
-	}
+	report.FinishedAt = time.Now().UTC()
 
-	if len(rewriteCandidates) > 0 {
-		if err := rewriteSegments(layout, store, livePaths, rewriteCandidates, report); err != nil {
-			return report, err
-		}
+	plan := &GCRewritePlan{
+		GeneratedAt:   time.Now().UTC(),
+		MinAge:        minAge,
+		LiveThreshold: liveThreshold,
+		Candidates:    candidates,
 	}
+	return plan, report, nil
+}
 
-	for _, seg := range fullyDead {
-		if err := os.Remove(seg.Path); err != nil {
+// WriteGCRewritePlan writes plan JSON to a file.
+func WriteGCRewritePlan(path string, plan *GCRewritePlan) error {
+	if plan == nil || path == "" {
+		return errors.New("gc: plan and path required")
+	}
+	data, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// ReadGCRewritePlan reads plan JSON from a file.
+func ReadGCRewritePlan(path string) (*GCRewritePlan, error) {
+	if path == "" {
+		return nil, errors.New("gc: plan path required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var plan GCRewritePlan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+// GCRewrite compacts partially-dead segments by rewriting live chunks into new segments.
+func GCRewrite(layout fs.Layout, metaPath string, minAge time.Duration, liveThreshold float64, force bool, throttleBps int64, pauseFile string) (*Report, error) {
+	plan, _, err := GCRewritePlanBuild(layout, metaPath, minAge, liveThreshold)
+	if err != nil {
+		return nil, err
+	}
+	return GCRewriteFromPlan(layout, metaPath, plan, force, throttleBps, pauseFile)
+}
+
+// GCRewriteFromPlan executes a rewrite using the provided plan.
+func GCRewriteFromPlan(layout fs.Layout, metaPath string, plan *GCRewritePlan, force bool, throttleBps int64, pauseFile string) (*Report, error) {
+	if !force {
+		return nil, errors.New("gc: refuse to run without --force")
+	}
+	if plan == nil {
+		return nil, errors.New("gc: plan required")
+	}
+	report := &Report{Mode: "gc-rewrite", StartedAt: time.Now().UTC(), Candidates: len(plan.Candidates)}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+
+	livePaths, err := store.ListLiveManifestPaths(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	report.Manifests = len(livePaths)
+
+	rewriteCandidates := make(map[string]meta.Segment)
+	for _, cand := range plan.Candidates {
+		seg, err := store.GetSegment(context.Background(), cand.ID)
+		if err != nil {
 			report.Errors++
 			continue
 		}
-		_ = store.DeleteSegment(context.Background(), seg.ID)
-		report.Deleted++
-		report.Reclaimed += seg.Size
+		if seg.State != string(segment.StateSealed) {
+			continue
+		}
+		rewriteCandidates[cand.ID] = *seg
+		report.CandidateIDs = append(report.CandidateIDs, cand.ID)
+	}
+
+	if len(rewriteCandidates) > 0 {
+		if err := rewriteSegments(layout, store, livePaths, rewriteCandidates, report, throttleBps, pauseFile); err != nil {
+			return report, err
+		}
 	}
 
 	for _, seg := range rewriteCandidates {
@@ -125,11 +206,13 @@ func GCRewrite(layout fs.Layout, metaPath string, minAge time.Duration, liveThre
 }
 
 type gcWriter struct {
-	layout fs.Layout
-	writer *segment.Writer
-	id     string
-	size   int64
-	closed bool
+	layout    fs.Layout
+	writer    *segment.Writer
+	id        string
+	size      int64
+	closed    bool
+	throttle  *gcThrottle
+	pauseFile string
 }
 
 func (w *gcWriter) ensure() error {
@@ -155,6 +238,14 @@ func (w *gcWriter) append(hash [32]byte, data []byte) (string, int64, error) {
 	if err := w.ensure(); err != nil {
 		return "", 0, err
 	}
+	if w.pauseFile != "" {
+		for {
+			if _, err := os.Stat(w.pauseFile); err != nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
 	if w.size+int64(len(data))+segment.RecordHeaderLen() > gcRewriteMaxSegmentBytes {
 		if err := w.seal(); err != nil {
 			return "", 0, err
@@ -168,6 +259,9 @@ func (w *gcWriter) append(hash [32]byte, data []byte) (string, int64, error) {
 		return "", 0, err
 	}
 	w.size += int64(len(data)) + segment.RecordHeaderLen()
+	if w.throttle != nil {
+		w.throttle.wait(int64(len(data)))
+	}
 	return w.id, offset, nil
 }
 
@@ -189,14 +283,14 @@ func (w *gcWriter) seal() error {
 	return nil
 }
 
-func rewriteSegments(layout fs.Layout, store *meta.Store, livePaths []string, candidates map[string]meta.Segment, report *Report) error {
+func rewriteSegments(layout fs.Layout, store *meta.Store, livePaths []string, candidates map[string]meta.Segment, report *Report, throttleBps int64, pauseFile string) error {
 	sourceFiles := make(map[string]*os.File)
 	defer func() {
 		for _, f := range sourceFiles {
 			_ = f.Close()
 		}
 	}()
-	writer := &gcWriter{layout: layout}
+	writer := &gcWriter{layout: layout, throttle: newGCThrottle(throttleBps), pauseFile: pauseFile}
 	newSegments := make(map[string]int64)
 
 	for _, path := range livePaths {
@@ -304,4 +398,38 @@ func newID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf[:]), nil
+}
+
+type gcThrottle struct {
+	bytesPerSec int64
+	last        time.Time
+	accum       int64
+}
+
+func newGCThrottle(bps int64) *gcThrottle {
+	if bps <= 0 {
+		return nil
+	}
+	return &gcThrottle{bytesPerSec: bps, last: time.Now()}
+}
+
+func (t *gcThrottle) wait(n int64) {
+	if t == nil || n <= 0 {
+		return
+	}
+	t.accum += n
+	elapsed := time.Since(t.last)
+	if elapsed <= 0 {
+		return
+	}
+	allowed := int64(float64(t.bytesPerSec) * elapsed.Seconds())
+	if t.accum <= allowed {
+		return
+	}
+	sleepFor := time.Duration(float64(t.accum-allowed)/float64(t.bytesPerSec)) * time.Second
+	if sleepFor > 0 {
+		time.Sleep(sleepFor)
+	}
+	t.last = time.Now()
+	t.accum = 0
 }
