@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -246,6 +247,7 @@ func (s *Store) CurrentVersion(ctx context.Context, bucket, key string) (string,
 
 // ObjectMeta describes the current object version metadata.
 type ObjectMeta struct {
+	Key          string
 	VersionID    string
 	ETag         string
 	Size         int64
@@ -260,10 +262,77 @@ FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key=?`, bucket, key)
 	var meta ObjectMeta
+	meta.Key = key
 	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
 		return nil, err
 	}
 	return &meta, nil
+}
+
+// ListObjects returns current objects for a bucket with optional prefix and continuation key/version.
+func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, afterVersion string, limit int) ([]ObjectMeta, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	pattern := escapeLike(prefix) + "%"
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if afterKey != "" && afterVersion != "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
+FROM objects_current o
+JOIN versions v ON v.version_id = o.version_id
+WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND (o.key > ? OR (o.key = ? AND v.version_id > ?))
+ORDER BY o.key, v.version_id
+LIMIT ?`, bucket, pattern, afterKey, afterKey, afterVersion, limit)
+	} else if afterKey != "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
+FROM objects_current o
+JOIN versions v ON v.version_id = o.version_id
+WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND o.key > ?
+ORDER BY o.key
+LIMIT ?`, bucket, pattern, afterKey, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
+FROM objects_current o
+JOIN versions v ON v.version_id = o.version_id
+WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\'
+ORDER BY o.key
+LIMIT ?`, bucket, pattern, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ObjectMeta
+	for rows.Next() {
+		var meta ObjectMeta
+		if err := rows.Scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+			return nil, err
+		}
+		out = append(out, meta)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func escapeLike(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '%', '_', '\\':
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // GetSegment returns segment metadata.

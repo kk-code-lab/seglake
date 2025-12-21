@@ -1,0 +1,176 @@
+package s3
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/xml"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/kk-code-lab/seglake/internal/meta"
+)
+
+type listBucketResult struct {
+	XMLName               xml.Name       `xml:"ListBucketResult"`
+	Name                  string         `xml:"Name"`
+	Prefix                string         `xml:"Prefix"`
+	Delimiter             string         `xml:"Delimiter,omitempty"`
+	KeyCount              int            `xml:"KeyCount"`
+	MaxKeys               int            `xml:"MaxKeys"`
+	IsTruncated           bool           `xml:"IsTruncated"`
+	NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
+	Contents              []listContents `xml:"Contents,omitempty"`
+	CommonPrefixes        []commonPrefix `xml:"CommonPrefixes,omitempty"`
+}
+
+type listContents struct {
+	Key          string `xml:"Key"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+	LastModified string `xml:"LastModified"`
+	StorageClass string `xml:"StorageClass"`
+}
+
+type commonPrefix struct {
+	Prefix string `xml:"Prefix"`
+}
+
+func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
+	q := r.URL.Query()
+	prefix := q.Get("prefix")
+	delimiter := q.Get("delimiter")
+	maxKeys := parseMaxKeys(q.Get("max-keys"))
+	afterKey, afterVersion := decodeContinuation(q.Get("continuation-token"))
+
+	pageLimit := maxKeys
+	if pageLimit <= 0 {
+		pageLimit = 1000
+	}
+	var objs []meta.ObjectMeta
+	var err error
+
+	contents := make([]listContents, 0, len(objs))
+	common := make([]commonPrefix, 0)
+	commonSet := make(map[string]struct{})
+	count := 0
+	truncated := false
+	var lastKey string
+	var lastVersion string
+	for {
+		objs, err = h.Meta.ListObjects(ctx, bucket, prefix, afterKey, afterVersion, pageLimit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+			return
+		}
+		if len(objs) == 0 {
+			break
+		}
+		for _, obj := range objs {
+			lastKey = obj.Key
+			lastVersion = obj.VersionID
+			if delimiter != "" {
+				rest := strings.TrimPrefix(obj.Key, prefix)
+				if rest != obj.Key {
+					if idx := strings.Index(rest, delimiter); idx >= 0 {
+						cp := prefix + rest[:idx+len(delimiter)]
+						if _, ok := commonSet[cp]; !ok {
+							commonSet[cp] = struct{}{}
+							common = append(common, commonPrefix{Prefix: cp})
+							count++
+						}
+						if count >= maxKeys {
+							truncated = true
+							break
+						}
+						continue
+					}
+				}
+			}
+			contents = append(contents, listContents{
+				Key:          obj.Key,
+				ETag:         `"` + obj.ETag + `"`,
+				Size:         obj.Size,
+				LastModified: formatLastModified(obj.LastModified),
+				StorageClass: "STANDARD",
+			})
+			count++
+			if count >= maxKeys {
+				truncated = true
+				break
+			}
+		}
+		if truncated {
+			break
+		}
+		if len(objs) < pageLimit {
+			break
+		}
+		afterKey = lastKey
+		afterVersion = lastVersion
+	}
+
+	resp := listBucketResult{
+		Name:           bucket,
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		KeyCount:       count,
+		MaxKeys:        maxKeys,
+		IsTruncated:    truncated,
+		Contents:       contents,
+		CommonPrefixes: common,
+	}
+	if truncated && lastKey != "" {
+		resp.NextContinuationToken = encodeContinuation(lastKey, lastVersion)
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+func parseMaxKeys(raw string) int {
+	if raw == "" {
+		return 1000
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return 1000
+	}
+	if v > 1000 {
+		return 1000
+	}
+	return v
+}
+
+func encodeContinuation(key, versionID string) string {
+	if versionID == "" {
+		return base64.RawURLEncoding.EncodeToString([]byte(key))
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(key + "\n" + versionID))
+}
+
+func decodeContinuation(raw string) (string, string) {
+	if raw == "" {
+		return "", ""
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.SplitN(string(data), "\n", 2)
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+	return parts[0], parts[1]
+}
+
+func formatLastModified(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return raw
+}
