@@ -188,6 +188,11 @@ func Snapshot(layout fs.Layout, metaPath string, outDir string) (*Report, error)
 	return report, nil
 }
 
+// Rebuild runs rebuild-index.
+func Rebuild(layout fs.Layout, metaPath string) (*Report, error) {
+	return RebuildIndex(layout, metaPath)
+}
+
 func listFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

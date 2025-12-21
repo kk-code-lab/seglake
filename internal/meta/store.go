@@ -150,6 +150,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 3 {
+		if err = applyV3(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -231,6 +239,23 @@ func applyV2(ctx context.Context, tx *sql.Tx) error {
 			size INTEGER NOT NULL,
 			last_modified_utc TEXT NOT NULL,
 			PRIMARY KEY(upload_id, part_number)
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV3(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS rebuild_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			status TEXT NOT NULL,
+			message TEXT
 		)`,
 	}
 	for _, stmt := range ddl {
