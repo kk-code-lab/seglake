@@ -378,17 +378,17 @@ Endpoint: `GET /v1/meta/stats` (JSON):
 - [x] Footer: bloom + sparse index (na razie stub)
 
 ### 19.2 Metadata / recovery
-- [ ] FSCK: pełna spójność manifest↔segment↔DB (raporty + naprawy)
-- [ ] Rebuild-index: weryfikacja wersji vs. stan w DB (DAMAGED/ACTIVE)
+- [x] FSCK: pełna spójność manifest↔segment↔DB (raporty + naprawy)
+- [x] Rebuild-index: weryfikacja wersji vs. stan w DB (DAMAGED/ACTIVE)
 
 ### 19.3 S3 polish
-- [ ] SigV4 edge cases (canonicalization test vectors)
-- [ ] ListObjectsV2: marker compatibility (AWS-style)
+- [x] SigV4 edge cases (canonicalization test vectors)
+- [x] ListObjectsV2: marker compatibility (AWS-style)
 
 ### 19.4 Observability
 - [x] `/v1/meta/stats` JSON endpoint
 - [x] Structured request logs z request-id
 
 ### 19.5 Ops polish
-- [ ] GC plan file + `gc run --from-plan`
-- [ ] Support bundle z redakcją sekretów
+- [x] GC plan file + `gc run --from-plan`
+- [x] Support bundle z redakcją sekretów
