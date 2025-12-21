@@ -85,8 +85,23 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 		return
 	}
-	_, result, err := h.Engine.PutObject(ctx, "", "", r.Body)
+	reader := io.Reader(r.Body)
+	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
+		expected, verify, err := parsePayloadHash(hashHeader)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID)
+			return
+		}
+		if verify {
+			reader = newPayloadHashReader(reader, expected)
+		}
+	}
+	_, result, err := h.Engine.PutObject(ctx, "", "", reader)
 	if err != nil {
+		if errors.Is(err, errPayloadHashMismatch) {
+			writeError(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -126,8 +127,23 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
 	defer func() { _ = r.Body.Close() }()
-	_, result, err := h.Engine.PutObject(ctx, bucket, key, r.Body)
+	reader := io.Reader(r.Body)
+	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
+		expected, verify, err := parsePayloadHash(hashHeader)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID)
+			return
+		}
+		if verify {
+			reader = newPayloadHashReader(reader, expected)
+		}
+	}
+	_, result, err := h.Engine.PutObject(ctx, bucket, key, reader)
 	if err != nil {
+		if errors.Is(err, errPayloadHashMismatch) {
+			writeError(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
 		return
 	}

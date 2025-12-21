@@ -892,6 +892,71 @@ func TestS3E2ERangeGetNestedKey(t *testing.T) {
 	}
 }
 
+func TestS3E2EPayloadHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putURL := server.URL + "/bucket/hash"
+	badReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("wrong")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	payloadHash := sha256Hex([]byte("correct"))
+	signRequestWithPayloadHash(badReq, "test", "testsecret", "us-east-1", payloadHash)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	defer badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT status: %d", badResp.StatusCode)
+	}
+	body, _ := io.ReadAll(badResp.Body)
+	if !bytes.Contains(body, []byte("XAmzContentSHA256Mismatch")) {
+		t.Fatalf("expected hash mismatch error")
+	}
+
+	goodReq, err := http.NewRequest(http.MethodPut, putURL, bytes.NewReader([]byte("correct")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestWithPayloadHash(goodReq, "test", "testsecret", "us-east-1", payloadHash)
+	goodResp, err := http.DefaultClient.Do(goodReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	goodResp.Body.Close()
+	if goodResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", goodResp.StatusCode)
+	}
+}
+
 func TestS3E2EMultipart(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
@@ -1120,6 +1185,41 @@ func signRequestWithTime(r *http.Request, accessKey, secretKey, region string, n
 	r.Header.Set("Authorization", auth)
 }
 
+func signRequestWithPayloadHash(r *http.Request, accessKey, secretKey, region, payloadHash string) {
+	amzDate := time.Now().UTC().Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	r.Header.Set("Host", r.URL.Host)
+
+	canonicalHeaders, signedHeaders := canonicalHeadersForRequest(r)
+	canonicalRequest := strings.Join([]string{
+		r.Method,
+		canonicalURI(r),
+		canonicalQueryFromURL(r.URL),
+		canonicalHeaders,
+		strings.Join(signedHeaders, ";"),
+		payloadHash,
+	}, "\n")
+
+	hash := sha256.Sum256([]byte(canonicalRequest))
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hash[:]),
+	}, "\n")
+
+	signingKey := deriveSigningKey(secretKey, dateScope, region, "s3")
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=" + accessKey + "/" + scope + "," +
+		"SignedHeaders=" + strings.Join(signedHeaders, ";") + "," +
+		"Signature=" + signature
+	r.Header.Set("Authorization", auth)
+}
+
 func canonicalHeadersForRequest(r *http.Request) (string, []string) {
 	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 	var b strings.Builder
@@ -1151,4 +1251,9 @@ func canonicalQueryFromURL(u *url.URL) string {
 	}
 	sort.Strings(pairs)
 	return strings.Join(pairs, "&")
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
