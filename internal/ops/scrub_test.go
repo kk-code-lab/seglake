@@ -87,3 +87,57 @@ func TestScrubMarksDamagedVersion(t *testing.T) {
 		t.Fatalf("expected DAMAGED, got %s", metaObj.State)
 	}
 }
+
+func TestScrubReportsShortRead(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	if err := os.MkdirAll(layout.Root, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	eng, err := engine.New(engine.Options{
+		Layout:    layout,
+		MetaStore: store,
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	man, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello world"))
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("PutObject: %v", err)
+	}
+	if len(man.Chunks) == 0 {
+		_ = store.Close()
+		t.Fatalf("expected chunks")
+	}
+
+	segPath := layout.SegmentPath(man.Chunks[0].SegmentID)
+	fi, err := os.Stat(segPath)
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("Stat: %v", err)
+	}
+	if err := os.Truncate(segPath, fi.Size()-2); err != nil {
+		_ = store.Close()
+		t.Fatalf("Truncate: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	report, err := Scrub(layout, metaPath)
+	if err != nil {
+		t.Fatalf("Scrub: %v", err)
+	}
+	if report.Errors == 0 {
+		t.Fatalf("expected scrub errors")
+	}
+}
