@@ -121,6 +121,16 @@ const (
 	footerLen   = 4 + 4 + 8 + 8 + 32
 )
 
+// SegmentHeaderLen returns the size of the segment header in bytes.
+func SegmentHeaderLen() int64 {
+	return segmentHdrLen
+}
+
+// FooterLen returns the size of the footer in bytes.
+func FooterLen() int64 {
+	return footerLen
+}
+
 // EncodeFooter writes a binary footer to the writer.
 func EncodeFooter(w io.Writer, footer Footer) error {
 	var buf [footerLen]byte
@@ -196,4 +206,9 @@ func isZeroHash(h [32]byte) bool {
 		}
 	}
 	return true
+}
+
+// HashChunk hashes chunk data using BLAKE3.
+func HashChunk(buf []byte) [32]byte {
+	return blake3.Sum256(buf)
 }
