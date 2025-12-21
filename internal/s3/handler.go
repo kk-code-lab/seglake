@@ -1,0 +1,103 @@
+package s3
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/storage/engine"
+)
+
+// Handler implements a minimal path-style S3 API (PUT/GET/HEAD).
+type Handler struct {
+	Engine *engine.Engine
+	Meta   *meta.Store
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	requestID := newRequestID()
+	if h.Engine == nil || h.Meta == nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
+		return
+	}
+	bucket, key, ok := parsePath(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		h.handlePut(r.Context(), w, r, bucket, key, requestID)
+	case http.MethodGet:
+		h.handleGet(r.Context(), w, r, bucket, key, requestID, false)
+	case http.MethodHead:
+		h.handleGet(r.Context(), w, r, bucket, key, requestID, true)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID)
+	}
+}
+
+func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
+	defer r.Body.Close()
+	_, result, err := h.Engine.PutObject(ctx, bucket, key, r.Body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		return
+	}
+	if result.ETag != "" {
+		w.Header().Set("ETag", `"`+result.ETag+`"`)
+	}
+	w.Header().Set("Last-Modified", result.CommittedAt.Format(time.RFC1123))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string, headOnly bool) {
+	meta, err := h.Meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		return
+	}
+	if meta.ETag != "" {
+		w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	}
+	if meta.LastModified != "" {
+		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
+			w.Header().Set("Last-Modified", t.UTC().Format(time.RFC1123))
+		}
+	}
+	if meta.Size >= 0 {
+		w.Header().Set("Content-Length", intToString(meta.Size))
+	}
+	if headOnly {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	reader, _, err := h.Engine.Get(ctx, meta.VersionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		return
+	}
+	defer reader.Close()
+	w.WriteHeader(http.StatusOK)
+	_, _ = ioCopy(w, reader)
+}
+
+func parsePath(path string) (bucket string, key string, ok bool) {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 1 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}

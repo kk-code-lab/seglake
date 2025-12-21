@@ -10,7 +10,9 @@ Requires: Go in PATH; golangci-lint for lint.
 param(
     [Parameter(Position = 0)]
     [ValidateSet('build', 'install', 'test', 'test-coverage', 'test-race', 'clean', 'fmt', 'lint', 'check', 'run', 'help')]
-    [string]$Target = 'help'
+    [string]$Target = 'help',
+    [string[]]$RunArgs = @(),
+    [string]$RunArgsString = ''
 )
 
 Set-StrictMode -Version Latest
@@ -41,6 +43,10 @@ try {
         param([Parameter(Mandatory)][string]$Description, [Parameter(Mandatory)][scriptblock]$Action)
         Write-Host $Description
         & $Action
+    }
+
+    if ($RunArgs.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($RunArgsString)) {
+        $RunArgs = $RunArgsString -split '\s+'
     }
 
     switch ($Target) {
@@ -76,7 +82,7 @@ try {
         }
         'run' {
             Invoke-CommandChecked -Description "Building $binaryName..." -Action { go build -ldflags $buildFlag -o $binPath $mainEntry }
-            Invoke-CommandChecked -Description "Running $binaryName..." -Action { & $binPath }
+            Invoke-CommandChecked -Description "Running $binaryName..." -Action { & $binPath @RunArgs }
         }
         Default {
             Write-Host 'seglake - S3-compatible object store'
