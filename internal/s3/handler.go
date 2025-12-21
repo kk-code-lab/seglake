@@ -54,12 +54,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPut:
+		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
+			h.handleUploadPart(r.Context(), w, r, bucket, key, uploadID, requestID)
+			return
+		}
 		h.handlePut(r.Context(), w, r, bucket, key, requestID)
 	case http.MethodGet:
+		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
+			h.handleListParts(r.Context(), w, bucket, key, uploadID, requestID)
+			return
+		}
 		h.handleGet(r.Context(), w, r, bucket, key, requestID, false)
 	case http.MethodHead:
 		h.handleGet(r.Context(), w, r, bucket, key, requestID, true)
 	default:
+		if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
+			h.handleInitiateMultipart(r.Context(), w, bucket, key, requestID)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" {
+			h.handleCompleteMultipart(r.Context(), w, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != "" {
+			h.handleAbortMultipart(r.Context(), w, r.URL.Query().Get("uploadId"), requestID)
+			return
+		}
 		writeError(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID)
 	}
 }

@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -644,6 +646,115 @@ func TestS3E2ERangeGet(t *testing.T) {
 	}
 	if getResp.Header.Get("Content-Range") == "" {
 		t.Fatalf("missing Content-Range")
+	}
+}
+
+func TestS3E2EMultipart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	initReq, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/key?uploads", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(initReq, "test", "testsecret", "us-east-1")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		t.Fatalf("init error: %v", err)
+	}
+	body, _ := io.ReadAll(initResp.Body)
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("init status: %d", initResp.StatusCode)
+	}
+	var initResult initiateMultipartResult
+	if err := xml.Unmarshal(body, &initResult); err != nil {
+		t.Fatalf("init decode: %v", err)
+	}
+
+	putPart := func(n int, data string) string {
+		req, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/key?partNumber="+strconv.Itoa(n)+"&uploadId="+initResult.UploadID, strings.NewReader(data))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT part error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT part status: %d", resp.StatusCode)
+		}
+		return resp.Header.Get("ETag")
+	}
+
+	etag1 := putPart(1, strings.Repeat("a", 5<<20))
+	etag2 := putPart(2, "tail")
+
+	completeBody := `<CompleteMultipartUpload>` +
+		`<Part><PartNumber>1</PartNumber><ETag>` + etag1 + `</ETag></Part>` +
+		`<Part><PartNumber>2</PartNumber><ETag>` + etag2 + `</ETag></Part>` +
+		`</CompleteMultipartUpload>`
+	completeReq, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/key?uploadId="+initResult.UploadID, strings.NewReader(completeBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(completeReq, "test", "testsecret", "us-east-1")
+	completeResp, err := http.DefaultClient.Do(completeReq)
+	if err != nil {
+		t.Fatalf("complete error: %v", err)
+	}
+	completeResp.Body.Close()
+	if completeResp.StatusCode != http.StatusOK {
+		t.Fatalf("complete status: %d", completeResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	got, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !strings.HasPrefix(string(got), strings.Repeat("a", 5<<20)) {
+		t.Fatalf("GET body prefix mismatch")
 	}
 }
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
