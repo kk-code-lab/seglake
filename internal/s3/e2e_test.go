@@ -757,6 +757,69 @@ func TestS3E2EMultipart(t *testing.T) {
 		t.Fatalf("GET body prefix mismatch")
 	}
 }
+
+func TestS3E2EListMultipartUploads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	initReq, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/a?uploads", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(initReq, "test", "testsecret", "us-east-1")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		t.Fatalf("init error: %v", err)
+	}
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("init status: %d", initResp.StatusCode)
+	}
+
+	listReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket?uploads", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("list error: %v", err)
+	}
+	body, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status: %d", listResp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("<ListMultipartUploadsResult>")) {
+		t.Fatalf("expected xml response")
+	}
+}
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
 	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
 }
