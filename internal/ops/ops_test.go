@@ -96,6 +96,56 @@ func TestFsckReportsMissingSegment(t *testing.T) {
 	}
 }
 
+func TestFsckReportsInvalidFooter(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	if err := os.MkdirAll(layout.SegmentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segments: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll manifests: %v", err)
+	}
+
+	segID := "seg-bad"
+	segPath := layout.SegmentPath(segID)
+	writer, err := segment.NewWriter(segPath, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	data := []byte("hello")
+	offset, err := writer.AppendRecord(segment.ChunkRecordHeader{Hash: [32]byte{1}, Len: uint32(len(data))}, data)
+	if err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	man := &manifest.Manifest{
+		Bucket:    "b",
+		Key:       "k",
+		VersionID: "v1",
+		Size:      int64(len(data)),
+		Chunks: []manifest.ChunkRef{
+			{Index: 0, SegmentID: segID, Offset: offset, Len: uint32(len(data))},
+		},
+	}
+	if err := writeManifest(layout.ManifestPath(man.VersionID), man); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	report, err := Fsck(layout)
+	if err != nil {
+		t.Fatalf("Fsck: %v", err)
+	}
+	if report.Errors == 0 {
+		t.Fatalf("expected fsck errors for invalid footer")
+	}
+	if report.MissingSegments != 0 {
+		t.Fatalf("expected no missing segments, got %d", report.MissingSegments)
+	}
+}
+
 func TestGCPlanAndRun(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))
