@@ -18,6 +18,10 @@
 ## Testing Guidelines
 - Prefer table-driven tests and subtests; mirror production file names to keep coverage obvious.
 - Keep expensive tests gated; add focused tests when behavior changes.
+- For S3 compatibility checks, start the server with `-access-key/-secret-key` and test with awscli/s3cmd against `http://localhost:9000`.
+- Example awscli: `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000 s3://demo`.
+- Example s3cmd: `s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret ls s3://demo`.
+- Presigned URL testing can be done via `AuthConfig.Presign` helpers (see `internal/s3/presign.go`).
 
 ## Commit & Pull Request Guidelines
 - Use imperative commit messages under 72 characters.
