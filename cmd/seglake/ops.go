@@ -47,3 +47,22 @@ func formatReport(report *ops.Report) string {
 	}
 	return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d", report.Mode, report.Manifests, report.Segments, report.Errors)
 }
+
+func printModeHelp(mode string) {
+	switch mode {
+	case "server":
+		fmt.Println("Mode server: run HTTP API server.")
+		fmt.Println("Flags: -addr, -data-dir, -access-key, -secret-key, -region")
+	case "status":
+		fmt.Println("Mode status: counts manifests and segments.")
+	case "fsck":
+		fmt.Println("Mode fsck: validates segment headers/footers and chunk bounds.")
+	case "scrub":
+		fmt.Println("Mode scrub: verifies chunk hashes against stored data.")
+	case "snapshot":
+		fmt.Println("Mode snapshot: copies meta.db (+wal/shm) and writes snapshot.json.")
+		fmt.Println("Flags: -snapshot-dir (optional, default under data/snapshots).")
+	default:
+		fmt.Printf("Unknown mode %q\n", mode)
+	}
+}
