@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kk-code-lab/seglake/internal/app"
 	"github.com/kk-code-lab/seglake/internal/meta"
@@ -19,6 +20,9 @@ func main() {
 	showVersionShort := flag.Bool("v", false, "Print version and exit (shorthand)")
 	addr := flag.String("addr", ":9000", "HTTP listen address")
 	dataDir := flag.String("data-dir", "./data", "Data directory")
+	accessKey := flag.String("access-key", "", "S3 access key (enables SigV4)")
+	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
+	region := flag.String("region", "us-east-1", "S3 region")
 	flag.Parse()
 
 	if *showVersion || *showVersionShort {
@@ -57,6 +61,12 @@ func main() {
 	handler := &s3.Handler{
 		Engine: eng,
 		Meta:   store,
+		Auth: &s3.AuthConfig{
+			AccessKey: *accessKey,
+			SecretKey: *secretKey,
+			Region:    *region,
+			MaxSkew:   5 * time.Minute,
+		},
 	}
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)

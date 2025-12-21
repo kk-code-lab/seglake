@@ -16,6 +16,7 @@ import (
 type Handler struct {
 	Engine *engine.Engine
 	Meta   *meta.Store
+	Auth   *AuthConfig
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -23,6 +24,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Engine == nil || h.Meta == nil {
 		writeError(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID)
 		return
+	}
+	if h.Auth != nil {
+		if err := h.Auth.VerifyRequest(r); err != nil {
+			switch err {
+			case errAccessDenied:
+				writeError(w, http.StatusForbidden, "AccessDenied", "access denied", requestID)
+			case errTimeSkew:
+				writeError(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID)
+			default:
+				writeError(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID)
+			}
+			return
+		}
 	}
 	bucket, key, ok := parsePath(r.URL.Path)
 	if !ok {
