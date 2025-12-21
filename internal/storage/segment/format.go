@@ -26,6 +26,11 @@ const (
 	headerLen = 32 + 4
 )
 
+// RecordHeaderLen returns the size of a chunk record header.
+func RecordHeaderLen() int64 {
+	return headerLen
+}
+
 // SegmentHeader is written at the start of each segment file.
 type SegmentHeader struct {
 	Magic   uint32

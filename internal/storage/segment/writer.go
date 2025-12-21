@@ -86,3 +86,11 @@ func (w *Writer) Close() error {
 	}
 	return w.file.Close()
 }
+
+// Sync flushes file contents to disk.
+func (w *Writer) Sync() error {
+	if w.file == nil {
+		return nil
+	}
+	return w.file.Sync()
+}
