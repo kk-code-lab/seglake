@@ -1,0 +1,11 @@
+version: 2
+
+linters:
+  enable:
+    - dupl
+
+run:
+  tests: true
+
+issues:
+  exclude-use-default: false
