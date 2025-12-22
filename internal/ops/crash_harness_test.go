@@ -93,7 +93,7 @@ func TestCrashHarness(t *testing.T) {
 			_ = cmd.Process.Kill()
 			t.Fatalf("server did not restart: %v", err)
 		}
-		getObject(t, client, host, keyBase+"/small.txt")
+		getObjectWithBody(t, client, host, keyBase+"/small.txt", "hello")
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	}
@@ -131,7 +131,7 @@ func putObject(t *testing.T, client *http.Client, host, key string, data []byte)
 	}
 }
 
-func getObject(t *testing.T, client *http.Client, host, key string) {
+func getObjectWithBody(t *testing.T, client *http.Client, host, key, want string) {
 	t.Helper()
 	resp, err := client.Get(host + "/" + key)
 	if err != nil {
@@ -140,6 +140,13 @@ func getObject(t *testing.T, client *http.Client, host, key string) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != want {
+		t.Fatalf("body mismatch: got %q want %q", string(body), want)
 	}
 }
 
