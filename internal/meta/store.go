@@ -7,12 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/clock"
 	_ "modernc.org/sqlite"
 )
 
 // Store wraps the SQLite metadata database.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	hlc    *clock.HLC
+	siteID string
 }
 
 // APIKey describes stored credentials and policy metadata.
@@ -36,7 +39,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, hlc: clock.New(), siteID: "local"}
 	if err := store.applyPragmas(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -46,6 +49,14 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// SetSiteID configures the local site identifier used in oplog entries.
+func (s *Store) SetSiteID(siteID string) {
+	if s == nil || siteID == "" {
+		return
+	}
+	s.siteID = siteID
 }
 
 // Close closes the database.
@@ -199,6 +210,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 8 {
+		if err = applyV8(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -382,6 +401,31 @@ func applyV7(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func applyV8(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS oplog (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			site_id TEXT NOT NULL,
+			hlc_ts TEXT NOT NULL,
+			op_type TEXT NOT NULL,
+			bucket TEXT NOT NULL,
+			key TEXT NOT NULL,
+			version_id TEXT,
+			payload TEXT,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS oplog_hlc_idx ON oplog(hlc_ts)`,
+		`CREATE INDEX IF NOT EXISTS oplog_site_hlc_idx ON oplog(site_id, hlc_ts)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 
 // UpsertAPIKey inserts or updates an API key entry.
 func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy string, enabled bool, inflightLimit int64) error {
