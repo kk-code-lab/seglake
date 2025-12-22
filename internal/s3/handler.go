@@ -581,8 +581,14 @@ func (h *Handler) hostBucket(r *http.Request) string {
 	if hst, _, err := net.SplitHostPort(host); err == nil {
 		host = hst
 	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	}
 	host = strings.TrimSuffix(host, ".")
 	host = strings.ToLower(host)
+	if host == "localhost" || net.ParseIP(host) != nil {
+		return ""
+	}
 	if strings.Count(host, ".") == 0 {
 		return ""
 	}
