@@ -7,7 +7,6 @@
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 
 ## 3) Storage / durability
-- Dodatkowe testy E2E durability (fsync / WAL semantics).
 
 ## 4) Ops / observability
 - Rozszerzyć `/v1/meta/stats`: latencje, inflight, bytes in/out.
@@ -32,3 +31,4 @@
 - GC-aware multipart (części traktowane jako live).
 - Crash-consistency harness jako test opcjonalny (tag crashharness).
 - Bloom + sparse index w footerze segmentu.
+- E2E durability test (tag durability).
