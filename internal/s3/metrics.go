@@ -46,9 +46,9 @@ type LatencyStats struct {
 // NewMetrics creates a Metrics instance.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		requests: make(map[string]map[string]int64),
-		inflight: make(map[string]int64),
-		latency:  make(map[string]*latencyWindow),
+		requests:       make(map[string]map[string]int64),
+		inflight:       make(map[string]int64),
+		latency:        make(map[string]*latencyWindow),
 		bucketRequests: make(map[string]map[string]int64),
 		bucketLatency:  make(map[string]*latencyWindow),
 		keyRequests:    make(map[string]map[string]int64),
