@@ -170,7 +170,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `rebuild-index` — odbudowa meta z manifestów.
 - `snapshot` — kopia meta.db(+wal/shm) + raport.
 - `support-bundle` — snapshot + fsck + scrub.
-- `repl-validate` — porównanie manifestów i live wersji między dwoma data-dir.
+- `repl-validate` — porównanie manifestów i wersji (live + wszystkie wersje) między dwoma data-dir.
 - `gc-plan`/`gc-run` — usuwa segmenty w 100% martwe.
 - `gc-rewrite-plan`/`gc-rewrite-run` — rewrite segmentów częściowo martwych (throttle + pause file).
 - `mpu-gc-plan`/`mpu-gc-run` — czyszczenie starych multipart uploadów (TTL).
@@ -218,7 +218,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ## 7) Znane braki / ograniczenia (stan obecny)
 
  - Brak pełnych ACL/IAM/polityk (jest per‑action JSON policy v1, bucket policies i warunki; brak np. ACL per‑object/STS/zaawansowanych condition).
- - Brak pełnej walidacji spójności wersji (repl-validate porównuje manifesty i live pointers, nie wszystkie wersje).
+ - repl-validate nie porównuje treści chunków, tylko manifesty i metadane wersji.
 
 ---
 

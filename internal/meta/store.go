@@ -2681,6 +2681,33 @@ JOIN manifests m ON m.version_id = o.version_id`)
 	return out, nil
 }
 
+// ListVersionManifestPaths returns manifest paths for all versions.
+func (s *Store) ListVersionManifestPaths(ctx context.Context) (out []string, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT m.path
+FROM versions v
+JOIN manifests m ON m.version_id = v.version_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListBuckets returns bucket names in lexical order.
 func (s *Store) ListBuckets(ctx context.Context) (out []string, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT bucket FROM buckets ORDER BY bucket`)
