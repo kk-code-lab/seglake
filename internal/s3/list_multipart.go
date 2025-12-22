@@ -29,9 +29,11 @@ type multipartUploadOut struct {
 func (h *Handler) handleListMultipartUploads(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
+	keyMarker := q.Get("key-marker")
+	uploadIDMarker := q.Get("upload-id-marker")
 	maxUploads := parseMaxUploads(q.Get("max-uploads"))
 
-	uploads, err := h.Meta.ListMultipartUploads(ctx, bucket, prefix, maxUploads)
+	uploads, err := h.Meta.ListMultipartUploads(ctx, bucket, prefix, keyMarker, uploadIDMarker, maxUploads)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
@@ -45,11 +47,18 @@ func (h *Handler) handleListMultipartUploads(ctx context.Context, w http.Respons
 		})
 	}
 	resp := listMultipartResult{
-		Bucket:      bucket,
-		Prefix:      prefix,
-		MaxUploads:  maxUploads,
-		IsTruncated: false,
-		Uploads:     out,
+		Bucket:         bucket,
+		Prefix:         prefix,
+		KeyMarker:      keyMarker,
+		UploadIDMarker: uploadIDMarker,
+		MaxUploads:     maxUploads,
+		IsTruncated:    len(uploads) == maxUploads,
+		Uploads:        out,
+	}
+	if resp.IsTruncated && len(uploads) > 0 {
+		last := uploads[len(uploads)-1]
+		resp.NextKeyMarker = last.Key
+		resp.NextUploadIDMarker = last.UploadID
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)

@@ -4,7 +4,6 @@
 - Lepsze błędy AWS (pełniejsze pola, mapowania kodów).
 
 ## 2) Multipart — bezpieczeństwo danych
-- Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 
 ## 3) Storage / durability
 
@@ -29,3 +28,4 @@
 - Per-key limity inflight.
 - Redakcja sekretów w logach (query z presigned).
 - Checklist TLS i integracje awscli/s3cmd (`docs/ops.md`).
+- Paginacja ListMultipartUploads (key-marker/upload-id-marker).

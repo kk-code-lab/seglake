@@ -531,18 +531,37 @@ VALUES(?, ?, ?, ?, 'ACTIVE')`, uploadID, bucket, key, now)
 	return err
 }
 
-// ListMultipartUploads returns active uploads for a bucket and optional prefix.
-func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix string, limit int) (out []MultipartUpload, err error) {
+// ListMultipartUploads returns active uploads for a bucket and optional prefix/markers.
+func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker string, limit int) (out []MultipartUpload, err error) {
 	if limit <= 0 {
 		limit = 1000
 	}
 	pattern := escapeLike(prefix) + "%"
-	rows, err := s.db.QueryContext(ctx, `
+	var rows *sql.Rows
+	if keyMarker != "" && uploadIDMarker != "" {
+		rows, err = s.db.QueryContext(ctx, `
 SELECT upload_id, bucket, key, created_at, state
 FROM multipart_uploads
 WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
-ORDER BY key
+  AND (key > ? OR (key = ? AND upload_id > ?))
+ORDER BY key, upload_id
+LIMIT ?`, bucket, pattern, keyMarker, keyMarker, uploadIDMarker, limit)
+	} else if keyMarker != "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state
+FROM multipart_uploads
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
+  AND key > ?
+ORDER BY key, upload_id
+LIMIT ?`, bucket, pattern, keyMarker, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state
+FROM multipart_uploads
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
+ORDER BY key, upload_id
 LIMIT ?`, bucket, pattern, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
