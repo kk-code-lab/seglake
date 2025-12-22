@@ -356,6 +356,94 @@ func TestRecordMPUCompleteWritesOplog(t *testing.T) {
 	}
 }
 
+func TestApplyOplogPutVsPut(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         1,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	put1 := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000010-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	put2 := OplogEntry{
+		SiteID:    "site-b",
+		HLCTS:     "0000000000000000011-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v2",
+		Payload:   string(putPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put1, put2}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.VersionID != "v2" {
+		t.Fatalf("expected v2 to win, got %s", metaObj.VersionID)
+	}
+}
+
+func TestApplyOplogDeleteVsDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	delPayload, err := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	del1 := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000020-0000000001",
+		OpType:    "delete",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(delPayload),
+	}
+	del2 := OplogEntry{
+		SiteID:    "site-z",
+		HLCTS:     "0000000000000000020-0000000001",
+		OpType:    "delete",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(delPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{del1, del2}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected object to remain deleted")
+	}
+}
+
 func addHLC(hlc string, delta int64) string {
 	parts := strings.SplitN(hlc, "-", 2)
 	if len(parts) != 2 {
