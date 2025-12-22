@@ -377,6 +377,60 @@ func (e *Engine) MissingChunks(man *manifest.Manifest) ([]MissingChunk, error) {
 	return missing, nil
 }
 
+// StoreManifestBytes decodes and stores a manifest blob on disk and in metadata.
+func (e *Engine) StoreManifestBytes(ctx context.Context, data []byte) (*manifest.Manifest, error) {
+	if len(data) == 0 {
+		return nil, errors.New("engine: manifest bytes required")
+	}
+	if err := e.ensureDirs(); err != nil {
+		return nil, err
+	}
+	man, err := e.manifestCodec.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	manifestPath := e.layout.ManifestPath(formatManifestName(man.Bucket, man.Key, man.VersionID))
+	if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
+		return nil, err
+	}
+	if e.metaStore != nil {
+		if err := e.metaStore.RecordManifest(ctx, man.VersionID, manifestPath); err != nil {
+			return nil, err
+		}
+	}
+	return man, nil
+}
+
+// WriteSegmentRange writes raw bytes into a segment file at the given offset.
+func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset int64, data []byte) error {
+	if segmentID == "" {
+		return errors.New("engine: segment id required")
+	}
+	if offset < 0 || len(data) == 0 {
+		return errors.New("engine: invalid segment range")
+	}
+	if err := e.ensureDirs(); err != nil {
+		return err
+	}
+	path := e.layout.SegmentPath(segmentID)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.WriteAt(data, offset); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if e.metaStore != nil {
+		_ = e.metaStore.RecordSegment(ctx, segmentID, path, "SEALED", info.Size(), nil)
+	}
+	return nil
+}
+
 func (e *Engine) ensureDirs() error {
 	if err := os.MkdirAll(e.layout.SegmentsDir, 0o755); err != nil {
 		return err

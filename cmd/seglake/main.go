@@ -46,7 +46,7 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	virtualHosted := flag.Bool("virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys|bucket-policy")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys|bucket-policy|repl-pull")
 	tlsEnable := flag.Bool("tls", false, "Enable HTTPS listener with TLS")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
 	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
@@ -84,6 +84,13 @@ func main() {
 	bucketPolicyBucket := flag.String("bucket-policy-bucket", "", "Bucket name for bucket-policy action")
 	bucketPolicy := flag.String("bucket-policy", "", "Bucket policy JSON")
 	bucketPolicyFile := flag.String("bucket-policy-file", "", "Bucket policy JSON file path")
+	replRemote := flag.String("repl-remote", "", "Replication remote base URL (e.g. http://host:9000)")
+	replSince := flag.String("repl-since", "", "Replication oplog HLC watermark")
+	replLimit := flag.Int("repl-limit", 1000, "Replication oplog batch size")
+	replFetchData := flag.Bool("repl-fetch-data", true, "Fetch missing manifests/chunks after oplog apply")
+	replAccessKey := flag.String("repl-access-key", "", "Replication access key for SigV4 presign")
+	replSecretKey := flag.String("repl-secret-key", "", "Replication secret key for SigV4 presign")
+	replRegion := flag.String("repl-region", "us-east-1", "Replication SigV4 region")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -131,6 +138,13 @@ func main() {
 		metaArg := metaPath
 		if *rebuildMeta != "" {
 			metaArg = *rebuildMeta
+		}
+		if *mode == "repl-pull" {
+			if err := runReplPull(*replRemote, *replSince, *replLimit, *replFetchData, *replAccessKey, *replSecretKey, *replRegion, eng); err != nil {
+				fmt.Fprintf(os.Stderr, "repl pull error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
 		if *mode == "keys" {
 			if err := runKeys(*keysAction, metaArg, *keyAccess, *keySecret, *keyPolicy, *keyBucket, *keyEnabled, *keyInflight, *jsonOut); err != nil {

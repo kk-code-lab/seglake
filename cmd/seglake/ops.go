@@ -165,6 +165,9 @@ func printModeHelp(mode string) {
 	case "bucket-policy":
 		fmt.Println("Mode bucket-policy: manage bucket policies.")
 		fmt.Println("Flags: -bucket-policy-action get|set|delete, -bucket-policy-bucket, -bucket-policy, -bucket-policy-file, -json.")
+	case "repl-pull":
+		fmt.Println("Mode repl-pull: pull oplog from remote and apply locally.")
+		fmt.Println("Flags: -repl-remote, -repl-since, -repl-limit, -repl-fetch-data, -repl-access-key, -repl-secret-key, -repl-region.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}
