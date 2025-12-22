@@ -201,6 +201,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 6.1) Ops / TLS / tooling
 - Checklist TLS i przykłady awscli/s3cmd: `docs/ops.md`.
+- Opcjonalny TLS w aplikacji: `-tls`, `-tls-cert`, `-tls-key` (hot reload certów).
 
 ---
 
