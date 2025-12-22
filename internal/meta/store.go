@@ -54,6 +54,14 @@ type oplogDeletePayload struct {
 	LastModified string `json:"last_modified_utc"`
 }
 
+// ReplRemoteState describes replication watermarks per remote.
+type ReplRemoteState struct {
+	Remote      string `json:"remote"`
+	UpdatedAt   string `json:"updated_at"`
+	LastPullHLC string `json:"last_pull_hlc,omitempty"`
+	LastPushHLC string `json:"last_push_hlc,omitempty"`
+}
+
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
 	if path == "" {
@@ -264,6 +272,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 10 {
+		if err = applyV10(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(10, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -483,6 +499,36 @@ func applyV9(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV10(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE repl_state ADD COLUMN last_pull_hlc TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE repl_state ADD COLUMN last_push_hlc TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS repl_state_remote (
+			remote TEXT PRIMARY KEY,
+			updated_at TEXT NOT NULL,
+			last_pull_hlc TEXT NOT NULL DEFAULT '',
+			last_push_hlc TEXT NOT NULL DEFAULT ''
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE repl_state
+SET last_pull_hlc=last_hlc
+WHERE COALESCE(last_pull_hlc,'')='' AND COALESCE(last_hlc,'')<>''`); err != nil {
+		if !strings.Contains(err.Error(), "no such column") {
 			return err
 		}
 	}
@@ -1269,6 +1315,79 @@ func (s *Store) SetReplPushWatermark(ctx context.Context, hlc string) error {
 INSERT INTO repl_state(id, updated_at, last_pull_hlc, last_push_hlc)
 VALUES(1, ?, '', ?)
 ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_push_hlc=excluded.last_push_hlc`, now, hlc)
+	return err
+}
+
+// GetReplRemoteState returns replication watermarks for a specific remote.
+func (s *Store) GetReplRemoteState(ctx context.Context, remote string) (*ReplRemoteState, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	if remote == "" {
+		return nil, errors.New("meta: remote required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT remote, updated_at, COALESCE(last_pull_hlc,''), COALESCE(last_push_hlc,'')
+FROM repl_state_remote
+WHERE remote=?`, remote)
+	var state ReplRemoteState
+	if err := row.Scan(&state.Remote, &state.UpdatedAt, &state.LastPullHLC, &state.LastPushHLC); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// ListReplRemoteStates returns all replication remote states ordered by remote.
+func (s *Store) ListReplRemoteStates(ctx context.Context) (out []ReplRemoteState, err error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT remote, updated_at, COALESCE(last_pull_hlc,''), COALESCE(last_push_hlc,'')
+FROM repl_state_remote
+ORDER BY remote`)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var state ReplRemoteState
+		if err := scan(&state.Remote, &state.UpdatedAt, &state.LastPullHLC, &state.LastPushHLC); err != nil {
+			return err
+		}
+		out = append(out, state)
+		return nil
+	})
+}
+
+// SetReplRemotePullWatermark stores replication pull watermark for a remote.
+func (s *Store) SetReplRemotePullWatermark(ctx context.Context, remote, hlc string) error {
+	if s == nil || s.db == nil {
+		return errors.New("meta: db not initialized")
+	}
+	if remote == "" || hlc == "" {
+		return errors.New("meta: remote and watermark required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO repl_state_remote(remote, updated_at, last_pull_hlc, last_push_hlc)
+VALUES(?, ?, ?, '')
+ON CONFLICT(remote) DO UPDATE SET updated_at=excluded.updated_at, last_pull_hlc=excluded.last_pull_hlc`, remote, now, hlc)
+	return err
+}
+
+// SetReplRemotePushWatermark stores replication push watermark for a remote.
+func (s *Store) SetReplRemotePushWatermark(ctx context.Context, remote, hlc string) error {
+	if s == nil || s.db == nil {
+		return errors.New("meta: db not initialized")
+	}
+	if remote == "" || hlc == "" {
+		return errors.New("meta: remote and watermark required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO repl_state_remote(remote, updated_at, last_pull_hlc, last_push_hlc)
+VALUES(?, ?, '', ?)
+ON CONFLICT(remote) DO UPDATE SET updated_at=excluded.updated_at, last_push_hlc=excluded.last_push_hlc`, remote, now, hlc)
 	return err
 }
 
