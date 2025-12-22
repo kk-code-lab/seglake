@@ -54,6 +54,13 @@ type Engine struct {
 	barrier        *writeBarrier
 }
 
+// MissingChunk describes a missing segment range for replication.
+type MissingChunk struct {
+	SegmentID string
+	Offset    int64
+	Length    int64
+}
+
 // New creates a storage engine instance.
 func New(opts Options) (*Engine, error) {
 	if opts.Layout.Root == "" {
@@ -283,17 +290,29 @@ func (e *Engine) GetObject(ctx context.Context, bucket, key string) (io.ReadClos
 	return e.Get(ctx, versionID)
 }
 
+// GetManifest returns the decoded manifest for a version id.
+func (e *Engine) GetManifest(ctx context.Context, versionID string) (*manifest.Manifest, error) {
+	if versionID == "" {
+		return nil, errors.New("engine: version id required")
+	}
+	file, man, err := e.openManifestByVersion(ctx, versionID)
+	if file != nil {
+		_ = file.Close()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return man, nil
+}
+
 // ManifestBytes returns the encoded manifest for a version id.
 func (e *Engine) ManifestBytes(ctx context.Context, versionID string) ([]byte, error) {
 	if versionID == "" {
 		return nil, errors.New("engine: version id required")
 	}
-	file, man, err := e.openManifestByVersion(ctx, versionID)
+	man, err := e.GetManifest(ctx, versionID)
 	if err != nil {
 		return nil, err
-	}
-	if file != nil {
-		_ = file.Close()
 	}
 	var buf bytes.Buffer
 	if err := e.manifestCodec.Encode(&buf, man); err != nil {
@@ -325,6 +344,37 @@ func (e *Engine) ReadSegmentRange(segmentID string, offset, length int64) ([]byt
 		return nil, io.ErrUnexpectedEOF
 	}
 	return buf, nil
+}
+
+// MissingChunks reports missing segments for the given manifest.
+func (e *Engine) MissingChunks(man *manifest.Manifest) ([]MissingChunk, error) {
+	if man == nil {
+		return nil, errors.New("engine: manifest required")
+	}
+	missing := make([]MissingChunk, 0)
+	for _, ch := range man.Chunks {
+		path := e.layout.SegmentPath(ch.SegmentID)
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, MissingChunk{
+					SegmentID: ch.SegmentID,
+					Offset:    ch.Offset,
+					Length:    int64(ch.Len),
+				})
+				continue
+			}
+			return nil, err
+		}
+		if info.Size() < ch.Offset+int64(ch.Len) {
+			missing = append(missing, MissingChunk{
+				SegmentID: ch.SegmentID,
+				Offset:    ch.Offset,
+				Length:    int64(ch.Len),
+			})
+		}
+	}
+	return missing, nil
 }
 
 func (e *Engine) ensureDirs() error {

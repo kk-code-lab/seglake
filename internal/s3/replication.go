@@ -3,7 +3,9 @@ package s3
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -20,7 +22,15 @@ type oplogApplyRequest struct {
 }
 
 type oplogApplyResponse struct {
-	Applied int `json:"applied"`
+	Applied          int            `json:"applied"`
+	MissingManifests []string       `json:"missing_manifests,omitempty"`
+	MissingChunks    []missingChunk `json:"missing_chunks,omitempty"`
+}
+
+type missingChunk struct {
+	SegmentID string `json:"segment_id"`
+	Offset    int64  `json:"offset"`
+	Length    int64  `json:"len"`
 }
 
 func (h *Handler) handleOplog(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
@@ -66,8 +76,52 @@ func (h *Handler) handleOplogApply(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "oplog apply failed", requestID, r.URL.Path)
 		return
 	}
+	resp := oplogApplyResponse{Applied: applied}
+	if h.Engine != nil {
+		missingManifests := make(map[string]struct{})
+		missingChunks := make(map[string]missingChunk)
+		for _, entry := range req.Entries {
+			if entry.OpType != "put" || entry.VersionID == "" {
+				continue
+			}
+			man, err := h.Engine.GetManifest(ctx, entry.VersionID)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					missingManifests[entry.VersionID] = struct{}{}
+					continue
+				}
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "manifest read failed", requestID, r.URL.Path)
+				return
+			}
+			chunks, err := h.Engine.MissingChunks(man)
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "segment check failed", requestID, r.URL.Path)
+				return
+			}
+			for _, ch := range chunks {
+				key := ch.SegmentID + ":" + strconv.FormatInt(ch.Offset, 10) + ":" + strconv.FormatInt(ch.Length, 10)
+				missingChunks[key] = missingChunk{
+					SegmentID: ch.SegmentID,
+					Offset:    ch.Offset,
+					Length:    ch.Length,
+				}
+			}
+		}
+		if len(missingManifests) > 0 {
+			resp.MissingManifests = make([]string, 0, len(missingManifests))
+			for versionID := range missingManifests {
+				resp.MissingManifests = append(resp.MissingManifests, versionID)
+			}
+		}
+		if len(missingChunks) > 0 {
+			resp.MissingChunks = make([]missingChunk, 0, len(missingChunks))
+			for _, ch := range missingChunks {
+				resp.MissingChunks = append(resp.MissingChunks, ch)
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(oplogApplyResponse{Applied: applied})
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) handleReplicationManifest(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
