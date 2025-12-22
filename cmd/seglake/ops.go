@@ -119,7 +119,7 @@ func printModeHelp(mode string) {
 	switch mode {
 	case "server":
 		fmt.Println("Mode server: run HTTP API server.")
-		fmt.Println("Flags: -addr, -data-dir, -access-key, -secret-key, -region")
+		fmt.Println("Flags: -addr, -data-dir, -access-key, -secret-key, -region, -sync-interval, -sync-bytes")
 	case "status":
 		fmt.Println("Mode status: counts manifests and segments.")
 	case "fsck":
