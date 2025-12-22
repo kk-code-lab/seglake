@@ -39,12 +39,8 @@ func TestMultipartUploadLifecycle(t *testing.T) {
 		t.Fatalf("expected 0 uploads after abort, got %d", len(uploads))
 	}
 
-	up, err := store.GetMultipartUpload(ctx, "u1")
-	if err != nil {
-		t.Fatalf("GetMultipartUpload: %v", err)
-	}
-	if up.State != "ABORTED" {
-		t.Fatalf("expected ABORTED, got %s", up.State)
+	if _, err := store.GetMultipartUpload(ctx, "u1"); err == nil {
+		t.Fatalf("expected upload deleted after abort")
 	}
 }
 

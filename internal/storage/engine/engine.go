@@ -140,9 +140,15 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 		if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
 			return err
 		}
-		if e.metaStore != nil && bucket != "" && key != "" {
-			if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath); err != nil {
-				return err
+		if e.metaStore != nil {
+			if bucket != "" && key != "" {
+				if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath); err != nil {
+					return err
+				}
+			} else {
+				if err := e.metaStore.RecordManifestTx(tx, versionID, manifestPath); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

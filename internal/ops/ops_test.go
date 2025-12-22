@@ -263,6 +263,123 @@ func TestGCPlanAndRun(t *testing.T) {
 	}
 }
 
+func TestMPUGCPlanAndRun(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	uploadID := "upload-1"
+	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", uploadID); err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+	if err := store.PutMultipartPart(context.Background(), uploadID, 1, "v1", "etag", 123); err != nil {
+		t.Fatalf("PutMultipartPart: %v", err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	report, uploads, err := MPUGCPlan(metaPath, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("MPUGCPlan: %v", err)
+	}
+	if report.Candidates == 0 || len(uploads) == 0 {
+		t.Fatalf("expected candidates")
+	}
+
+	report, err = MPUGCRun(metaPath, time.Nanosecond, true)
+	if err != nil {
+		t.Fatalf("MPUGCRun: %v", err)
+	}
+	if report.Deleted == 0 {
+		t.Fatalf("expected deleted uploads")
+	}
+	if _, err := store.GetMultipartUpload(context.Background(), uploadID); err == nil {
+		t.Fatalf("expected upload deleted")
+	}
+}
+
+func TestGCPlanIncludesMultipartParts(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	if err := os.MkdirAll(layout.SegmentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segments: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll manifests: %v", err)
+	}
+
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	segID := "seg-mpu"
+	segPath := layout.SegmentPath(segID)
+	writer, err := segment.NewWriter(segPath, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	data := []byte("hello")
+	offset, err := writer.AppendRecord(segment.ChunkRecordHeader{Hash: [32]byte{1}, Len: uint32(len(data))}, data)
+	if err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	footer := segment.FinalizeFooter(segment.NewFooter(1))
+	if err := writer.Seal(footer); err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	info, err := os.Stat(segPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if err := store.RecordSegment(context.Background(), segID, segPath, string(segment.StateSealed), info.Size(), footer.ChecksumHash[:]); err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+
+	man := &manifest.Manifest{
+		Bucket:    "",
+		Key:       "",
+		VersionID: "v-mpu",
+		Size:      int64(len(data)),
+		Chunks: []manifest.ChunkRef{
+			{Index: 0, SegmentID: segID, Offset: offset, Len: uint32(len(data))},
+		},
+	}
+	manPath := layout.ManifestPath(man.VersionID)
+	if err := writeManifest(manPath, man); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := store.RecordManifest(context.Background(), man.VersionID, manPath); err != nil {
+		t.Fatalf("RecordManifest: %v", err)
+	}
+	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", "upload-2"); err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+	if err := store.PutMultipartPart(context.Background(), "upload-2", 1, man.VersionID, "etag", int64(len(data))); err != nil {
+		t.Fatalf("PutMultipartPart: %v", err)
+	}
+
+	report, candidates, err := GCPlan(layout, metaPath, 0)
+	if err != nil {
+		t.Fatalf("GCPlan: %v", err)
+	}
+	if report.Manifests == 0 {
+		t.Fatalf("expected manifests counted")
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected no GC candidates, got %d", len(candidates))
+	}
+}
+
 func TestGCRewritePlanRun(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))

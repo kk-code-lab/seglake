@@ -439,6 +439,34 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 	return nil
 }
 
+// RecordManifestTx records a manifest path for a version id.
+func (s *Store) RecordManifestTx(tx *sql.Tx, versionID, manifestPath string) error {
+	if versionID == "" || manifestPath == "" {
+		return errors.New("meta: version id and manifest path required")
+	}
+	if tx == nil {
+		return errors.New("meta: transaction required")
+	}
+	if _, err := tx.Exec(`
+INSERT INTO manifests(version_id, path) VALUES(?, ?)
+ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
+		versionID, manifestPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RecordManifest records a manifest path for a version id.
+func (s *Store) RecordManifest(ctx context.Context, versionID, manifestPath string) error {
+	if versionID == "" || manifestPath == "" {
+		return errors.New("meta: version id and manifest path required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO manifests(version_id, path) VALUES(?, ?)
+ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`, versionID, manifestPath)
+	return err
+}
+
 // MarkDamaged sets version state to DAMAGED.
 func (s *Store) MarkDamaged(ctx context.Context, versionID string) error {
 	if versionID == "" {
@@ -551,9 +579,25 @@ WHERE upload_id=?`, uploadID)
 
 // AbortMultipartUpload marks an upload as aborted.
 func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error {
-	_, err := s.db.ExecContext(ctx, `
-UPDATE multipart_uploads SET state='ABORTED' WHERE upload_id=?`, uploadID)
-	return err
+	if uploadID == "" {
+		return errors.New("meta: upload id required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_uploads WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CompleteMultipartUpload marks an upload as completed and clears its parts.
@@ -619,6 +663,96 @@ ORDER BY part_number`, uploadID)
 			return nil, err
 		}
 		out = append(out, part)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListMultipartUploadsBefore returns active uploads created before cutoff.
+func (s *Store) ListMultipartUploadsBefore(ctx context.Context, cutoff time.Time) (out []MultipartUpload, err error) {
+	ts := cutoff.UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state
+FROM multipart_uploads
+WHERE state='ACTIVE' AND created_at < ?
+ORDER BY created_at`, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		var up MultipartUpload
+		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+			return nil, err
+		}
+		out = append(out, up)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteMultipartUpload removes an upload and its parts.
+func (s *Store) DeleteMultipartUpload(ctx context.Context, uploadID string) (int, int64, error) {
+	if uploadID == "" {
+		return 0, 0, errors.New("meta: upload id required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var partsCount int
+	var totalBytes int64
+	row := tx.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(SUM(size),0) FROM multipart_parts WHERE upload_id=?", uploadID)
+	if err = row.Scan(&partsCount, &totalBytes); err != nil {
+		return 0, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
+		return 0, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_uploads WHERE upload_id=?", uploadID); err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return partsCount, totalBytes, nil
+}
+
+// ListMultipartPartManifestPaths returns manifest paths for active multipart parts.
+func (s *Store) ListMultipartPartManifestPaths(ctx context.Context) (out []string, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT m.path
+FROM multipart_parts p
+JOIN multipart_uploads u ON u.upload_id = p.upload_id
+JOIN manifests m ON m.version_id = p.version_id
+WHERE u.state='ACTIVE'`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

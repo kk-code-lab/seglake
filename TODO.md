@@ -4,8 +4,6 @@
 - Lepsze błędy AWS (pełniejsze pola, mapowania kodów).
 
 ## 2) Multipart — bezpieczeństwo danych
-- TTL/cleanup uploadów (GC dla multipartów).
-- GC-aware multipart (części traktowane jako live lub blokada GC).
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 
 ## 3) Storage / durability
@@ -32,3 +30,5 @@
 - CopyObject.
 - If-Match / If-None-Match.
 - Virtual-hosted-style (za flagą).
+- Multipart cleanup TTL (mpu-gc plan/run).
+- GC-aware multipart (części traktowane jako live).

@@ -11,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -62,6 +62,18 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		if err == nil {
 			report, err = ops.GCRewriteFromPlan(layout, metaPath, plan, gcForce, gcRewriteBps, gcPauseFile)
 		}
+	case "mpu-gc-plan":
+		var uploads []meta.MultipartUpload
+		report, uploads, err = ops.MPUGCPlan(metaPath, mpuTTL)
+		if err == nil {
+			report.Candidates = len(uploads)
+			report.CandidateIDs = nil
+			for _, up := range uploads {
+				report.CandidateIDs = append(report.CandidateIDs, up.UploadID)
+			}
+		}
+	case "mpu-gc-run":
+		report, err = ops.MPUGCRun(metaPath, mpuTTL, mpuForce)
 	case "support-bundle":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
@@ -135,6 +147,12 @@ func printModeHelp(mode string) {
 	case "gc-rewrite-run":
 		fmt.Println("Mode gc-rewrite-run: executes rewrite from plan.")
 		fmt.Println("Flags: -gc-rewrite-from-plan, -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
+	case "mpu-gc-plan":
+		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
+		fmt.Println("Flags: -mpu-ttl (default 7d).")
+	case "mpu-gc-run":
+		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
+		fmt.Println("Flags: -mpu-ttl, -mpu-force (required).")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 		fmt.Println("Flags: -snapshot-dir (output directory).")

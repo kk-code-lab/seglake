@@ -159,6 +159,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `support-bundle` — snapshot + fsck + scrub.
 - `gc-plan`/`gc-run` — usuwa segmenty w 100% martwe.
 - `gc-rewrite-plan`/`gc-rewrite-run` — rewrite segmentów częściowo martwych (throttle + pause file).
+- `mpu-gc-plan`/`mpu-gc-run` — czyszczenie starych multipart uploadów (TTL).
+  - GC segmentów uwzględnia części multipart jako live.
 
 ### 5.2 Stats API
 `GET /v1/meta/stats` (JSON):
@@ -187,10 +189,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
  - Brak wersjonowania po API.
 - Brak ACL/IAM/polityk, brak per-key limitów i rate-limitów.
 - Brak TLS w aplikacji (zakładany reverse proxy).
-- Brak virtual-hosted-style.
-- Brak If-Match/If-None-Match i pozostałych warunkowych operacji.
-- Brak multipart cleanup TTL; ListMultipartUploads bez markerów/paginacji.
-- GC nie uwzględnia aktywnych multipartów — **nie uruchamiać GC podczas aktywnych uploadów**.
+- Virtual-hosted-style dostępny tylko za flagą.
+- Brak pełnej paginacji ListMultipartUploads (brak markerów).
 - Stopka segmentu nie zawiera jeszcze realnego bloom/index (pola są placeholderami).
 - Brak replikacji / multi-site / oplogu / HLC.
 
