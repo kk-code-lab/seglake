@@ -60,6 +60,48 @@ func (l *AuthLimiter) Cleanup() {
 	l.perKey.cleanup(cutoff)
 }
 
+// InflightLimiter tracks concurrent requests per access key.
+type InflightLimiter struct {
+	mu     sync.Mutex
+	limit  int64
+	counts map[string]int64
+}
+
+// NewInflightLimiter creates a limiter with a fixed per-key limit.
+func NewInflightLimiter(limit int64) *InflightLimiter {
+	if limit <= 0 {
+		limit = 32
+	}
+	return &InflightLimiter{
+		limit:  limit,
+		counts: make(map[string]int64),
+	}
+}
+
+func (l *InflightLimiter) Acquire(key string) bool {
+	if l == nil || key == "" {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts[key] >= l.limit {
+		return false
+	}
+	l.counts[key]++
+	return true
+}
+
+func (l *InflightLimiter) Release(key string) {
+	if l == nil || key == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts[key] > 0 {
+		l.counts[key]--
+	}
+}
+
 func clientIP(remoteAddr string) string {
 	if remoteAddr == "" {
 		return ""

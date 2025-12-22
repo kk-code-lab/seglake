@@ -37,3 +37,18 @@ func TestExtractAccessKey(t *testing.T) {
 		t.Fatalf("expected access key, got %q", got)
 	}
 }
+
+func TestInflightLimiter(t *testing.T) {
+	limiter := NewInflightLimiter(1)
+	key := "test"
+	if !limiter.Acquire(key) {
+		t.Fatalf("expected acquire")
+	}
+	if limiter.Acquire(key) {
+		t.Fatalf("expected second acquire to fail")
+	}
+	limiter.Release(key)
+	if !limiter.Acquire(key) {
+		t.Fatalf("expected acquire after release")
+	}
+}

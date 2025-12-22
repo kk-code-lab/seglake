@@ -24,6 +24,8 @@ type Handler struct {
 	Metrics *Metrics
 	// AuthLimiter rate-limits failed auth attempts.
 	AuthLimiter *AuthLimiter
+	// InflightLimiter limits concurrent requests per access key.
+	InflightLimiter *InflightLimiter
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
 }
@@ -36,6 +38,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
 	start := time.Now()
+	accessKey := extractAccessKey(r)
+	requestID, ok := h.prepareRequest(mw, r)
+	if !ok {
+		return
+	}
+	if h.InflightLimiter != nil && accessKey != "" {
+		if !h.InflightLimiter.Acquire(accessKey) {
+			writeErrorWithResource(mw, http.StatusServiceUnavailable, "SlowDown", "too many inflight requests", requestID, r.URL.Path)
+			return
+		}
+		defer h.InflightLimiter.Release(accessKey)
+	}
 	if h.Metrics != nil {
 		h.Metrics.InflightInc(op)
 		defer h.Metrics.InflightDec(op)
@@ -47,11 +61,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Metrics.Record(op, mw.status, time.Since(start))
 		}
 	}()
-
-	requestID, ok := h.prepareRequest(mw, r)
-	if !ok {
-		return
-	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
 		h.handleStats(r.Context(), mw, requestID, r.URL.Path)
 		return
