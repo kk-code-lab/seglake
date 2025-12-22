@@ -36,6 +36,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - PUT/GET/HEAD obiektu, ListObjectsV2, ListObjectsV1, ListBuckets, GetBucketLocation.
 - Range GET: pojedynczy i multi-range (multipart/byteranges).
 - SigV4 (Authorization oraz presigned) + fallback SigV2 **tylko** dla listowania.
+- Uwaga: SigV2 fallback jest celowym kompromisem dla legacy klientów; nie jest objęty politykami/allowlistami i może być wyłączony w przyszłości.
 - Presigned GET/PUT (TTL do 7 dni).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 

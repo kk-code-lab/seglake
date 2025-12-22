@@ -276,6 +276,7 @@ func isWriteRequest(r *http.Request) bool {
 }
 
 func (h *Handler) isSigV2ListRequest(r *http.Request) bool {
+	// Legacy compatibility: SigV2 is accepted only for list operations and bypasses policy checks.
 	if r.Method != http.MethodGet {
 		return false
 	}
