@@ -54,7 +54,7 @@ func main() {
 	mpuWarnReclaim := flag.Int64("mpu-warn-reclaim-bytes", 10<<30, "MPU GC warn when candidate bytes exceed this count (0 disables)")
 	mpuMaxUploads := flag.Int("mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	mpuMaxReclaim := flag.Int64("mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
-	keysAction := flag.String("keys-action", "list", "Keys action: list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete")
+	keysAction := flag.String("keys-action", "list", "Keys action: list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy")
 	keyAccess := flag.String("key-access", "", "API access key for keys-action")
 	keySecret := flag.String("key-secret", "", "API secret key for keys-action")
 	keyPolicy := flag.String("key-policy", "rw", "API key policy: rw|ro|read-only")
