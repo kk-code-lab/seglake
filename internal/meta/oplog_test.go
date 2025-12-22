@@ -356,6 +356,179 @@ func TestRecordMPUCompleteWritesOplog(t *testing.T) {
 	}
 }
 
+func TestRecordAPIKeyWritesOplog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.UpsertAPIKey(context.Background(), "access-1", "secret-1", "ro", true, 12); err != nil {
+		t.Fatalf("UpsertAPIKey: %v", err)
+	}
+	entries, err := store.ListOplog(context.Background())
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].OpType != "api_key" || entries[0].Bucket != metaOplogBucket || entries[0].Key != "access-1" {
+		t.Fatalf("unexpected entry: %+v", entries[0])
+	}
+	var payload oplogAPIKeyPayload
+	if err := json.Unmarshal([]byte(entries[0].Payload), &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if payload.AccessKey != "access-1" || payload.SecretKey != "secret-1" || payload.Policy != "ro" || payload.InflightLimit != 12 || !payload.Enabled {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestApplyOplogAPIKeyAndAllowlist(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	keyPayload, err := json.Marshal(oplogAPIKeyPayload{
+		AccessKey:     "access-1",
+		SecretKey:     "secret-1",
+		Enabled:       true,
+		Policy:        "rw",
+		InflightLimit: 5,
+		UpdatedAt:     "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	allowPayload, err := json.Marshal(oplogAPIKeyBucketPayload{
+		AccessKey: "access-1",
+		Bucket:    "demo",
+		Allowed:   true,
+		UpdatedAt: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	denyPayload, err := json.Marshal(oplogAPIKeyBucketPayload{
+		AccessKey: "access-1",
+		Bucket:    "demo",
+		Allowed:   false,
+		UpdatedAt: "2025-12-22T12:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	entries := []OplogEntry{
+		{
+			SiteID:  "site-a",
+			HLCTS:   "0000000000000000100-0000000001",
+			OpType:  "api_key",
+			Bucket:  metaOplogBucket,
+			Key:     "access-1",
+			Payload: string(keyPayload),
+		},
+		{
+			SiteID:  "site-a",
+			HLCTS:   "0000000000000000101-0000000001",
+			OpType:  "api_key_bucket",
+			Bucket:  metaOplogBucket,
+			Key:     "access-1",
+			Payload: string(allowPayload),
+		},
+		{
+			SiteID:  "site-a",
+			HLCTS:   "0000000000000000102-0000000001",
+			OpType:  "api_key_bucket",
+			Bucket:  metaOplogBucket,
+			Key:     "access-1",
+			Payload: string(denyPayload),
+		},
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), entries); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	key, err := store.GetAPIKey(context.Background(), "access-1")
+	if err != nil {
+		t.Fatalf("GetAPIKey: %v", err)
+	}
+	if key.SecretKey != "secret-1" || !key.Enabled || key.Policy != "rw" || key.InflightLimit != 5 {
+		t.Fatalf("unexpected key: %+v", key)
+	}
+	allowed, err := store.IsBucketAllowed(context.Background(), "access-1", "demo")
+	if err != nil {
+		t.Fatalf("IsBucketAllowed: %v", err)
+	}
+	if !allowed {
+		t.Fatalf("expected demo to be allowed after deny removed the allowlist entry")
+	}
+	buckets, err := store.ListAllowedBuckets(context.Background(), "access-1")
+	if err != nil {
+		t.Fatalf("ListAllowedBuckets: %v", err)
+	}
+	if len(buckets) != 0 {
+		t.Fatalf("expected allowlist to be empty, got %v", buckets)
+	}
+}
+
+func TestApplyOplogBucketPolicy(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	policyPayload, err := json.Marshal(oplogBucketPolicyPayload{
+		Bucket:    "demo",
+		Policy:    "{\"Version\":\"2012-10-17\"}",
+		UpdatedAt: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	entries := []OplogEntry{
+		{
+			SiteID:  "site-a",
+			HLCTS:   "0000000000000000200-0000000001",
+			OpType:  "bucket_policy",
+			Bucket:  "demo",
+			Key:     "demo",
+			Payload: string(policyPayload),
+		},
+		{
+			SiteID: "site-a",
+			HLCTS:  "0000000000000000201-0000000001",
+			OpType: "bucket_policy_delete",
+			Bucket: "demo",
+			Key:    "demo",
+		},
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), entries[:1]); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	policy, err := store.GetBucketPolicy(context.Background(), "demo")
+	if err != nil {
+		t.Fatalf("GetBucketPolicy: %v", err)
+	}
+	if policy != "{\"Version\":\"2012-10-17\"}" {
+		t.Fatalf("unexpected policy: %s", policy)
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), entries[1:]); err != nil {
+		t.Fatalf("ApplyOplogEntries delete: %v", err)
+	}
+	if _, err := store.GetBucketPolicy(context.Background(), "demo"); err == nil {
+		t.Fatalf("expected policy to be deleted")
+	}
+}
+
 func TestApplyOplogPutVsPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
