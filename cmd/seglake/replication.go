@@ -46,6 +46,67 @@ type replOplogApplyResponse struct {
 	MissingChunks    []replMissingChunk `json:"missing_chunks,omitempty"`
 }
 
+func runReplPush(remote, since string, limit int, accessKey, secretKey, region string, store *meta.Store) error {
+	if store == nil {
+		return errors.New("replication: store required")
+	}
+	if remote == "" {
+		return errors.New("replication: -repl-remote required")
+	}
+	base, err := url.Parse(remote)
+	if err != nil {
+		return err
+	}
+	if base.Scheme == "" {
+		base.Scheme = "http"
+	}
+	if base.Host == "" && base.Path != "" && !strings.Contains(base.Path, "/") {
+		base.Host = base.Path
+		base.Path = ""
+	}
+	client := &replClient{
+		base: base,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+	if accessKey != "" && secretKey != "" {
+		if region == "" {
+			region = "us-east-1"
+		}
+		client.signer = &s3.AuthConfig{
+			AccessKey: accessKey,
+			SecretKey: secretKey,
+			Region:    region,
+		}
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	ctx := context.Background()
+	if since == "" {
+		if hlc, err := store.GetReplWatermark(ctx); err == nil && hlc != "" {
+			since = hlc
+		}
+	}
+	entries, err := store.ListOplogSince(ctx, since, limit)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("repl: no local oplog entries to push")
+		return nil
+	}
+	resp, err := client.applyOplog(entries)
+	if err != nil {
+		return err
+	}
+	lastHLC := entries[len(entries)-1].HLCTS
+	_ = store.SetReplWatermark(ctx, lastHLC)
+	fmt.Printf("repl: pushed=%d applied=%d last_hlc=%s\n", len(entries), resp.Applied, lastHLC)
+	return nil
+}
+
 func runReplPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
 	if eng == nil {
 		return errors.New("replication: engine required")
