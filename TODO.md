@@ -8,7 +8,6 @@
 
 ## 3) Storage / durability
 - Realny bloom + sparse index w footerze segmentu.
-- Więcej testów crash-consistency (kill -9 + invariants).
 - Dodatkowe testy E2E durability (fsync / WAL semantics).
 
 ## 4) Ops / observability
@@ -32,3 +31,4 @@
 - Virtual-hosted-style (za flagą).
 - Multipart cleanup TTL (mpu-gc plan/run).
 - GC-aware multipart (części traktowane jako live).
+- Crash-consistency harness jako test opcjonalny (SEGLAKE_CRASH_TEST).
