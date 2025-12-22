@@ -29,6 +29,17 @@ server {
 }
 ```
 
+## Native TLS (optional)
+
+Seglake can serve HTTPS directly:
+```
+./build/seglake -tls -tls-cert certs/localhost.crt -tls-key certs/localhost.key
+```
+
+Notes:
+- Self-signed certs require `--no-verify-ssl` or equivalent in clients.
+- Certificates are hot-reloaded when the cert/key files change.
+
 ## awscli examples (SigV4)
 
 List buckets:
