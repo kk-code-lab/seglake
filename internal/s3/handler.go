@@ -18,106 +18,126 @@ import (
 
 // Handler implements a minimal path-style S3 API (PUT/GET/HEAD).
 type Handler struct {
-	Engine *engine.Engine
-	Meta   *meta.Store
-	Auth   *AuthConfig
+	Engine  *engine.Engine
+	Meta    *meta.Store
+	Auth    *AuthConfig
+	Metrics *Metrics
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	requestID, ok := h.prepareRequest(w, r)
+	op := h.opForRequest(r)
+	bytesIn := int64(0)
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = &countingReadCloser{reader: r.Body, counter: &bytesIn}
+	}
+	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
+	start := time.Now()
+	if h.Metrics != nil {
+		h.Metrics.InflightInc(op)
+		defer h.Metrics.InflightDec(op)
+	}
+	defer func() {
+		if h.Metrics != nil {
+			h.Metrics.AddBytesIn(bytesIn)
+			h.Metrics.AddBytesOut(mw.bytes)
+			h.Metrics.Record(op, mw.status, time.Since(start))
+		}
+	}()
+
+	requestID, ok := h.prepareRequest(mw, r)
 	if !ok {
 		return
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
-		h.handleStats(r.Context(), w, requestID, r.URL.Path)
+		h.handleStats(r.Context(), mw, requestID, r.URL.Path)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
-		h.handleListBuckets(r.Context(), w, requestID)
+		h.handleListBuckets(r.Context(), mw, requestID)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
+			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
 			return
 		}
-		h.handleListV2(r.Context(), w, r, bucket, requestID)
+		h.handleListV2(r.Context(), mw, r, bucket, requestID)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			writeError(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
 			return
 		}
 		_ = bucket
-		h.handleLocation(w, requestID)
+		h.handleLocation(mw, requestID)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
+			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
 			return
 		}
-		h.handleListMultipartUploads(r.Context(), w, r, bucket, requestID)
+		h.handleListMultipartUploads(r.Context(), mw, r, bucket, requestID)
 		return
 	}
 	bucket, key, ok := h.parseBucketKey(r)
 	if !ok {
 		if r.Method == http.MethodGet {
 			if bucketOnly, ok := h.parseBucketOnly(r); ok {
-				h.handleListV1(r.Context(), w, r, bucketOnly, requestID)
+				h.handleListV1(r.Context(), mw, r, bucketOnly, requestID)
 				return
 			}
 		}
 		if r.Method == http.MethodDelete {
 			if bucketOnly, ok := h.parseBucketOnly(r); ok {
-				h.handleDeleteBucket(r.Context(), w, bucketOnly, requestID, r.URL.Path)
+				h.handleDeleteBucket(r.Context(), mw, bucketOnly, requestID, r.URL.Path)
 				return
 			}
 		}
-		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID, r.URL.Path)
+		writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID, r.URL.Path)
 		return
 	}
 	switch r.Method {
 	case http.MethodPut:
 		if copySource := r.Header.Get("X-Amz-Copy-Source"); copySource != "" {
-			h.handleCopyObject(r.Context(), w, r, bucket, key, copySource, requestID)
+			h.handleCopyObject(r.Context(), mw, r, bucket, key, copySource, requestID)
 			return
 		}
 		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
-			h.handleUploadPart(r.Context(), w, r, bucket, key, uploadID, requestID)
+			h.handleUploadPart(r.Context(), mw, r, bucket, key, uploadID, requestID)
 			return
 		}
-		h.handlePut(r.Context(), w, r, bucket, key, requestID)
+		h.handlePut(r.Context(), mw, r, bucket, key, requestID)
 	case http.MethodGet:
 		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
-			h.handleListParts(r.Context(), w, r, bucket, key, uploadID, requestID)
+			h.handleListParts(r.Context(), mw, r, bucket, key, uploadID, requestID)
 			return
 		}
-		h.handleGet(r.Context(), w, r, bucket, key, requestID, false)
+		h.handleGet(r.Context(), mw, r, bucket, key, requestID, false)
 	case http.MethodHead:
-		h.handleGet(r.Context(), w, r, bucket, key, requestID, true)
+		h.handleGet(r.Context(), mw, r, bucket, key, requestID, true)
 	case http.MethodDelete:
-		h.handleDeleteObject(r.Context(), w, bucket, key, requestID, r.URL.Path)
+		h.handleDeleteObject(r.Context(), mw, bucket, key, requestID, r.URL.Path)
 	default:
 		if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
-			h.handleInitiateMultipart(r.Context(), w, bucket, key, requestID)
+			h.handleInitiateMultipart(r.Context(), mw, bucket, key, requestID)
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" {
-			h.handleCompleteMultipart(r.Context(), w, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
+			h.handleCompleteMultipart(r.Context(), mw, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
 			return
 		}
 		if r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != "" {
-			h.handleAbortMultipart(r.Context(), w, r.URL.Query().Get("uploadId"), requestID)
+			h.handleAbortMultipart(r.Context(), mw, r.URL.Query().Get("uploadId"), requestID)
 			return
 		}
-		writeErrorWithResource(w, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID, r.URL.Path)
+		writeErrorWithResource(mw, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID, r.URL.Path)
 	}
 }
 
@@ -492,6 +512,97 @@ func (h *Handler) bucketFromRequest(r *http.Request) (string, bool) {
 		return bucket, true
 	}
 	return "", false
+}
+
+func (h *Handler) opForRequest(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
+		return "meta_stats"
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
+		return "list_buckets"
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+		return "list_v2"
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
+		return "mpu_list_uploads"
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
+		return "mpu_initiate"
+	}
+	if r.Method == http.MethodPut && r.URL.Query().Get("uploadId") != "" {
+		return "mpu_upload_part"
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Get("uploadId") != "" {
+		return "mpu_list_parts"
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" {
+		return "mpu_complete"
+	}
+	if r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != "" {
+		return "mpu_abort"
+	}
+	if r.Method == http.MethodPut && r.Header.Get("X-Amz-Copy-Source") != "" {
+		return "copy"
+	}
+	if r.Method == http.MethodGet {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			return "list_v1"
+		}
+		return "get"
+	}
+	if r.Method == http.MethodHead {
+		return "head"
+	}
+	if r.Method == http.MethodPut {
+		return "put"
+	}
+	if r.Method == http.MethodDelete {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			return "delete_bucket"
+		}
+		return "delete"
+	}
+	return "other"
+}
+
+type metricsWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (w *metricsWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *metricsWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += int64(n)
+	return n, err
+}
+
+type countingReadCloser struct {
+	reader  io.ReadCloser
+	counter *int64
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.reader.Read(p)
+	if n > 0 {
+		*c.counter += int64(n)
+	}
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	return c.reader.Close()
 }
 
 func parseCopySource(raw string) (bucket, key string, ok bool) {

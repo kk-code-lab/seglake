@@ -19,7 +19,7 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	if metaPath == "" {
 		return nil, errors.New("ops: meta path required")
 	}
-	report := &Report{Mode: "rebuild-index", StartedAt: time.Now().UTC()}
+	report := newReport("rebuild-index")
 	manifests, err := listFiles(layout.ManifestsDir)
 	if err != nil {
 		return nil, err

@@ -37,7 +37,7 @@ func GCRewritePlanBuild(layout fs.Layout, metaPath string, minAge time.Duration,
 	if liveThreshold <= 0 || liveThreshold > 1 {
 		return nil, nil, errors.New("gc: live threshold must be (0,1]")
 	}
-	report := &Report{Mode: "gc-rewrite-plan", StartedAt: time.Now().UTC()}
+	report := newReport("gc-rewrite-plan")
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		return nil, nil, err
@@ -163,7 +163,8 @@ func GCRewriteFromPlan(layout fs.Layout, metaPath string, plan *GCRewritePlan, f
 	if plan == nil {
 		return nil, errors.New("gc: plan required")
 	}
-	report := &Report{Mode: "gc-rewrite", StartedAt: time.Now().UTC(), Candidates: len(plan.Candidates)}
+	report := newReport("gc-rewrite")
+	report.Candidates = len(plan.Candidates)
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ import (
 
 // Report summarizes an ops run.
 type Report struct {
+	SchemaVersion     int       `json:"schema_version"`
 	StartedAt         time.Time `json:"started_at"`
 	FinishedAt        time.Time `json:"finished_at"`
 	Mode              string    `json:"mode"`
@@ -40,9 +41,19 @@ type Report struct {
 	MissingSegmentIDs []string  `json:"missing_segment_ids,omitempty"`
 }
 
+const reportSchemaVersion = 1
+
+func newReport(mode string) *Report {
+	return &Report{
+		SchemaVersion: reportSchemaVersion,
+		Mode:          mode,
+		StartedAt:     time.Now().UTC(),
+	}
+}
+
 // Status collects basic counts about storage state.
 func Status(layout fs.Layout) (*Report, error) {
-	report := &Report{Mode: "status", StartedAt: time.Now().UTC()}
+	report := newReport("status")
 	manifests, err := listFiles(layout.ManifestsDir)
 	if err != nil {
 		return nil, err
@@ -59,7 +70,7 @@ func Status(layout fs.Layout) (*Report, error) {
 
 // Fsck validates manifests and segment boundaries.
 func Fsck(layout fs.Layout) (*Report, error) {
-	report := &Report{Mode: "fsck", StartedAt: time.Now().UTC()}
+	report := newReport("fsck")
 	manifests, err := listFiles(layout.ManifestsDir)
 	if err != nil {
 		return nil, err
@@ -162,7 +173,7 @@ func Fsck(layout fs.Layout) (*Report, error) {
 
 // Scrub verifies chunk hashes against stored data.
 func Scrub(layout fs.Layout, metaPath string) (*Report, error) {
-	report := &Report{Mode: "scrub", StartedAt: time.Now().UTC()}
+	report := newReport("scrub")
 	manifests, err := listFiles(layout.ManifestsDir)
 	if err != nil {
 		return nil, err
@@ -236,7 +247,7 @@ func Snapshot(layout fs.Layout, metaPath string, outDir string) (*Report, error)
 	if outDir == "" {
 		return nil, errors.New("ops: snapshot output dir required")
 	}
-	report := &Report{Mode: "snapshot", StartedAt: time.Now().UTC()}
+	report := newReport("snapshot")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -267,7 +278,7 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 	if outDir == "" {
 		return nil, errors.New("ops: support bundle output dir required")
 	}
-	report := &Report{Mode: "support-bundle", StartedAt: time.Now().UTC()}
+	report := newReport("support-bundle")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -283,7 +294,7 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 
 // GCPlan computes which sealed segments can be removed.
 func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, []meta.Segment, error) {
-	report := &Report{Mode: "gc-plan", StartedAt: time.Now().UTC()}
+	report := newReport("gc-plan")
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		return nil, nil, err
@@ -399,7 +410,7 @@ func MPUGCPlan(metaPath string, ttl time.Duration) (*Report, []meta.MultipartUpl
 	if ttl <= 0 {
 		return nil, nil, errors.New("mpu-gc: ttl must be > 0")
 	}
-	report := &Report{Mode: "mpu-gc-plan", StartedAt: time.Now().UTC()}
+	report := newReport("mpu-gc-plan")
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		return nil, nil, err

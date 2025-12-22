@@ -103,6 +103,7 @@ func main() {
 			Region:    *region,
 			MaxSkew:   5 * time.Minute,
 		},
+		Metrics:       s3.NewMetrics(),
 		VirtualHosted: *virtualHosted,
 	}
 	if *logRequests {

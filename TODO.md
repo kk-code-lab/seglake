@@ -9,9 +9,7 @@
 ## 3) Storage / durability
 
 ## 4) Ops / observability
-- Rozszerzyć `/v1/meta/stats`: latencje, inflight, bytes in/out.
 - Raporty trendów GC (historyka, reclaim rate).
-- Uspójnienie raportów ops w JSON (np. schemat i versioning).
 
 ## 5) Security / auth
 - Rate-limiting auth failures (per IP/per key).
@@ -32,3 +30,5 @@
 - Crash-consistency harness jako test opcjonalny (tag crashharness).
 - Bloom + sparse index w footerze segmentu.
 - E2E durability test (tag durability).
+- `/v1/meta/stats` z ruchem i latencjami.
+- Uspójnione raporty ops JSON (schema_version).
