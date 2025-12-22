@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
@@ -260,8 +261,9 @@ func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 
 func TestPolicyConditionsSourceIPEnforced(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"source_ip":["10.0.0.0/8"]}}]}`
-	server, _, cleanup := newPolicyServer(t, policy)
+	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
+	handler.TrustedProxies = []string{"127.0.0.1/32"}
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
 	if err != nil {
@@ -291,5 +293,55 @@ func TestPolicyConditionsSourceIPEnforced(t *testing.T) {
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("list objects status: %d", resp2.StatusCode)
+	}
+}
+
+func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"after":"1970-01-01T00:00:00Z","before":"2999-01-01T00:00:00Z"}}]}`
+	if pol, err := ParsePolicy(policy); err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	} else if allowed, _ := pol.DecisionWithContext("GetObject", "demo", "public/ok", &PolicyContext{Now: time.Now().UTC()}); !allowed {
+		t.Fatalf("expected policy to allow in time window")
+	}
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+
+	policy2 := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"before":"1970-01-01T00:00:00Z"}}]}`
+	server2, handler2, cleanup2 := newPolicyServer(t, policy2)
+	defer cleanup2()
+
+	if _, _, err := handler2.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+	req2, err := http.NewRequest(http.MethodGet, server2.URL+"/demo/public/ok", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req2, "ak", "sk", "us-east-1")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET status: %d", resp2.StatusCode)
 	}
 }
