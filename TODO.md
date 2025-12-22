@@ -38,9 +38,8 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Otwarte: garbage/lease dla segmentów podczas replay.
 
 ### Faza 3 — bootstrap i recovery
-- Snapshot + oplog replay: nowy węzeł pobiera snapshot, potem dogrywa oplog.
-- Rebuild-index z uwzględnieniem `oplog` i HLC (deterministyczne odtwarzanie).
-- Narzędzia ops: `repl-status`, `repl-pull`, `repl-push`, `repl-bootstrap`.
+- Zrobione: snapshot + oplog replay (`repl-bootstrap`), `repl-pull`, `repl-push`.
+- Otwarte: rebuild-index z uwzględnieniem `oplog` i HLC (deterministyczne odtwarzanie).
 
 ### Faza 4 — spójność i edge-case
 - Konflikty LWW: PUT vs DELETE, PUT vs PUT, MPU complete vs DELETE.
