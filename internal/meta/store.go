@@ -1359,6 +1359,50 @@ ORDER BY remote`)
 	})
 }
 
+// GetReplRemotePullWatermark returns pull watermark for a remote.
+func (s *Store) GetReplRemotePullWatermark(ctx context.Context, remote string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("meta: db not initialized")
+	}
+	if remote == "" {
+		return "", errors.New("meta: remote required")
+	}
+	var hlc string
+	err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(last_pull_hlc,'')
+FROM repl_state_remote
+WHERE remote=?`, remote).Scan(&hlc)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hlc, nil
+}
+
+// GetReplRemotePushWatermark returns push watermark for a remote.
+func (s *Store) GetReplRemotePushWatermark(ctx context.Context, remote string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("meta: db not initialized")
+	}
+	if remote == "" {
+		return "", errors.New("meta: remote required")
+	}
+	var hlc string
+	err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(last_push_hlc,'')
+FROM repl_state_remote
+WHERE remote=?`, remote).Scan(&hlc)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hlc, nil
+}
+
 // SetReplRemotePullWatermark stores replication pull watermark for a remote.
 func (s *Store) SetReplRemotePullWatermark(ctx context.Context, remote, hlc string) error {
 	if s == nil || s.db == nil {

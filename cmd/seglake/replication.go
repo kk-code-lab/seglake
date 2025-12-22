@@ -70,6 +70,7 @@ func runReplPush(remote, since string, limit int, watch bool, interval, backoffM
 			Timeout: 30 * time.Second,
 		},
 	}
+	remoteKey := replRemoteKey(base)
 	if accessKey != "" && secretKey != "" {
 		if region == "" {
 			region = "us-east-1"
@@ -85,7 +86,7 @@ func runReplPush(remote, since string, limit int, watch bool, interval, backoffM
 	}
 	ctx := context.Background()
 	if since == "" {
-		if hlc, err := store.GetReplPushWatermark(ctx); err == nil && hlc != "" {
+		if hlc, err := store.GetReplRemotePushWatermark(ctx, remoteKey); err == nil && hlc != "" {
 			since = hlc
 		}
 	}
@@ -147,6 +148,7 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 			Timeout: 30 * time.Second,
 		},
 	}
+	remoteKey := replRemoteKey(base)
 	if accessKey != "" && secretKey != "" {
 		if region == "" {
 			region = "us-east-1"
@@ -162,7 +164,7 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 	}
 	ctx := context.Background()
 	if since == "" && store != nil {
-		if hlc, err := store.GetReplWatermark(ctx); err == nil && hlc != "" {
+		if hlc, err := store.GetReplRemotePullWatermark(ctx, remoteKey); err == nil && hlc != "" {
 			since = hlc
 		}
 	}
@@ -191,7 +193,7 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 		if lastHLC != "" {
 			since = lastHLC
 			if store != nil {
-				_ = store.SetReplWatermark(ctx, lastHLC)
+				_ = store.SetReplRemotePullWatermark(ctx, remoteKey, lastHLC)
 			}
 		}
 		if !watch {
@@ -289,9 +291,27 @@ func runReplPushOnce(ctx context.Context, client *replClient, store *meta.Store,
 		return "", 0, 0, err
 	}
 	lastHLC := entries[len(entries)-1].HLCTS
-	_ = store.SetReplPushWatermark(ctx, lastHLC)
+	_ = store.SetReplRemotePushWatermark(ctx, replRemoteKey(client.base), lastHLC)
 	fmt.Printf("repl: pushed=%d applied=%d last_hlc=%s\n", len(entries), resp.Applied, lastHLC)
 	return lastHLC, len(entries), resp.Applied, nil
+}
+
+func replRemoteKey(base *url.URL) string {
+	if base == nil {
+		return ""
+	}
+	host := base.Host
+	if host == "" && base.Path != "" && !strings.Contains(base.Path, "/") {
+		host = base.Path
+	}
+	if host == "" {
+		return base.String()
+	}
+	scheme := base.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	return scheme + "://" + host
 }
 
 func (c *replClient) getOplog(since string, limit int) (*replOplogResponse, error) {
