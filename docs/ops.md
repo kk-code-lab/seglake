@@ -197,6 +197,26 @@ Example with source IP + header condition:
 }
 ```
 
+Example with time window:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["GetObject"],
+      "resources": [
+        { "bucket": "demo" }
+      ],
+      "conditions": {
+        "after": "2025-01-01T00:00:00Z",
+        "before": "2026-01-01T00:00:00Z"
+      }
+    }
+  ]
+}
+```
+
 Proxy note:
 - `X-Forwarded-For` is only trusted when the client IP matches `-trusted-proxies` CIDR list.
 

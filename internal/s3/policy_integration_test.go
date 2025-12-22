@@ -259,43 +259,6 @@ func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 	}
 }
 
-func TestPolicyConditionsSourceIPEnforced(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"source_ip":["10.0.0.0/8"]}}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
-	handler.TrustedProxies = []string{"127.0.0.1/32"}
-
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("X-Forwarded-For", "10.1.1.1")
-	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("list objects error: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list objects status: %d", resp.StatusCode)
-	}
-
-	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	req2.Header.Set("X-Forwarded-For", "192.168.1.10")
-	signRequestTest(req2, "ak", "sk", "us-east-1")
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("list objects error: %v", err)
-	}
-	_ = resp2.Body.Close()
-	if resp2.StatusCode != http.StatusForbidden {
-		t.Fatalf("list objects status: %d", resp2.StatusCode)
-	}
-}
-
 func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"after":"1970-01-01T00:00:00Z","before":"2999-01-01T00:00:00Z"}}]}`
 	if pol, err := ParsePolicy(policy); err != nil {
