@@ -370,6 +370,7 @@ func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool) 
 	if err != nil {
 		return nil, err
 	}
+	report.Mode = "gc-run"
 	store, err := meta.Open(metaPath)
 	if err != nil {
 		return nil, err

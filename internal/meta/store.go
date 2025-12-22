@@ -934,6 +934,18 @@ type Stats struct {
 	LastGCNewSegments int    `json:"last_gc_new_segments,omitempty"`
 }
 
+// GCTrend captures recent GC outcomes for trend reporting.
+type GCTrend struct {
+	Mode           string  `json:"mode"`
+	FinishedAt     string  `json:"finished_at"`
+	Errors         int     `json:"errors"`
+	Deleted        int     `json:"deleted,omitempty"`
+	ReclaimedBytes int64   `json:"reclaimed_bytes,omitempty"`
+	RewrittenBytes int64   `json:"rewritten_bytes,omitempty"`
+	NewSegments    int     `json:"new_segments,omitempty"`
+	ReclaimRate    float64 `json:"reclaim_rate,omitempty"`
+}
+
 // GetStats returns aggregate counts.
 func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 	stats := &Stats{}
@@ -965,6 +977,37 @@ WHERE mode LIKE 'gc-%' AND mode NOT LIKE 'gc-plan%'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastGCAt, &stats.LastGCErrors, &stats.LastGCReclaimed, &stats.LastGCRewritten, &stats.LastGCNewSegments)
 	return stats, nil
+}
+
+// ListGCTrends returns recent GC runs (excluding plans) in reverse chronological order.
+func (s *Store) ListGCTrends(ctx context.Context, limit int) (out []GCTrend, err error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 365 {
+		limit = 365
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT mode, finished_at, errors, COALESCE(deleted,0), COALESCE(reclaimed_bytes,0), COALESCE(rewritten_bytes,0), COALESCE(new_segments,0)
+FROM ops_runs
+WHERE mode LIKE 'gc-%' AND mode NOT LIKE 'gc-plan%' AND mode NOT LIKE 'gc-rewrite-plan%'
+ORDER BY finished_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var trend GCTrend
+		if err := scan(&trend.Mode, &trend.FinishedAt, &trend.Errors, &trend.Deleted, &trend.ReclaimedBytes, &trend.RewrittenBytes, &trend.NewSegments); err != nil {
+			return err
+		}
+		denom := trend.ReclaimedBytes + trend.RewrittenBytes
+		if denom > 0 {
+			trend.ReclaimRate = float64(trend.ReclaimedBytes) / float64(denom)
+		}
+		out = append(out, trend)
+		return nil
+	})
 }
 
 // ListLiveManifestPaths returns manifest paths for current versions.
