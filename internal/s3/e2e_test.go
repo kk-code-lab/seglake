@@ -1795,6 +1795,98 @@ func TestS3E2EListMultipartUploadsDelimiterPrefix(t *testing.T) {
 	}
 }
 
+func TestS3E2EListMultipartUploadsDelimiterMarkers(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	init := func(key string) {
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/"+key+"?uploads", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("init error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("init status: %d", resp.StatusCode)
+		}
+	}
+
+	init("logs/2024/a")
+	init("logs/file")
+	init("logs/z")
+
+	listReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket?uploads&prefix=logs/&delimiter=/&max-uploads=1", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("list error: %v", err)
+	}
+	body, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status: %d", listResp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("<IsTruncated>true</IsTruncated>")) {
+		t.Fatalf("expected truncated response")
+	}
+	nextKey := extractXMLTag(string(body), "NextKeyMarker")
+	nextUpload := extractXMLTag(string(body), "NextUploadIdMarker")
+	if nextKey == "" || nextUpload == "" {
+		t.Fatalf("missing next markers: key=%q upload=%q", nextKey, nextUpload)
+	}
+
+	listReq, err = http.NewRequest(http.MethodGet, server.URL+"/bucket?uploads&prefix=logs/&delimiter=/&max-uploads=1&key-marker="+nextKey+"&upload-id-marker="+nextUpload, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	listResp, err = http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("list error: %v", err)
+	}
+	body, _ = io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status: %d", listResp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("<Key>logs/file</Key>")) {
+		t.Fatalf("expected logs/file in second page")
+	}
+}
+
 func extractXMLTag(body, tag string) string {
 	start := "<" + tag + ">"
 	end := "</" + tag + ">"
