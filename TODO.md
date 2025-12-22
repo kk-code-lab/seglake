@@ -13,10 +13,6 @@
 
 ## 5) Security / auth
 
-## 6) Produkcyjność
-- TLS przez reverse-proxy: checklist i example config.
-- Dokumentacja integracji z awscli/s3cmd.
-
 ## Done (2025-12-22)
 - DELETE obiektu i bucketu.
 - CopyObject.
@@ -32,3 +28,4 @@
 - Rate-limiting błędów auth (per IP/per key).
 - Per-key limity inflight.
 - Redakcja sekretów w logach (query z presigned).
+- Checklist TLS i integracje awscli/s3cmd (`docs/ops.md`).

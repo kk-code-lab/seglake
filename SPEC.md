@@ -191,6 +191,9 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Multipart min part size: 5 MiB poza ostatnim.
 - Brak wymuszonego limitu rozmiaru obiektu w kodzie (praktycznie ogranicza storage).
 
+## 6.1) Ops / TLS / tooling
+- Checklist TLS i przykłady awscli/s3cmd: `docs/ops.md`.
+
 ---
 
 ## 7) Znane braki / ograniczenia (stan obecny)
