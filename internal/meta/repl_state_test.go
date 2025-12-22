@@ -62,6 +62,17 @@ func TestReplRemoteWatermark(t *testing.T) {
 	if err := store.SetReplRemotePushWatermark(context.Background(), "http://peer-a:9000", "0000000000000000011-0000000001"); err != nil {
 		t.Fatalf("SetReplRemotePushWatermark: %v", err)
 	}
+	pull, err := store.GetReplRemotePullWatermark(context.Background(), "http://peer-a:9000")
+	if err != nil {
+		t.Fatalf("GetReplRemotePullWatermark: %v", err)
+	}
+	push, err := store.GetReplRemotePushWatermark(context.Background(), "http://peer-a:9000")
+	if err != nil {
+		t.Fatalf("GetReplRemotePushWatermark: %v", err)
+	}
+	if pull == "" || push == "" {
+		t.Fatalf("expected pull/push watermarks, got pull=%q push=%q", pull, push)
+	}
 	state, err := store.GetReplRemoteState(context.Background(), "http://peer-a:9000")
 	if err != nil {
 		t.Fatalf("GetReplRemoteState: %v", err)
