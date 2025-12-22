@@ -1,7 +1,6 @@
 # TODO / Backlog (na bazie aktualnego stanu)
 
 ## 1) S3 API — luki kompatybilności
-- Lepsze błędy AWS (pełniejsze pola, mapowania kodów).
 
 ## 2) Multipart — bezpieczeństwo danych
 
@@ -29,3 +28,4 @@
 - Redakcja sekretów w logach (query z presigned).
 - Checklist TLS i integracje awscli/s3cmd (`docs/ops.md`).
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
+- Lepsze błędy AWS (mapowania kodów i domyślne komunikaty).

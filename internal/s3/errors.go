@@ -19,6 +19,16 @@ func writeError(w http.ResponseWriter, status int, code, message, requestID stri
 }
 
 func writeErrorWithResource(w http.ResponseWriter, status int, code, message, requestID, resource string) {
+	if code != "" {
+		if mapped, ok := statusByCode[code]; ok {
+			status = mapped
+		}
+		if message == "" {
+			if def, ok := defaultMessageByCode[code]; ok {
+				message = def
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
 	resp := errorResponse{
@@ -29,4 +39,42 @@ func writeErrorWithResource(w http.ResponseWriter, status int, code, message, re
 		HostID:    hostID(),
 	}
 	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+var statusByCode = map[string]int{
+	"AccessDenied":              http.StatusForbidden,
+	"BucketNotEmpty":            http.StatusConflict,
+	"InternalError":             http.StatusInternalServerError,
+	"InvalidArgument":           http.StatusBadRequest,
+	"InvalidDigest":             http.StatusBadRequest,
+	"InvalidPart":               http.StatusBadRequest,
+	"InvalidRange":              http.StatusRequestedRangeNotSatisfiable,
+	"InvalidRequest":            http.StatusBadRequest,
+	"NoSuchBucket":              http.StatusNotFound,
+	"NoSuchKey":                 http.StatusNotFound,
+	"NoSuchUpload":              http.StatusNotFound,
+	"PreconditionFailed":        http.StatusPreconditionFailed,
+	"RequestTimeTooSkewed":      http.StatusForbidden,
+	"SignatureDoesNotMatch":     http.StatusForbidden,
+	"SlowDown":                  http.StatusServiceUnavailable,
+	"XAmzContentSHA256Mismatch": http.StatusBadRequest,
+}
+
+var defaultMessageByCode = map[string]string{
+	"AccessDenied":              "access denied",
+	"BucketNotEmpty":            "bucket not empty",
+	"InternalError":             "internal error",
+	"InvalidArgument":           "invalid argument",
+	"InvalidDigest":             "invalid digest",
+	"InvalidPart":               "invalid part",
+	"InvalidRange":              "invalid range",
+	"InvalidRequest":            "invalid request",
+	"NoSuchBucket":              "bucket not found",
+	"NoSuchKey":                 "key not found",
+	"NoSuchUpload":              "upload not found",
+	"PreconditionFailed":        "precondition failed",
+	"RequestTimeTooSkewed":      "request time too skewed",
+	"SignatureDoesNotMatch":     "signature mismatch",
+	"SlowDown":                  "slow down",
+	"XAmzContentSHA256Mismatch": "payload hash mismatch",
 }
