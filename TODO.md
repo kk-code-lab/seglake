@@ -13,6 +13,49 @@
 
 ## 5) Security / auth
 
+## 6) Replikacja / multi-site (plan)
+
+Cel: asynchroniczna replikacja między węzłami z zachowaniem spójności metadanych,
+bez wymogu silnej konsystencji globalnej (eventual consistency).
+
+### Faza 0 — decyzje architektoniczne
+- Model konfliktów: Last-Write-Wins po HLC (per obiekt/wersja) + jawny delete-tombstone.
+- Granulat repliki: oplog na poziomie metadanych + strumieniowanie chunków/manifestów.
+- Topologia: multi-site w trybie peer-to-peer z pull/push, start od 2-site.
+- Gwarancje: brak transakcji globalnych; lokalny zapis jest natychmiast widoczny lokalnie.
+
+### Faza 1 — fundamenty danych
+- Dodać tabelę `oplog` (op_type, bucket, key, version_id, ts_hlc, payload).
+- Wprowadzić HLC (wall time + counter) jako źródło porządku replikacji.
+- Zmiany metadanych zapisują wpis w `oplog` w tej samej transakcji.
+- Zdefiniować format payload (np. JSON lub binarny) dla operacji: PUT, DELETE, MPU complete.
+
+### Faza 2 — replikacja danych i metadanych
+- Endpoint replikacji: pobieranie wpisów `oplog` po watermark (HLC).
+- Replikacja segmentów/manifestów: wymiana brakujących chunków/manifestów na żądanie.
+- Mechanizm idempotencji po (site_id, hlc, op_id).
+- Garbage: ochrona segmentów widocznych w zdalnych replay (hold/lease).
+
+### Faza 3 — bootstrap i recovery
+- Snapshot + oplog replay: nowy węzeł pobiera snapshot, potem dogrywa oplog.
+- Rebuild-index z uwzględnieniem `oplog` i HLC (deterministyczne odtwarzanie).
+- Narzędzia ops: `repl-status`, `repl-pull`, `repl-push`, `repl-bootstrap`.
+
+### Faza 4 — spójność i edge-case
+- Konflikty LWW: PUT vs DELETE, PUT vs PUT, MPU complete vs DELETE.
+- Reguły zwycięzcy: najwyższy HLC wygrywa, przy remisie tie-break po site_id.
+- Replikacja ACL/polityk i API keys jako osobne typy operacji.
+
+### Faza 5 — testy i observability
+- Testy symulacyjne: opóźnienia, duplikaty, reorder, split-brain.
+- Metryki: lag HLC, backlog oplog, replikowane bajty, konflikt count.
+- Walidacja spójności: porównanie manifestów i listy wersji między węzłami.
+
+### Poza zakresem pierwszej iteracji
+- Silna konsystencja globalna.
+- Cross-region locking lub transakcyjny rename.
+- Zaawansowane polityki replikacji per-bucket (później).
+
 ## Done (2025-12-22)
 - DELETE obiektu i bucketu.
 - CopyObject.
