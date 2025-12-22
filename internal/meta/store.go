@@ -817,6 +817,23 @@ WHERE o.bucket=? AND o.key=?`, bucket, key)
 	return &meta, nil
 }
 
+// GetObjectVersion returns metadata for a specific object version.
+func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID string) (*ObjectMeta, error) {
+	if bucket == "" || key == "" || versionID == "" {
+		return nil, errors.New("meta: bucket, key, and version id required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT version_id, etag, size, last_modified_utc, state
+FROM versions
+WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID)
+	var meta ObjectMeta
+	meta.Key = key
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified, &meta.State); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
 // ListObjects returns current objects for a bucket with optional prefix and continuation key/version.
 func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, afterVersion string, limit int) (out []ObjectMeta, err error) {
 	if limit <= 0 {
@@ -1181,6 +1198,69 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 		return false, err
 	}
 	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED' WHERE version_id=?", versionID)
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteObjectVersion marks a specific version as deleted and updates objects_current if needed.
+func (s *Store) DeleteObjectVersion(ctx context.Context, bucket, key, versionID string) (bool, error) {
+	if bucket == "" || key == "" || versionID == "" {
+		return false, errors.New("meta: bucket, key, and version id required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var state string
+	err = tx.QueryRowContext(ctx, `
+SELECT state
+FROM versions
+WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED' WHERE version_id=?", versionID); err != nil {
+		return false, err
+	}
+	var currentVersion string
+	err = tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&currentVersion)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if currentVersion == versionID {
+		var nextVersion string
+		err = tx.QueryRowContext(ctx, `
+SELECT version_id
+FROM versions
+WHERE bucket=? AND key=? AND state='ACTIVE' AND version_id<>?
+ORDER BY last_modified_utc DESC
+LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
+					return false, err
+				}
+			} else {
+				return false, err
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, "UPDATE objects_current SET version_id=? WHERE bucket=? AND key=?", nextVersion, bucket, key); err != nil {
+				return false, err
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
