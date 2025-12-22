@@ -10,6 +10,7 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/app"
 	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/ops"
 	"github.com/kk-code-lab/seglake/internal/s3"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
@@ -30,6 +31,10 @@ func main() {
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
 	gcForce := flag.Bool("gc-force", false, "GC delete segments (required for gc-run)")
+	gcWarnSegments := flag.Int("gc-warn-segments", 100, "GC warn when candidates exceed this count (0 disables)")
+	gcWarnReclaim := flag.Int64("gc-warn-reclaim-bytes", 100<<30, "GC warn when candidate bytes exceed this count (0 disables)")
+	gcMaxSegments := flag.Int("gc-max-segments", 0, "GC hard limit on candidates (0 disables)")
+	gcMaxReclaim := flag.Int64("gc-max-reclaim-bytes", 0, "GC hard limit on candidate bytes (0 disables)")
 	gcLiveThreshold := flag.Float64("gc-live-threshold", 0.5, "GC rewrite live-bytes ratio threshold (<= value)")
 	gcRewritePlanFile := flag.String("gc-rewrite-plan", "", "GC rewrite plan output file")
 	gcRewriteFromPlan := flag.String("gc-rewrite-from-plan", "", "GC rewrite plan input file")
@@ -39,6 +44,10 @@ func main() {
 	syncBytes := flag.Int64("sync-bytes", 128<<20, "Write barrier byte threshold")
 	mpuTTL := flag.Duration("mpu-ttl", 7*24*time.Hour, "Multipart upload TTL for cleanup")
 	mpuForce := flag.Bool("mpu-force", false, "Multipart GC delete uploads (required for mpu-gc-run)")
+	mpuWarnUploads := flag.Int("mpu-warn-uploads", 1000, "MPU GC warn when uploads exceed this count (0 disables)")
+	mpuWarnReclaim := flag.Int64("mpu-warn-reclaim-bytes", 10<<30, "MPU GC warn when candidate bytes exceed this count (0 disables)")
+	mpuMaxUploads := flag.Int("mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
+	mpuMaxReclaim := flag.Int64("mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -86,7 +95,19 @@ func main() {
 		if *rebuildMeta != "" {
 			metaArg = *rebuildMeta
 		}
-		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *mpuTTL, *mpuForce, *jsonOut); err != nil {
+		gcGuard := ops.GCGuardrails{
+			WarnCandidates:     *gcWarnSegments,
+			WarnReclaimedBytes: *gcWarnReclaim,
+			MaxCandidates:      *gcMaxSegments,
+			MaxReclaimedBytes:  *gcMaxReclaim,
+		}
+		mpuGuard := ops.MPUGCGuardrails{
+			WarnUploads:        *mpuWarnUploads,
+			WarnReclaimedBytes: *mpuWarnReclaim,
+			MaxUploads:         *mpuMaxUploads,
+			MaxReclaimedBytes:  *mpuMaxReclaim,
+		}
+		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *mpuTTL, *mpuForce, gcGuard, mpuGuard, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
 			os.Exit(1)
 		}
