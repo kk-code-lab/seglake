@@ -81,8 +81,10 @@ Manage keys with `-mode keys`:
 ```
 ./build/seglake -mode keys -keys-action create -key-access=test -key-secret=testsecret -key-policy=rw -key-enabled=true -key-inflight=32
 ./build/seglake -mode keys -keys-action allow-bucket -key-access=test -key-bucket=demo
+./build/seglake -mode keys -keys-action disallow-bucket -key-access=test -key-bucket=demo
 ./build/seglake -mode keys -keys-action list
 ./build/seglake -mode keys -keys-action list-buckets -key-access=test
+./build/seglake -mode keys -keys-action enable -key-access=test
 ./build/seglake -mode keys -keys-action disable -key-access=test
 ./build/seglake -mode keys -keys-action delete -key-access=test
 ```
