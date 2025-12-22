@@ -95,7 +95,7 @@ Pull oplog + fetch missing data:
 
 Continuous pull with backoff:
 ```
-./build/seglake -mode repl-pull -repl-remote http://peer:9000 -repl-watch -repl-interval 5s -repl-backoff-max 1m
+./build/seglake -mode repl-pull -repl-remote http://peer:9000 -repl-watch -repl-interval 5s -repl-backoff-max 1m -repl-retry-timeout 2m
 ```
 
 Push local oplog:
