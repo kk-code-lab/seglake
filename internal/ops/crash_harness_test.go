@@ -55,17 +55,24 @@ func TestCrashHarness(t *testing.T) {
 	host := "http://" + addr
 
 	iters := parseIterations(t)
+	client := &http.Client{Timeout: 5 * time.Second}
 	for i := 0; i < iters; i++ {
 		cmd := startServerWithBarrier(t, bin, dataDir, addr)
-		if err := waitForStats(host, 2*time.Second); err != nil {
+		t.Cleanup(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			}
+		})
+		if err := waitForStats(client, host, 2*time.Second); err != nil {
 			_ = cmd.Process.Kill()
 			t.Fatalf("server did not start: %v", err)
 		}
 
 		keyBase := fmt.Sprintf("demo/iter-%d", i+1)
-		putObject(t, host, keyBase+"/small.txt", []byte("hello"))
-		putObject(t, host, keyBase+"/large.bin", bytes.Repeat([]byte("a"), 5<<20))
-		multipartUpload(t, host, keyBase+"/mpu.bin", bytes.Repeat([]byte("a"), 5<<20), []byte("tail"))
+		putObject(t, client, host, keyBase+"/small.txt", []byte("hello"))
+		putObject(t, client, host, keyBase+"/large.bin", bytes.Repeat([]byte("a"), 5<<20))
+		multipartUpload(t, client, host, keyBase+"/mpu.bin", bytes.Repeat([]byte("a"), 5<<20), []byte("tail"))
 
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
@@ -76,11 +83,17 @@ func TestCrashHarness(t *testing.T) {
 		assertReportOK(t, "rebuild-index", rebuild)
 
 		cmd = startServerWithBarrier(t, bin, dataDir, addr)
-		if err := waitForStats(host, 2*time.Second); err != nil {
+		t.Cleanup(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			}
+		})
+		if err := waitForStats(client, host, 2*time.Second); err != nil {
 			_ = cmd.Process.Kill()
 			t.Fatalf("server did not restart: %v", err)
 		}
-		getObject(t, host, keyBase+"/small.txt")
+		getObject(t, client, host, keyBase+"/small.txt")
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	}
@@ -102,13 +115,13 @@ func startServerWithBarrier(t *testing.T, bin, dataDir, addr string) *exec.Cmd {
 	return cmd
 }
 
-func putObject(t *testing.T, host, key string, data []byte) {
+func putObject(t *testing.T, client *http.Client, host, key string, data []byte) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPut, host+"/"+key, bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT error: %v", err)
 	}
@@ -118,9 +131,9 @@ func putObject(t *testing.T, host, key string, data []byte) {
 	}
 }
 
-func getObject(t *testing.T, host, key string) {
+func getObject(t *testing.T, client *http.Client, host, key string) {
 	t.Helper()
-	resp, err := http.Get(host + "/" + key)
+	resp, err := client.Get(host + "/" + key)
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
@@ -130,13 +143,13 @@ func getObject(t *testing.T, host, key string) {
 	}
 }
 
-func multipartUpload(t *testing.T, host, key string, part1, part2 []byte) {
+func multipartUpload(t *testing.T, client *http.Client, host, key string, part1, part2 []byte) {
 	t.Helper()
 	initReq, err := http.NewRequest(http.MethodPost, host+"/"+key+"?uploads", nil)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	initResp, err := http.DefaultClient.Do(initReq)
+	initResp, err := client.Do(initReq)
 	if err != nil {
 		t.Fatalf("init error: %v", err)
 	}
@@ -153,8 +166,8 @@ func multipartUpload(t *testing.T, host, key string, part1, part2 []byte) {
 		t.Fatalf("missing upload id")
 	}
 
-	etag1 := uploadPart(t, host, key, initResult.UploadID, 1, part1)
-	etag2 := uploadPart(t, host, key, initResult.UploadID, 2, part2)
+	etag1 := uploadPart(t, client, host, key, initResult.UploadID, 1, part1)
+	etag2 := uploadPart(t, client, host, key, initResult.UploadID, 2, part2)
 
 	complete := mpuCompleteRequest{
 		Parts: []mpuCompletePart{
@@ -170,7 +183,7 @@ func multipartUpload(t *testing.T, host, key string, part1, part2 []byte) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	completeResp, err := http.DefaultClient.Do(completeReq)
+	completeResp, err := client.Do(completeReq)
 	if err != nil {
 		t.Fatalf("complete error: %v", err)
 	}
@@ -180,13 +193,13 @@ func multipartUpload(t *testing.T, host, key string, part1, part2 []byte) {
 	}
 }
 
-func uploadPart(t *testing.T, host, key, uploadID string, partNumber int, data []byte) string {
+func uploadPart(t *testing.T, client *http.Client, host, key, uploadID string, partNumber int, data []byte) string {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/%s?partNumber=%d&uploadId=%s", host, key, partNumber, uploadID), bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT part error: %v", err)
 	}
@@ -199,7 +212,9 @@ func uploadPart(t *testing.T, host, key, uploadID string, partNumber int, data [
 
 func runOpsJSON(t *testing.T, bin, dataDir, mode string) map[string]any {
 	t.Helper()
-	cmd := exec.Command(bin, "-mode", mode, "-data-dir", dataDir, "-json")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-mode", mode, "-data-dir", dataDir, "-json")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("ops %s failed: %v\n%s", mode, err, string(out))
@@ -235,13 +250,13 @@ func int64Value(v any) int64 {
 	}
 }
 
-func waitForStats(host string, timeout time.Duration) error {
+func waitForStats(client *http.Client, host string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	url := host + "/v1/meta/stats"
 	for {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
