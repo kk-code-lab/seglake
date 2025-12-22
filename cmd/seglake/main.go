@@ -35,6 +35,8 @@ func main() {
 	gcRewriteFromPlan := flag.String("gc-rewrite-from-plan", "", "GC rewrite plan input file")
 	gcRewriteBps := flag.Int64("gc-rewrite-bps", 0, "GC rewrite max bytes per second (0 = unlimited)")
 	gcPauseFile := flag.String("gc-pause-file", "", "GC pause while file exists")
+	syncInterval := flag.Duration("sync-interval", 100*time.Millisecond, "Write barrier interval")
+	syncBytes := flag.Int64("sync-bytes", 128<<20, "Write barrier byte threshold")
 	mpuTTL := flag.Duration("mpu-ttl", 7*24*time.Hour, "Multipart upload TTL for cleanup")
 	mpuForce := flag.Bool("mpu-force", false, "Multipart GC delete uploads (required for mpu-gc-run)")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
@@ -69,8 +71,10 @@ func main() {
 	defer func() { _ = store.Close() }()
 
 	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(filepath.Join(*dataDir, "objects")),
-		MetaStore: store,
+		Layout:          fs.NewLayout(filepath.Join(*dataDir, "objects")),
+		MetaStore:       store,
+		BarrierInterval: *syncInterval,
+		BarrierMaxBytes: *syncBytes,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "engine init error: %v\n", err)

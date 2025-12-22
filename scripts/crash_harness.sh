@@ -6,6 +6,8 @@ ADDR="${ADDR:-:9100}"
 HOST="http://localhost${ADDR}"
 DATA_DIR="${DATA_DIR:-$(mktemp -d)}"
 BIN="${BIN:-build/seglake}"
+SYNC_INTERVAL="${SYNC_INTERVAL:-5ms}"
+SYNC_BYTES="${SYNC_BYTES:-1048576}"
 
 mkdir -p "$(dirname "$BIN")"
 if [[ ! -x "$BIN" ]]; then
@@ -19,7 +21,7 @@ SERVER_PID=""
 SERVER_LOG="${SERVER_LOG:-/tmp/seglake_crash_harness.log}"
 
 start_server() {
-  "$BIN" -addr "$ADDR" -data-dir "$DATA_DIR" >"$SERVER_LOG" 2>&1 &
+  "$BIN" -addr "$ADDR" -data-dir "$DATA_DIR" -sync-interval "$SYNC_INTERVAL" -sync-bytes "$SYNC_BYTES" >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 1 20); do
     if curl -sS "$HOST/v1/meta/stats" >/dev/null 2>&1; then

@@ -170,6 +170,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 5.3 Crash harness
 - `scripts/crash_harness.sh <iterations>`
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`
+  - Parametry: `SYNC_INTERVAL` i `SYNC_BYTES` wpływają na ustawienia bariery.
 
 ---
 
