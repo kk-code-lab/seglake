@@ -46,7 +46,7 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	virtualHosted := flag.Bool("virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys|bucket-policy|repl-pull")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys|bucket-policy|repl-pull|repl-push")
 	tlsEnable := flag.Bool("tls", false, "Enable HTTPS listener with TLS")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
 	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
@@ -94,6 +94,8 @@ func main() {
 	replAccessKey := flag.String("repl-access-key", "", "Replication access key for SigV4 presign")
 	replSecretKey := flag.String("repl-secret-key", "", "Replication secret key for SigV4 presign")
 	replRegion := flag.String("repl-region", "us-east-1", "Replication SigV4 region")
+	replPushSince := flag.String("repl-push-since", "", "Replication push start HLC (optional)")
+	replPushLimit := flag.Int("repl-push-limit", 1000, "Replication push batch size")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -145,6 +147,13 @@ func main() {
 		if *mode == "repl-pull" {
 			if err := runReplPull(*replRemote, *replSince, *replLimit, *replFetchData, *replWatch, *replInterval, *replBackoffMax, *replAccessKey, *replSecretKey, *replRegion, store, eng); err != nil {
 				fmt.Fprintf(os.Stderr, "repl pull error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if *mode == "repl-push" {
+			if err := runReplPush(*replRemote, *replPushSince, *replPushLimit, *replAccessKey, *replSecretKey, *replRegion, store); err != nil {
+				fmt.Fprintf(os.Stderr, "repl push error: %v\n", err)
 				os.Exit(1)
 			}
 			return
