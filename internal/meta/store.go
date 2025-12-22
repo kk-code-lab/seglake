@@ -477,6 +477,33 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
 	return err
 }
 
+// ListAPIKeys returns all API keys ordered by access key.
+func (s *Store) ListAPIKeys(ctx context.Context) (out []APIKey, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT access_key, COALESCE(secret_key,''), secret_hash, enabled, created_at, COALESCE(label,''), COALESCE(last_used_at,''), COALESCE(policy,''), COALESCE(inflight_limit,0)
+FROM api_keys
+ORDER BY access_key`)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var key APIKey
+		var secretKey string
+		var secretHash string
+		var enabledInt int
+		if err := scan(&key.AccessKey, &secretKey, &secretHash, &enabledInt, &key.CreatedAt, &key.Label, &key.LastUsedAt, &key.Policy, &key.InflightLimit); err != nil {
+			return err
+		}
+		if secretKey == "" {
+			secretKey = secretHash
+		}
+		key.SecretKey = secretKey
+		key.Enabled = enabledInt != 0
+		out = append(out, key)
+		return nil
+	})
+}
+
 // Segment holds segment metadata.
 type Segment struct {
 	ID             string

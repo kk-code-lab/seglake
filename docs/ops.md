@@ -6,7 +6,7 @@
 2) Keep Seglake on HTTP behind the proxy on a trusted network.
 3) Enforce HTTPS at the edge (redirect or 301).
 4) Pass through `Host` and `X-Forwarded-For` only from trusted IPs.
-5) If using virtual-hosted-style, ensure DNS and proxy routing by host.
+5) Virtual-hosted-style is enabled by default; ensure DNS and proxy routing by host.
 6) Set request size limits at the proxy if needed (S3 SDKs may retry on 413).
 7) Disable request/response buffering for large PUT/GET when possible.
 8) Enable access logs at the proxy; Seglake logs redact presigned secrets.
@@ -54,6 +54,39 @@ GET object:
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 \
   aws s3 cp s3://demo/file.bin ./file.bin --endpoint-url http://localhost:9000
 ```
+
+## Virtual-hosted vs path-style
+
+Virtual-hosted-style is enabled by default (`-virtual-hosted=true`). Hostnames that are IPs or `localhost` are ignored to keep path-style working locally.
+
+Examples:
+```
+aws s3 ls --endpoint-url http://localhost:9000
+aws s3 ls --endpoint-url http://bucket.localhost:9000
+```
+
+## GC/MPU guardrails
+
+GC warnings and hard limits can be tuned:
+```
+./build/seglake -mode gc-plan -gc-warn-segments=100 -gc-warn-reclaim-bytes=$((100<<30))
+./build/seglake -mode gc-run -gc-force -gc-max-segments=50 -gc-max-reclaim-bytes=$((10<<30))
+./build/seglake -mode mpu-gc-plan -mpu-warn-uploads=1000 -mpu-warn-reclaim-bytes=$((10<<30))
+./build/seglake -mode mpu-gc-run -mpu-force -mpu-max-uploads=500 -mpu-max-reclaim-bytes=$((5<<30))
+```
+
+## API keys / policies
+
+Manage keys with `-mode keys`:
+```
+./build/seglake -mode keys -keys-action create -key-access=test -key-secret=testsecret -key-policy=rw -key-enabled=true -key-inflight=32
+./build/seglake -mode keys -keys-action allow-bucket -key-access=test -key-bucket=demo
+./build/seglake -mode keys -keys-action list
+```
+
+Policies:
+- `rw` (default): full access.
+- `ro` / `read-only`: blocks PUT/POST/DELETE.
 
 ## s3cmd examples
 

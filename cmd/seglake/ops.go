@@ -159,6 +159,9 @@ func printModeHelp(mode string) {
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 		fmt.Println("Flags: -snapshot-dir (output directory).")
+	case "keys":
+		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
+		fmt.Println("Flags: -keys-action list|create|allow-bucket, -key-access, -key-secret, -key-policy, -key-enabled, -key-inflight, -key-bucket, -json.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}
