@@ -420,6 +420,17 @@ ORDER BY bucket`, accessKey)
 	})
 }
 
+// DisallowBucketForKey removes a bucket allow entry for the given access key.
+func (s *Store) DisallowBucketForKey(ctx context.Context, accessKey, bucket string) error {
+	if accessKey == "" || bucket == "" {
+		return errors.New("meta: access key and bucket required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM api_key_bucket_allow
+WHERE access_key=? AND bucket=?`, accessKey, bucket)
+	return err
+}
+
 // GetAPIKey returns stored API key metadata.
 func (s *Store) GetAPIKey(ctx context.Context, accessKey string) (*APIKey, error) {
 	if accessKey == "" {
