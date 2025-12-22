@@ -216,3 +216,65 @@ func TestReplicationChunkEndpoint(t *testing.T) {
 		t.Fatalf("expected %q, got %q", data, rec.Body.String())
 	}
 }
+
+func TestReplicationOplogLimitCap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/replication/oplog?limit=999999", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReplicationChunkLimit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/replication/chunk?segmentId=seg-x&offset=0&len=99999999", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
