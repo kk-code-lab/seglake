@@ -32,15 +32,15 @@ type APIKey struct {
 
 // OplogEntry describes a single replication log entry.
 type OplogEntry struct {
-	ID        int64
-	SiteID    string
-	HLCTS     string
-	OpType    string
-	Bucket    string
-	Key       string
-	VersionID string
-	Payload   string
-	CreatedAt string
+	ID        int64  `json:"id"`
+	SiteID    string `json:"site_id"`
+	HLCTS     string `json:"hlc_ts"`
+	OpType    string `json:"op_type"`
+	Bucket    string `json:"bucket"`
+	Key       string `json:"key"`
+	VersionID string `json:"version_id,omitempty"`
+	Payload   string `json:"payload,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 // Open opens or creates the metadata database at the given path.
@@ -927,6 +927,42 @@ func (s *Store) ListOplog(ctx context.Context) (out []OplogEntry, err error) {
 SELECT id, site_id, hlc_ts, op_type, bucket, key, COALESCE(version_id,''), COALESCE(payload,''), created_at
 FROM oplog
 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var entry OplogEntry
+		if err := scan(&entry.ID, &entry.SiteID, &entry.HLCTS, &entry.OpType, &entry.Bucket, &entry.Key, &entry.VersionID, &entry.Payload, &entry.CreatedAt); err != nil {
+			return err
+		}
+		out = append(out, entry)
+		return nil
+	})
+}
+
+// ListOplogSince returns oplog entries with hlc_ts greater than the provided value.
+func (s *Store) ListOplogSince(ctx context.Context, since string, limit int) (out []OplogEntry, err error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	var rows *sql.Rows
+	if since == "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, site_id, hlc_ts, op_type, bucket, key, COALESCE(version_id,''), COALESCE(payload,''), created_at
+FROM oplog
+ORDER BY hlc_ts, id
+LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, site_id, hlc_ts, op_type, bucket, key, COALESCE(version_id,''), COALESCE(payload,''), created_at
+FROM oplog
+WHERE hlc_ts > ?
+ORDER BY hlc_ts, id
+LIMIT ?`, since, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -81,6 +81,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleStats(r.Context(), mw, requestID, r.URL.Path)
 		return
 	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
+		h.handleOplog(r.Context(), mw, r, requestID)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		h.handleListBuckets(r.Context(), mw, requestID)
 		return
@@ -730,6 +734,9 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
 		return "meta_stats"
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
+		return "repl_oplog"
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		return "list_buckets"
