@@ -1,12 +1,17 @@
 # TODO / Backlog (na bazie aktualnego stanu)
 
 ## 1) S3 API — luki kompatybilności
+ - Dokładniejsze mapowanie AWS Errors (MethodNotAllowed vs InvalidRequest, bardziej AWS‑owe Message/Resource).
+ - S3 compat polish: konsekwentne nagłówki request‑id i region.
+ - Testy E2E SigV4/presigned dla edge‑case’ów (signed headers, UNSIGNED‑PAYLOAD, Range).
 
 ## 2) Multipart — bezpieczeństwo danych
+ - ListMultipartUploads: dopracowanie pełnej zgodności (edge‑case’y marker/prefix/delimiter).
 
 ## 3) Storage / durability
 
 ## 4) Ops / observability
+ - Metryki per‑bucket/per‑key (p50/p95/p99 i status classes).
 - Raporty trendów GC (historyka, reclaim rate).
 
 ## 5) Security / auth
