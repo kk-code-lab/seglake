@@ -69,6 +69,31 @@ type oplogMPUCompletePayload struct {
 	LastModified string `json:"last_modified_utc"`
 }
 
+type oplogBucketPolicyPayload struct {
+	Bucket    string `json:"bucket"`
+	Policy    string `json:"policy"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type oplogAPIKeyPayload struct {
+	AccessKey     string `json:"access_key"`
+	SecretKey     string `json:"secret_key,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Policy        string `json:"policy"`
+	InflightLimit int64  `json:"inflight_limit"`
+	Deleted       bool   `json:"deleted,omitempty"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type oplogAPIKeyBucketPayload struct {
+	AccessKey string `json:"access_key"`
+	Bucket    string `json:"bucket"`
+	Allowed   bool   `json:"allowed"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+const metaOplogBucket = "_meta"
+
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
 	if path == "" {
@@ -542,9 +567,8 @@ WHERE COALESCE(last_pull_hlc,'')='' AND COALESCE(last_hlc,'')<>''`); err != nil 
 	return nil
 }
 
-
 // UpsertAPIKey inserts or updates an API key entry.
-func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy string, enabled bool, inflightLimit int64) error {
+func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy string, enabled bool, inflightLimit int64) (err error) {
 	if accessKey == "" || secretKey == "" {
 		return errors.New("meta: access key and secret required")
 	}
@@ -556,7 +580,16 @@ func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy s
 	if enabled {
 		enabledInt = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	_, err = tx.ExecContext(ctx, `
 INSERT INTO api_keys(access_key, secret_hash, salt, enabled, created_at, label, last_used_at, secret_key, policy, inflight_limit)
 VALUES(?, ?, '', ?, ?, '', '', ?, ?, ?)
 ON CONFLICT(access_key) DO UPDATE SET
@@ -567,30 +600,76 @@ ON CONFLICT(access_key) DO UPDATE SET
 	policy=excluded.policy,
 	inflight_limit=excluded.inflight_limit`,
 		accessKey, secretKey, enabledInt, now, secretKey, policy, inflightLimit)
-	return err
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogAPIKeyPayload{
+		AccessKey:     accessKey,
+		SecretKey:     secretKey,
+		Enabled:       enabled,
+		Policy:        policy,
+		InflightLimit: inflightLimit,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "api_key", metaOplogBucket, accessKey, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // UpdateAPIKeyPolicy updates policy for an API key.
-func (s *Store) UpdateAPIKeyPolicy(ctx context.Context, accessKey, policy string) error {
+func (s *Store) UpdateAPIKeyPolicy(ctx context.Context, accessKey, policy string) (err error) {
 	if accessKey == "" {
 		return errors.New("meta: access key required")
 	}
 	if policy == "" {
 		policy = "rw"
 	}
-	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET policy=? WHERE access_key=?", policy, accessKey)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, "UPDATE api_keys SET policy=? WHERE access_key=?", policy, accessKey); err != nil {
+		return err
+	}
+	key, err := getAPIKeyTx(tx, accessKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tx.Commit()
+		}
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(oplogAPIKeyPayload{
+		AccessKey:     key.AccessKey,
+		SecretKey:     key.SecretKey,
+		Enabled:       key.Enabled,
+		Policy:        policy,
+		InflightLimit: key.InflightLimit,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "api_key", metaOplogBucket, accessKey, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // AllowBucketForKey adds a bucket allow entry for the given access key.
 func (s *Store) AllowBucketForKey(ctx context.Context, accessKey, bucket string) error {
-	if accessKey == "" || bucket == "" {
-		return errors.New("meta: access key and bucket required")
-	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO api_key_bucket_allow(access_key, bucket)
-VALUES(?, ?)`, accessKey, bucket)
-	return err
+	return s.updateAPIKeyBucketAccess(ctx, accessKey, bucket, true)
 }
 
 // ListAllowedBuckets returns allowed buckets for the access key.
@@ -618,13 +697,50 @@ ORDER BY bucket`, accessKey)
 
 // DisallowBucketForKey removes a bucket allow entry for the given access key.
 func (s *Store) DisallowBucketForKey(ctx context.Context, accessKey, bucket string) error {
+	return s.updateAPIKeyBucketAccess(ctx, accessKey, bucket, false)
+}
+
+func (s *Store) updateAPIKeyBucketAccess(ctx context.Context, accessKey, bucket string, allowed bool) (err error) {
 	if accessKey == "" || bucket == "" {
 		return errors.New("meta: access key and bucket required")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if allowed {
+		if _, err = tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO api_key_bucket_allow(access_key, bucket)
+VALUES(?, ?)`, accessKey, bucket); err != nil {
+			return err
+		}
+	} else {
+		if _, err = tx.ExecContext(ctx, `
 DELETE FROM api_key_bucket_allow
-WHERE access_key=? AND bucket=?`, accessKey, bucket)
-	return err
+WHERE access_key=? AND bucket=?`, accessKey, bucket); err != nil {
+			return err
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(oplogAPIKeyBucketPayload{
+		AccessKey: accessKey,
+		Bucket:    bucket,
+		Allowed:   allowed,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "api_key_bucket", metaOplogBucket, accessKey, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetAPIKey returns stored API key metadata.
@@ -636,6 +752,24 @@ func (s *Store) GetAPIKey(ctx context.Context, accessKey string) (*APIKey, error
 SELECT access_key, COALESCE(secret_key,''), secret_hash, enabled, created_at, COALESCE(label,''), COALESCE(last_used_at,''), COALESCE(policy,''), COALESCE(inflight_limit,0)
 FROM api_keys
 WHERE access_key=?`, accessKey)
+	return scanAPIKeyRow(row)
+}
+
+func getAPIKeyTx(tx *sql.Tx, accessKey string) (*APIKey, error) {
+	if tx == nil {
+		return nil, errors.New("meta: transaction required")
+	}
+	if accessKey == "" {
+		return nil, errors.New("meta: access key required")
+	}
+	row := tx.QueryRow(`
+SELECT access_key, COALESCE(secret_key,''), secret_hash, enabled, created_at, COALESCE(label,''), COALESCE(last_used_at,''), COALESCE(policy,''), COALESCE(inflight_limit,0)
+FROM api_keys
+WHERE access_key=?`, accessKey)
+	return scanAPIKeyRow(row)
+}
+
+func scanAPIKeyRow(row *sql.Row) (*APIKey, error) {
 	var key APIKey
 	var secretKey string
 	var secretHash string
@@ -708,7 +842,7 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
 }
 
 // SetAPIKeyEnabled enables or disables an API key.
-func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled bool) error {
+func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled bool) (err error) {
 	if accessKey == "" {
 		return errors.New("meta: access key required")
 	}
@@ -716,12 +850,46 @@ func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled 
 	if enabled {
 		enabledInt = 1
 	}
-	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET enabled=? WHERE access_key=?", enabledInt, accessKey)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, "UPDATE api_keys SET enabled=? WHERE access_key=?", enabledInt, accessKey); err != nil {
+		return err
+	}
+	key, err := getAPIKeyTx(tx, accessKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tx.Commit()
+		}
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(oplogAPIKeyPayload{
+		AccessKey:     key.AccessKey,
+		SecretKey:     key.SecretKey,
+		Enabled:       enabled,
+		Policy:        key.Policy,
+		InflightLimit: key.InflightLimit,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "api_key", metaOplogBucket, accessKey, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // DeleteAPIKey removes an API key and its bucket allowlist.
-func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) error {
+func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) (err error) {
 	if accessKey == "" {
 		return errors.New("meta: access key required")
 	}
@@ -738,6 +906,19 @@ func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) error {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM api_keys WHERE access_key=?", accessKey); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(oplogAPIKeyPayload{
+		AccessKey: accessKey,
+		Deleted:   true,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "api_key", metaOplogBucket, accessKey, "", string(payload)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -771,18 +952,41 @@ ORDER BY access_key`)
 }
 
 // SetBucketPolicy sets or replaces a bucket policy.
-func (s *Store) SetBucketPolicy(ctx context.Context, bucket, policy string) error {
+func (s *Store) SetBucketPolicy(ctx context.Context, bucket, policy string) (err error) {
 	if bucket == "" || policy == "" {
 		return errors.New("meta: bucket and policy required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `
 INSERT INTO bucket_policies(bucket, policy, updated_at)
 VALUES(?, ?, ?)
 ON CONFLICT(bucket) DO UPDATE SET
 	policy=excluded.policy,
-	updated_at=excluded.updated_at`, bucket, policy, now)
-	return err
+	updated_at=excluded.updated_at`, bucket, policy, now); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogBucketPolicyPayload{
+		Bucket:    bucket,
+		Policy:    policy,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_policy", bucket, bucket, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetBucketPolicy returns a policy string for the bucket.
@@ -799,12 +1003,27 @@ func (s *Store) GetBucketPolicy(ctx context.Context, bucket string) (string, err
 }
 
 // DeleteBucketPolicy removes a bucket policy.
-func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) error {
+func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) (err error) {
 	if bucket == "" {
 		return errors.New("meta: bucket required")
 	}
-	_, err := s.db.ExecContext(ctx, "DELETE FROM bucket_policies WHERE bucket=?", bucket)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM bucket_policies WHERE bucket=?", bucket); err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_policy_delete", bucket, bucket, "", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Segment holds segment metadata.
@@ -1144,9 +1363,6 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 			if !inserted {
 				continue
 			}
-			if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-				return err
-			}
 			switch entry.OpType {
 			case "put", "mpu_complete":
 				if entry.VersionID == "" {
@@ -1154,6 +1370,9 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 						return errors.New("meta: mpu_complete entry requires version id")
 					}
 					return errors.New("meta: put entry requires version id")
+				}
+				if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+					return err
 				}
 				var payload oplogPutPayload
 				if entry.Payload != "" {
@@ -1250,6 +1469,93 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 				}
 				if !errors.Is(err, sql.ErrNoRows) && compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
 					if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+						return err
+					}
+				}
+			case "bucket_policy":
+				var payload oplogBucketPolicyPayload
+				if entry.Payload == "" {
+					return errors.New("meta: bucket_policy payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.Bucket == "" {
+					payload.Bucket = entry.Bucket
+				}
+				_, err := tx.Exec(`
+INSERT INTO bucket_policies(bucket, policy, updated_at)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET policy=excluded.policy, updated_at=excluded.updated_at`,
+					payload.Bucket, payload.Policy, payload.UpdatedAt)
+				if err != nil {
+					return err
+				}
+			case "bucket_policy_delete":
+				if entry.Bucket == "" {
+					return errors.New("meta: bucket required")
+				}
+				_, err := tx.Exec(`DELETE FROM bucket_policies WHERE bucket=?`, entry.Bucket)
+				if err != nil {
+					return err
+				}
+			case "api_key":
+				var payload oplogAPIKeyPayload
+				if entry.Payload == "" {
+					return errors.New("meta: api_key payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.AccessKey == "" {
+					payload.AccessKey = entry.Key
+				}
+				if payload.Deleted {
+					if _, err := tx.Exec(`DELETE FROM api_keys WHERE access_key=?`, payload.AccessKey); err != nil {
+						return err
+					}
+					if _, err := tx.Exec(`DELETE FROM api_key_bucket_allow WHERE access_key=?`, payload.AccessKey); err != nil {
+						return err
+					}
+					break
+				}
+				enabledInt := 0
+				if payload.Enabled {
+					enabledInt = 1
+				}
+				_, err := tx.Exec(`
+INSERT INTO api_keys(access_key, secret_hash, salt, enabled, created_at, label, last_used_at, secret_key, policy, inflight_limit)
+VALUES(?, ?, '', ?, ?, '', '', ?, ?, ?)
+ON CONFLICT(access_key) DO UPDATE SET
+	secret_hash=excluded.secret_hash,
+	salt=excluded.salt,
+	enabled=excluded.enabled,
+	secret_key=excluded.secret_key,
+	policy=excluded.policy,
+	inflight_limit=excluded.inflight_limit`,
+					payload.AccessKey, payload.SecretKey, enabledInt, payload.UpdatedAt, payload.SecretKey, payload.Policy, payload.InflightLimit)
+				if err != nil {
+					return err
+				}
+			case "api_key_bucket":
+				var payload oplogAPIKeyBucketPayload
+				if entry.Payload == "" {
+					return errors.New("meta: api_key_bucket payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.AccessKey == "" {
+					payload.AccessKey = entry.Key
+				}
+				if payload.Allowed {
+					_, err := tx.Exec(`INSERT OR IGNORE INTO api_key_bucket_allow(access_key, bucket) VALUES(?, ?)`, payload.AccessKey, payload.Bucket)
+					if err != nil {
+						return err
+					}
+				} else {
+					_, err := tx.Exec(`DELETE FROM api_key_bucket_allow WHERE access_key=? AND bucket=?`, payload.AccessKey, payload.Bucket)
+					if err != nil {
 						return err
 					}
 				}
