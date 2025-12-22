@@ -489,19 +489,24 @@ func mergeUniquePaths(a, b []string) []string {
 }
 
 func listFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	var out []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		out = append(out, filepath.Join(dir, entry.Name()))
+		if d.IsDir() {
+			return nil
+		}
+		out = append(out, path)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

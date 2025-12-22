@@ -48,8 +48,8 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 					return err
 				}
 				// Derive bucket/key from manifest filename: expects "<bucket>__<key>__<version>".
-				bucket, key := parseManifestName(filepath.Base(path))
-				if bucket == "" || key == "" {
+				bucket, key, ok := parseManifestName(filepath.Base(path))
+				if !ok || bucket == "" || key == "" {
 					bucket = man.Bucket
 					key = man.Key
 				}
@@ -102,12 +102,12 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	return report, nil
 }
 
-func parseManifestName(name string) (bucket, key string) {
+func parseManifestName(name string) (bucket, key string, ok bool) {
 	parts := splitN(name, "__", 3)
-	if len(parts) < 2 {
-		return "", ""
+	if len(parts) < 3 {
+		return "", "", false
 	}
-	return parts[0], parts[1]
+	return parts[0], parts[1], true
 }
 
 func splitN(s, sep string, n int) []string {

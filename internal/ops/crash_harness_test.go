@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -53,34 +54,36 @@ func TestCrashHarness(t *testing.T) {
 	}
 	host := "http://" + addr
 
-	cmd := startServerWithBarrier(t, bin, dataDir, addr)
-	if err := waitForStats(host, 2*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatalf("server did not start: %v", err)
-	}
+	iters := parseIterations(t)
+	for i := 0; i < iters; i++ {
+		cmd := startServerWithBarrier(t, bin, dataDir, addr)
+		if err := waitForStats(host, 2*time.Second); err != nil {
+			_ = cmd.Process.Kill()
+			t.Fatalf("server did not start: %v", err)
+		}
 
-	putObject(t, host, "demo/iter-1/small.txt", []byte("hello-1"))
-	putObject(t, host, "demo/iter-1/large.bin", bytes.Repeat([]byte("a"), 5<<20))
-	multipartUpload(t, host, "demo/iter-1/mpu.bin", bytes.Repeat([]byte("a"), 5<<20), []byte("tail"))
+		keyBase := fmt.Sprintf("demo/iter-%d", i+1)
+		putObject(t, host, keyBase+"/small.txt", []byte("hello"))
+		putObject(t, host, keyBase+"/large.bin", bytes.Repeat([]byte("a"), 5<<20))
+		multipartUpload(t, host, keyBase+"/mpu.bin", bytes.Repeat([]byte("a"), 5<<20), []byte("tail"))
 
-	_ = cmd.Process.Kill()
-	_, _ = cmd.Process.Wait()
-
-	fsck := runOpsJSON(t, bin, dataDir, "fsck")
-	assertReportOK(t, "fsck", fsck)
-	rebuild := runOpsJSON(t, bin, dataDir, "rebuild-index")
-	assertReportOK(t, "rebuild-index", rebuild)
-
-	cmd = startServerWithBarrier(t, bin, dataDir, addr)
-	if err := waitForStats(host, 2*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatalf("server did not restart: %v", err)
-	}
-	defer func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
-	}()
-	getObject(t, host, "demo/iter-1/small.txt")
+
+		fsck := runOpsJSON(t, bin, dataDir, "fsck")
+		assertReportOK(t, "fsck", fsck)
+		rebuild := runOpsJSON(t, bin, dataDir, "rebuild-index")
+		assertReportOK(t, "rebuild-index", rebuild)
+
+		cmd = startServerWithBarrier(t, bin, dataDir, addr)
+		if err := waitForStats(host, 2*time.Second); err != nil {
+			_ = cmd.Process.Kill()
+			t.Fatalf("server did not restart: %v", err)
+		}
+		getObject(t, host, keyBase+"/small.txt")
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}
 }
 
 func startServerWithBarrier(t *testing.T, bin, dataDir, addr string) *exec.Cmd {
@@ -251,6 +254,19 @@ func waitForStats(host string, timeout time.Duration) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func parseIterations(t *testing.T) int {
+	t.Helper()
+	raw := os.Getenv("CRASH_ITER")
+	if raw == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		t.Fatalf("invalid CRASH_ITER=%q", raw)
+	}
+	return n
 }
 
 func pickFreePort() (string, error) {
