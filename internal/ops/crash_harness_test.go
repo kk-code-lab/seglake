@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/kk-code-lab/seglake/internal/storage/segment"
 )
 
 type mpuInitResult struct {
@@ -77,10 +80,22 @@ func TestCrashHarness(t *testing.T) {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 
+		if parseCorrupt(t) {
+			if err := corruptFirstSegment(filepath.Join(dataDir, "objects", "segments")); err != nil {
+				t.Fatalf("corrupt segment: %v", err)
+			}
+		}
+
 		fsck := runOpsJSON(t, bin, dataDir, "fsck")
 		assertReportOK(t, "fsck", fsck)
 		rebuild := runOpsJSON(t, bin, dataDir, "rebuild-index")
 		assertReportOK(t, "rebuild-index", rebuild)
+		if parseCorrupt(t) {
+			scrub := runOpsJSON(t, bin, dataDir, "scrub")
+			if int64Value(scrub["errors"]) == 0 {
+				t.Fatalf("expected scrub errors after corruption")
+			}
+		}
 
 		cmd = startServerWithBarrier(t, bin, dataDir, addr)
 		t.Cleanup(func() {
@@ -93,7 +108,11 @@ func TestCrashHarness(t *testing.T) {
 			_ = cmd.Process.Kill()
 			t.Fatalf("server did not restart: %v", err)
 		}
-		getObjectWithBody(t, client, host, keyBase+"/small.txt", "hello")
+		if parseCorrupt(t) {
+			getObjectExpectStatus(t, client, host, keyBase+"/small.txt", http.StatusInternalServerError)
+		} else {
+			getObjectWithBody(t, client, host, keyBase+"/small.txt", "hello")
+		}
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	}
@@ -147,6 +166,18 @@ func getObjectWithBody(t *testing.T, client *http.Client, host, key, want string
 	}
 	if string(body) != want {
 		t.Fatalf("body mismatch: got %q want %q", string(body), want)
+	}
+}
+
+func getObjectExpectStatus(t *testing.T, client *http.Client, host, key string, status int) {
+	t.Helper()
+	resp, err := client.Get(host + "/" + key)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != status {
+		t.Fatalf("GET status: %d", resp.StatusCode)
 	}
 }
 
@@ -289,6 +320,56 @@ func parseIterations(t *testing.T) int {
 		t.Fatalf("invalid CRASH_ITER=%q", raw)
 	}
 	return n
+}
+
+func parseCorrupt(t *testing.T) bool {
+	t.Helper()
+	raw := os.Getenv("CRASH_CORRUPT")
+	return raw == "1" || raw == "true" || raw == "yes"
+}
+
+func corruptFirstSegment(dir string) error {
+	var target string
+	errStop := errors.New("stop-walk")
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		target = path
+		return errStop
+	})
+	if err != nil && err != errStop {
+		return err
+	}
+	if target == "" {
+		return fmt.Errorf("no segment files to corrupt")
+	}
+	f, err := os.OpenFile(target, os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	dataEnd := info.Size() - segment.FooterLen()
+	offset := segment.SegmentHeaderLen() + segment.RecordHeaderLen()
+	if dataEnd <= offset {
+		return fmt.Errorf("segment too small to corrupt")
+	}
+	var b [1]byte
+	if _, err := f.ReadAt(b[:], offset); err != nil {
+		return err
+	}
+	b[0] ^= 0xff
+	if _, err := f.WriteAt(b[:], offset); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func pickFreePort() (string, error) {
