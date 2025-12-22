@@ -47,7 +47,8 @@ func TestMetricsBucketKeyLimits(t *testing.T) {
 	if len(keyReqs) != 1000 {
 		t.Fatalf("expected 1000 keys, got %d", len(keyReqs))
 	}
-	m.Record("get", 500, time.Millisecond, "bucket-0", "key-0")
+	m.Record("get", 500, time.Millisecond, "bucket-0", "key")
+	m.Record("get", 500, time.Millisecond, "bucket", "key-0")
 	_, _, _, _, _, bucketReqs, _, keyReqs, _ = m.Snapshot()
 	if bucketReqs["bucket-0"]["5xx"] != 1 {
 		t.Fatalf("expected bucket-0 to be updated")
