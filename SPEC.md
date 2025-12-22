@@ -1,7 +1,7 @@
 # SPEC: Seglake — stan aktualny implementacji
 
 Wersja: v0.2 (spec odzwierciedla aktualny kod)  
-Zakres: single-node, path-style S3, correctness > performance, minimalny narzut zasobów.
+Zakres: single-node, path-style + virtual-hosted-style S3, correctness > performance, minimalny narzut zasobów.
 
 ---
 
@@ -13,7 +13,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - **metadane w SQLite (WAL, synchronous=FULL)**,
 - **twardy kontrakt trwałości**: fsync segmentów + commit WAL zanim obiekt jest widoczny,
 - **narzędzia ops**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite plan/run,
-- **S3 API**: PUT/GET/HEAD, LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
+- **S3 API**: PUT/GET/HEAD (z `versionId`), LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
 
 ---
 
@@ -32,7 +32,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
   multipart_uploads, multipart_parts, rebuild_state, ops_runs.
 
 ### 2.3 S3 API
-- Path-style: `/<bucket>/<key>`.
+- Path-style: `/<bucket>/<key>` + virtual-hosted-style (domyślnie włączony).
 - PUT/GET/HEAD obiektu, ListObjectsV2, ListObjectsV1, ListBuckets, GetBucketLocation.
 - Range GET: pojedynczy i multi-range (multipart/byteranges).
 - SigV4 (Authorization oraz presigned) + fallback SigV2 **tylko** dla listowania.
@@ -42,7 +42,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ### 2.4 Ops i observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
-  gc-rewrite-plan/gc-rewrite-run (throttle + pause file).
+  gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL).
 - `/v1/meta/stats` z podstawowymi licznikami + ruch i latencje.
 - Request-id w logach i odpowiedziach.
 
@@ -108,6 +108,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `GET /<bucket>/<key>` — GET object.
 - `HEAD /<bucket>/<key>` — HEAD object.
 - `DELETE /<bucket>/<key>` — DELETE object (idempotentny).
+  - `?versionId=...` — GET/HEAD/DELETE konkretnej wersji (zwraca `x-amz-version-id`).
 - `DELETE /<bucket>` — DELETE bucket (tylko gdy pusty).
 - `PUT /<bucket>/<key>` + `x-amz-copy-source` — CopyObject (pełny copy).
 - Multipart:
@@ -126,8 +127,9 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `X-Amz-Content-Sha256` obsługiwany; `STREAMING-*` odrzucone.
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
+- Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
 - Rate limiting błędów auth per IP i per access key.
-- Limity inflight per access key (domyślnie 32).
+- Limity inflight per access key (domyślnie 32, per‑key override).
 - Logi redagują sekrety w query (np. X-Amz-Signature/Credential).
 - Referencje testów: `internal/s3/e2e_test.go`.
 
@@ -204,10 +206,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 7) Znane braki / ograniczenia (stan obecny)
 
- - Brak wersjonowania po API.
-- Brak ACL/IAM/polityk, brak per-key limitów inflight.
+ - Brak pełnych ACL/IAM/polityk (jest tylko prosta polityka `rw`/`ro` + allow‑lista bucketów).
 - Brak TLS w aplikacji (zakładany reverse proxy).
-- Virtual-hosted-style dostępny tylko za flagą.
 - Brak replikacji / multi-site / oplogu / HLC.
 
 ---
