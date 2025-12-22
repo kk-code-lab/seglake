@@ -73,7 +73,7 @@ func TestReplPullRetriesChunk(t *testing.T) {
 
 	client := &replClient{base: mustParseURL(t, server.URL), client: server.Client()}
 	cache := newReplMissingCache()
-	if _, _, err := runReplPullOnce(context.Background(), client, "", 100, true, eng, cache, time.Now().Add(time.Minute)); err != nil {
+	if _, _, err := runReplPullOnce(context.Background(), client, "", 100, true, store, eng, cache, time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("runReplPullOnce: %v", err)
 	}
 	data, err := eng.ReadSegmentRange("seg-test", 0, 4)
@@ -153,7 +153,7 @@ func TestReplPullRetryDeadline(t *testing.T) {
 
 	client := &replClient{base: mustParseURL(t, server.URL), client: server.Client()}
 	cache := newReplMissingCache()
-	_, _, err = runReplPullOnce(context.Background(), client, "", 100, true, eng, cache, time.Now())
+	_, _, err = runReplPullOnce(context.Background(), client, "", 100, true, store, eng, cache, time.Now())
 	if err == nil {
 		t.Fatalf("expected deadline error")
 	}

@@ -82,4 +82,5 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Lepsze błędy AWS (mapowania kodów i domyślne komunikaty).
 - Testy replikacji: reorder/duplikaty/split‑brain (konwergencja LWW).
 - Ops: repl-validate (porównanie manifestów i live wersji między węzłami).
-- Metryki replikacji w /v1/meta/stats (oplog bytes, backlog bytes, conflict count).
+- Ops: repl-validate (porównanie wszystkich wersji między węzłami).
+- Metryki replikacji w /v1/meta/stats (oplog bytes, backlog bytes, conflict count, repl bytes in).

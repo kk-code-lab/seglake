@@ -317,7 +317,7 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 	}
 	retryDeadline := time.Now().Add(retryTimeout)
 	for {
-		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng, missingCache, retryDeadline)
+		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, store, eng, missingCache, retryDeadline)
 		if err != nil {
 			if !watch {
 				return err
@@ -377,7 +377,7 @@ func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.En
 	return lastErr
 }
 
-func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine, cache *replMissingCache, retryDeadline time.Time) (string, int, error) {
+func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, store *meta.Store, eng *engine.Engine, cache *replMissingCache, retryDeadline time.Time) (string, int, error) {
 	oplogResp, err := client.getOplog(since, limit)
 	if err != nil {
 		return "", 0, err
@@ -414,11 +414,13 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 		}
 	}
 	fetchedManifests := 0
+	var fetchedBytes int64
 	for versionID := range missingManifests {
 		manifestBytes, err := client.getManifest(versionID)
 		if err != nil {
 			return "", applyResp.Applied, err
 		}
+		fetchedBytes += int64(len(manifestBytes))
 		man, err := eng.StoreManifestBytes(ctx, manifestBytes)
 		if err != nil {
 			return "", applyResp.Applied, err
@@ -448,6 +450,7 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 			if err := fetchChunkWithRetry(ctx, client, eng, ch, 3, retryDeadline); err != nil {
 				return "", applyResp.Applied, err
 			}
+			fetchedBytes += ch.Length
 			fetched++
 		}
 	}
@@ -456,6 +459,11 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 	}
 	if fetchedManifests > 0 || fetched > 0 {
 		fmt.Printf("repl: fetched manifests=%d chunks=%d\n", fetchedManifests, fetched)
+	}
+	if store != nil && fetchedBytes > 0 {
+		if err := store.RecordReplBytes(ctx, fetchedBytes); err != nil {
+			return "", applyResp.Applied, err
+		}
 	}
 	return oplogResp.LastHLC, applyResp.Applied, nil
 }

@@ -124,6 +124,27 @@ func TestStatsIncludesOpsRuns(t *testing.T) {
 	}
 }
 
+func TestStatsIncludesReplBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if err := store.RecordReplBytes(context.Background(), 128); err != nil {
+		t.Fatalf("RecordReplBytes: %v", err)
+	}
+	stats, err := store.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if stats.ReplBytesInTotal != 128 {
+		t.Fatalf("expected repl bytes 128, got %d", stats.ReplBytesInTotal)
+	}
+}
+
 func TestListGCTrends(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "meta.db")
