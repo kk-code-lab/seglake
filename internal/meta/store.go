@@ -477,7 +477,8 @@ func applyV9(ctx context.Context, tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS repl_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			updated_at TEXT NOT NULL,
-			last_hlc TEXT NOT NULL
+			last_pull_hlc TEXT NOT NULL DEFAULT '',
+			last_push_hlc TEXT NOT NULL DEFAULT ''
 		)`,
 	}
 	for _, stmt := range ddl {
@@ -1199,11 +1200,16 @@ LIMIT ?`, since, limit)
 
 // GetReplWatermark returns the last stored replication HLC watermark.
 func (s *Store) GetReplWatermark(ctx context.Context) (string, error) {
+	return s.GetReplPullWatermark(ctx)
+}
+
+// GetReplPullWatermark returns the last stored replication pull HLC watermark.
+func (s *Store) GetReplPullWatermark(ctx context.Context) (string, error) {
 	if s == nil || s.db == nil {
 		return "", errors.New("meta: db not initialized")
 	}
 	var hlc string
-	err := s.db.QueryRowContext(ctx, "SELECT last_hlc FROM repl_state WHERE id=1").Scan(&hlc)
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_pull_hlc,'') FROM repl_state WHERE id=1").Scan(&hlc)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
@@ -1215,6 +1221,27 @@ func (s *Store) GetReplWatermark(ctx context.Context) (string, error) {
 
 // SetReplWatermark stores the last replication HLC watermark.
 func (s *Store) SetReplWatermark(ctx context.Context, hlc string) error {
+	return s.SetReplPullWatermark(ctx, hlc)
+}
+
+// GetReplPushWatermark returns the last stored replication push HLC watermark.
+func (s *Store) GetReplPushWatermark(ctx context.Context) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("meta: db not initialized")
+	}
+	var hlc string
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_push_hlc,'') FROM repl_state WHERE id=1").Scan(&hlc)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hlc, nil
+}
+
+// SetReplPullWatermark stores the last replication pull HLC watermark.
+func (s *Store) SetReplPullWatermark(ctx context.Context, hlc string) error {
 	if s == nil || s.db == nil {
 		return errors.New("meta: db not initialized")
 	}
@@ -1223,9 +1250,25 @@ func (s *Store) SetReplWatermark(ctx context.Context, hlc string) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO repl_state(id, updated_at, last_hlc)
-VALUES(1, ?, ?)
-ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_hlc=excluded.last_hlc`, now, hlc)
+INSERT INTO repl_state(id, updated_at, last_pull_hlc, last_push_hlc)
+VALUES(1, ?, ?, '')
+ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_pull_hlc=excluded.last_pull_hlc`, now, hlc)
+	return err
+}
+
+// SetReplPushWatermark stores the last replication push HLC watermark.
+func (s *Store) SetReplPushWatermark(ctx context.Context, hlc string) error {
+	if s == nil || s.db == nil {
+		return errors.New("meta: db not initialized")
+	}
+	if hlc == "" {
+		return errors.New("meta: repl watermark required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO repl_state(id, updated_at, last_pull_hlc, last_push_hlc)
+VALUES(1, ?, '', ?)
+ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_push_hlc=excluded.last_push_hlc`, now, hlc)
 	return err
 }
 

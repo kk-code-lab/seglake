@@ -96,6 +96,9 @@ func main() {
 	replRegion := flag.String("repl-region", "us-east-1", "Replication SigV4 region")
 	replPushSince := flag.String("repl-push-since", "", "Replication push start HLC (optional)")
 	replPushLimit := flag.Int("repl-push-limit", 1000, "Replication push batch size")
+	replPushWatch := flag.Bool("repl-push-watch", false, "Continuously push local oplog")
+	replPushInterval := flag.Duration("repl-push-interval", 5*time.Second, "Replication push interval")
+	replPushBackoffMax := flag.Duration("repl-push-backoff-max", time.Minute, "Replication push max backoff on errors")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -152,7 +155,7 @@ func main() {
 			return
 		}
 		if *mode == "repl-push" {
-			if err := runReplPush(*replRemote, *replPushSince, *replPushLimit, *replAccessKey, *replSecretKey, *replRegion, store); err != nil {
+			if err := runReplPush(*replRemote, *replPushSince, *replPushLimit, *replPushWatch, *replPushInterval, *replPushBackoffMax, *replAccessKey, *replSecretKey, *replRegion, store); err != nil {
 				fmt.Fprintf(os.Stderr, "repl push error: %v\n", err)
 				os.Exit(1)
 			}

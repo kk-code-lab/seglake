@@ -8,28 +8,57 @@ import (
 
 func TestReplWatermark(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	store, err := Open(filepath.Join(dir, "meta.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newTestStore(t)
 
-	hlc, err := store.GetReplWatermark(context.Background())
+	hlc, err := store.GetReplPullWatermark(context.Background())
 	if err != nil {
 		t.Fatalf("GetReplWatermark: %v", err)
 	}
 	if hlc != "" {
 		t.Fatalf("expected empty watermark, got %q", hlc)
 	}
-	if err := store.SetReplWatermark(context.Background(), "0000000000000000001-0000000001"); err != nil {
+	if err := store.SetReplPullWatermark(context.Background(), "0000000000000000001-0000000001"); err != nil {
 		t.Fatalf("SetReplWatermark: %v", err)
 	}
-	hlc, err = store.GetReplWatermark(context.Background())
+	hlc, err = store.GetReplPullWatermark(context.Background())
 	if err != nil {
 		t.Fatalf("GetReplWatermark: %v", err)
 	}
 	if hlc != "0000000000000000001-0000000001" {
 		t.Fatalf("unexpected watermark %q", hlc)
 	}
+}
+
+func TestReplPushWatermark(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+
+	hlc, err := store.GetReplPushWatermark(context.Background())
+	if err != nil {
+		t.Fatalf("GetReplPushWatermark: %v", err)
+	}
+	if hlc != "" {
+		t.Fatalf("expected empty watermark, got %q", hlc)
+	}
+	if err := store.SetReplPushWatermark(context.Background(), "0000000000000000002-0000000001"); err != nil {
+		t.Fatalf("SetReplPushWatermark: %v", err)
+	}
+	hlc, err = store.GetReplPushWatermark(context.Background())
+	if err != nil {
+		t.Fatalf("GetReplPushWatermark: %v", err)
+	}
+	if hlc != "0000000000000000002-0000000001" {
+		t.Fatalf("unexpected watermark %q", hlc)
+	}
+}
+
+func newTestStore(t *testing.T) *Store {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }

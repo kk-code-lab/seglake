@@ -46,7 +46,7 @@ type replOplogApplyResponse struct {
 	MissingChunks    []replMissingChunk `json:"missing_chunks,omitempty"`
 }
 
-func runReplPush(remote, since string, limit int, accessKey, secretKey, region string, store *meta.Store) error {
+func runReplPush(remote, since string, limit int, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store) error {
 	if store == nil {
 		return errors.New("replication: store required")
 	}
@@ -85,26 +85,42 @@ func runReplPush(remote, since string, limit int, accessKey, secretKey, region s
 	}
 	ctx := context.Background()
 	if since == "" {
-		if hlc, err := store.GetReplWatermark(ctx); err == nil && hlc != "" {
+		if hlc, err := store.GetReplPushWatermark(ctx); err == nil && hlc != "" {
 			since = hlc
 		}
 	}
-	entries, err := store.ListOplogSince(ctx, since, limit)
-	if err != nil {
-		return err
+	if interval <= 0 {
+		interval = 5 * time.Second
 	}
-	if len(entries) == 0 {
-		fmt.Println("repl: no local oplog entries to push")
-		return nil
+	if backoffMax <= 0 {
+		backoffMax = time.Minute
 	}
-	resp, err := client.applyOplog(entries)
-	if err != nil {
-		return err
+	backoff := interval
+	for {
+		lastHLC, pushed, applied, err := runReplPushOnce(ctx, client, store, since, limit)
+		if err != nil {
+			if !watch {
+				return err
+			}
+			fmt.Printf("repl: error=%v backoff=%s\n", err, backoff)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > backoffMax {
+				backoff = backoffMax
+			}
+			continue
+		}
+		backoff = interval
+		if lastHLC != "" {
+			since = lastHLC
+		}
+		if !watch {
+			return nil
+		}
+		if pushed == 0 || applied == 0 {
+			time.Sleep(interval)
+		}
 	}
-	lastHLC := entries[len(entries)-1].HLCTS
-	_ = store.SetReplWatermark(ctx, lastHLC)
-	fmt.Printf("repl: pushed=%d applied=%d last_hlc=%s\n", len(entries), resp.Applied, lastHLC)
-	return nil
 }
 
 func runReplPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
@@ -257,6 +273,25 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 		fmt.Printf("repl: fetched manifests=%d chunks=%d\n", len(missingManifests), len(missingChunks))
 	}
 	return oplogResp.LastHLC, applyResp.Applied, nil
+}
+
+func runReplPushOnce(ctx context.Context, client *replClient, store *meta.Store, since string, limit int) (string, int, int, error) {
+	entries, err := store.ListOplogSince(ctx, since, limit)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if len(entries) == 0 {
+		fmt.Println("repl: no local oplog entries to push")
+		return since, 0, 0, nil
+	}
+	resp, err := client.applyOplog(entries)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	lastHLC := entries[len(entries)-1].HLCTS
+	_ = store.SetReplPushWatermark(ctx, lastHLC)
+	fmt.Printf("repl: pushed=%d applied=%d last_hlc=%s\n", len(entries), resp.Applied, lastHLC)
+	return lastHLC, len(entries), resp.Applied, nil
 }
 
 func (c *replClient) getOplog(since string, limit int) (*replOplogResponse, error) {

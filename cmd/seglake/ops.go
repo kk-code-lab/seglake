@@ -170,7 +170,7 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -repl-remote, -repl-since, -repl-limit, -repl-fetch-data, -repl-watch, -repl-interval, -repl-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
 	case "repl-push":
 		fmt.Println("Mode repl-push: push local oplog to remote.")
-		fmt.Println("Flags: -repl-remote, -repl-push-since, -repl-push-limit, -repl-access-key, -repl-secret-key, -repl-region.")
+		fmt.Println("Flags: -repl-remote, -repl-push-since, -repl-push-limit, -repl-push-watch, -repl-push-interval, -repl-push-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}
