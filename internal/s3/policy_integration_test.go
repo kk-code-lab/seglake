@@ -217,3 +217,79 @@ func TestPolicyListObjectsDenied(t *testing.T) {
 		t.Fatalf("list objects status: %d", resp.StatusCode)
 	}
 }
+
+func TestPolicyConditionsHeadersEnforced(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"headers":{"x-tenant":"alpha"}}}]}`
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Tenant", "alpha")
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req2.Header.Set("X-Tenant", "beta")
+	signRequestTest(req2, "ak", "sk", "us-east-1")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET status: %d", resp2.StatusCode)
+	}
+}
+
+func TestPolicyConditionsSourceIPEnforced(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"source_ip":["10.0.0.0/8"]}}]}`
+	server, _, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "10.1.1.1")
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list objects error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list objects status: %d", resp.StatusCode)
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req2.Header.Set("X-Forwarded-For", "192.168.1.10")
+	signRequestTest(req2, "ak", "sk", "us-east-1")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("list objects error: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("list objects status: %d", resp2.StatusCode)
+	}
+}
