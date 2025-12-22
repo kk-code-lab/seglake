@@ -231,4 +231,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-- Plan szczegółowy replikacji / multi‑site znajduje się w `TODO.md`.
+- Poza zakresem pierwszej iteracji:
+  - Silna konsystencja globalna.
+  - Cross-region locking lub transakcyjny rename.
+  - Zaawansowane polityki replikacji per-bucket (później).
