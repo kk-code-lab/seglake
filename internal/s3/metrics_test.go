@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -28,5 +29,30 @@ func TestMetricsBucketKeyStats(t *testing.T) {
 	}
 	if keyLatency["bucket/key"].N != 2 {
 		t.Fatalf("expected key latency samples, got %d", keyLatency["bucket/key"].N)
+	}
+}
+
+func TestMetricsBucketKeyLimits(t *testing.T) {
+	m := NewMetrics()
+	for i := 0; i < 101; i++ {
+		m.Record("get", 200, time.Millisecond, "bucket-"+strconv.Itoa(i), "key")
+	}
+	for i := 0; i < 1001; i++ {
+		m.Record("get", 200, time.Millisecond, "bucket", "key-"+strconv.Itoa(i))
+	}
+	_, _, _, _, _, bucketReqs, _, keyReqs, _ := m.Snapshot()
+	if len(bucketReqs) != 100 {
+		t.Fatalf("expected 100 buckets, got %d", len(bucketReqs))
+	}
+	if len(keyReqs) != 1000 {
+		t.Fatalf("expected 1000 keys, got %d", len(keyReqs))
+	}
+	m.Record("get", 500, time.Millisecond, "bucket-0", "key-0")
+	_, _, _, _, _, bucketReqs, _, keyReqs, _ = m.Snapshot()
+	if bucketReqs["bucket-0"]["5xx"] != 1 {
+		t.Fatalf("expected bucket-0 to be updated")
+	}
+	if keyReqs["bucket/key-0"]["5xx"] != 1 {
+		t.Fatalf("expected key-0 to be updated")
 	}
 }
