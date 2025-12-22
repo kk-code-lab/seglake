@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1940,6 +1941,17 @@ type Stats struct {
 	LastMPUGCReclaimed int64  `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
 }
 
+// ReplStat describes replication state and lag per remote.
+type ReplStat struct {
+	Remote         string  `json:"remote"`
+	LastPullHLC    string  `json:"last_pull_hlc,omitempty"`
+	LastPushHLC    string  `json:"last_push_hlc,omitempty"`
+	PullLagSeconds float64 `json:"pull_lag_seconds,omitempty"`
+	PushLagSeconds float64 `json:"push_lag_seconds,omitempty"`
+	PushBacklog    int64   `json:"push_backlog,omitempty"`
+	LastOplogHLC   string  `json:"last_oplog_hlc,omitempty"`
+}
+
 // GCTrend captures recent GC outcomes for trend reporting.
 type GCTrend struct {
 	Mode           string  `json:"mode"`
@@ -1989,6 +2001,113 @@ WHERE mode='mpu-gc-run'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDeleted, &stats.LastMPUGCReclaimed)
 	return stats, nil
+}
+
+// GetReplStats returns replication state and lag metrics.
+func (s *Store) GetReplStats(ctx context.Context) ([]ReplStat, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	var lastOplog string
+	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(hlc_ts),'') FROM oplog").Scan(&lastOplog)
+
+	var totalOplog int64
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM oplog").Scan(&totalOplog)
+
+	stats := make([]ReplStat, 0)
+
+	// Default/global state (legacy).
+	var defaultPull string
+	var defaultPush string
+	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(last_pull_hlc,''), COALESCE(last_push_hlc,'') FROM repl_state WHERE id=1").Scan(&defaultPull, &defaultPush)
+	if defaultPull != "" || defaultPush != "" {
+		stat := buildReplStat("default", defaultPull, defaultPush, lastOplog, totalOplog, s)
+		stats = append(stats, stat)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT remote, COALESCE(last_pull_hlc,''), COALESCE(last_push_hlc,'')
+FROM repl_state_remote
+ORDER BY remote`)
+	if err != nil {
+		return nil, err
+	}
+	err = scanRows(rows, func(scan func(dest ...any) error) error {
+		var remote, pull, push string
+		if err := scan(&remote, &pull, &push); err != nil {
+			return err
+		}
+		stats = append(stats, buildReplStat(remote, pull, push, lastOplog, totalOplog, s))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func buildReplStat(remote, pull, push, lastOplog string, totalOplog int64, store *Store) ReplStat {
+	stat := ReplStat{
+		Remote:       remote,
+		LastPullHLC:  pull,
+		LastPushHLC:  push,
+		LastOplogHLC: lastOplog,
+	}
+	if pull != "" {
+		stat.PullLagSeconds = lagSeconds(pull)
+	}
+	if push != "" {
+		stat.PushLagSeconds = lagSeconds(push)
+		if store != nil {
+			if backlog, err := store.countOplogSince(context.Background(), push); err == nil {
+				stat.PushBacklog = backlog
+			}
+		}
+	} else if totalOplog > 0 {
+		stat.PushBacklog = totalOplog
+	}
+	return stat
+}
+
+func lagSeconds(hlc string) float64 {
+	physical, ok := parseHLCPhysical(hlc)
+	if !ok {
+		return 0
+	}
+	now := time.Now().UTC().UnixNano()
+	if now <= physical {
+		return 0
+	}
+	return float64(now-physical) / float64(time.Second)
+}
+
+func parseHLCPhysical(hlc string) (int64, bool) {
+	parts := strings.SplitN(hlc, "-", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return 0, false
+	}
+	val, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
+func (s *Store) countOplogSince(ctx context.Context, since string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("meta: db not initialized")
+	}
+	var count int64
+	if since == "" {
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM oplog").Scan(&count); err != nil {
+			return 0, err
+		}
+		return count, nil
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM oplog WHERE hlc_ts > ?", since).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // ListGCTrends returns recent GC runs (excluding plans) in reverse chronological order.
