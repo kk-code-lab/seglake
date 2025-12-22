@@ -1,3 +1,5 @@
+//go:build crashharness
+
 package ops
 
 import (
@@ -8,10 +10,6 @@ import (
 )
 
 func TestCrashHarness(t *testing.T) {
-	if os.Getenv("SEGLAKE_CRASH_TEST") == "" {
-		t.Skip("set SEGLAKE_CRASH_TEST=1 to run crash harness")
-	}
-
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
