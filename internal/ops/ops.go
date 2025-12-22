@@ -26,7 +26,10 @@ type Report struct {
 	Segments          int       `json:"segments"`
 	Errors            int       `json:"errors"`
 	ErrorSample       []string  `json:"error_sample,omitempty"`
+	Warnings          int       `json:"warnings,omitempty"`
+	WarningSample     []string  `json:"warning_sample,omitempty"`
 	Candidates        int       `json:"candidates,omitempty"`
+	CandidateBytes    int64     `json:"candidate_bytes,omitempty"`
 	Deleted           int       `json:"deleted,omitempty"`
 	Reclaimed         int64     `json:"reclaimed_bytes,omitempty"`
 	RewrittenSegments int       `json:"rewritten_segments,omitempty"`
@@ -48,6 +51,30 @@ func newReport(mode string) *Report {
 		SchemaVersion: reportSchemaVersion,
 		Mode:          mode,
 		StartedAt:     time.Now().UTC(),
+	}
+}
+
+type GCGuardrails struct {
+	WarnCandidates     int
+	WarnReclaimedBytes int64
+	MaxCandidates      int
+	MaxReclaimedBytes  int64
+}
+
+type MPUGCGuardrails struct {
+	WarnUploads        int
+	WarnReclaimedBytes int64
+	MaxUploads         int
+	MaxReclaimedBytes  int64
+}
+
+func (r *Report) addWarning(msg string) {
+	if r == nil {
+		return
+	}
+	r.Warnings++
+	if len(r.WarningSample) < 5 {
+		r.WarningSample = append(r.WarningSample, msg)
 	}
 }
 
@@ -293,7 +320,7 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 }
 
 // GCPlan computes which sealed segments can be removed.
-func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, []meta.Segment, error) {
+func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration, guardrails GCGuardrails) (*Report, []meta.Segment, error) {
 	report := newReport("gc-plan")
 	store, err := meta.Open(metaPath)
 	if err != nil {
@@ -356,19 +383,39 @@ func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, [
 	report.Candidates = len(candidates)
 	for _, seg := range candidates {
 		report.CandidateIDs = append(report.CandidateIDs, seg.ID)
+		report.CandidateBytes += seg.Size
+	}
+	if guardrails.WarnCandidates > 0 && report.Candidates >= guardrails.WarnCandidates {
+		report.addWarning(fmt.Sprintf("gc: candidates=%d exceeds warn threshold=%d", report.Candidates, guardrails.WarnCandidates))
+	}
+	if guardrails.WarnReclaimedBytes > 0 && report.CandidateBytes >= guardrails.WarnReclaimedBytes {
+		report.addWarning(fmt.Sprintf("gc: candidate_bytes=%d exceeds warn threshold=%d", report.CandidateBytes, guardrails.WarnReclaimedBytes))
+	}
+	if guardrails.MaxCandidates > 0 && report.Candidates > guardrails.MaxCandidates {
+		report.addWarning(fmt.Sprintf("gc: candidates=%d exceeds max=%d (gc-run will refuse)", report.Candidates, guardrails.MaxCandidates))
+	}
+	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
+		report.addWarning(fmt.Sprintf("gc: candidate_bytes=%d exceeds max=%d (gc-run will refuse)", report.CandidateBytes, guardrails.MaxReclaimedBytes))
 	}
 	report.FinishedAt = time.Now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, candidates, nil
 }
 
 // GCRun deletes candidate segments after verifying the plan.
-func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool) (*Report, error) {
+func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool, guardrails GCGuardrails) (*Report, error) {
 	if !force {
 		return nil, errors.New("gc: refuse to run without --force")
 	}
-	report, candidates, err := GCPlan(layout, metaPath, minAge)
+	report, candidates, err := GCPlan(layout, metaPath, minAge, guardrails)
 	if err != nil {
 		return nil, err
+	}
+	if guardrails.MaxCandidates > 0 && report.Candidates > guardrails.MaxCandidates {
+		return nil, fmt.Errorf("gc: candidates=%d exceeds max=%d", report.Candidates, guardrails.MaxCandidates)
+	}
+	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
+		return nil, fmt.Errorf("gc: candidate_bytes=%d exceeds max=%d", report.CandidateBytes, guardrails.MaxReclaimedBytes)
 	}
 	report.Mode = "gc-run"
 	store, err := meta.Open(metaPath)
@@ -398,6 +445,9 @@ func reportOpsFrom(report *Report) *meta.ReportOps {
 	return &meta.ReportOps{
 		FinishedAt:        report.FinishedAt.UTC().Format(time.RFC3339Nano),
 		Errors:            report.Errors,
+		Warnings:          report.Warnings,
+		Candidates:        report.Candidates,
+		CandidateBytes:    report.CandidateBytes,
 		Deleted:           report.Deleted,
 		ReclaimedBytes:    report.Reclaimed,
 		RewrittenSegments: report.RewrittenSegments,
@@ -407,7 +457,7 @@ func reportOpsFrom(report *Report) *meta.ReportOps {
 }
 
 // MPUGCPlan computes which multipart uploads can be removed by TTL.
-func MPUGCPlan(metaPath string, ttl time.Duration) (*Report, []meta.MultipartUpload, error) {
+func MPUGCPlan(metaPath string, ttl time.Duration, guardrails MPUGCGuardrails) (*Report, []meta.MultipartUpload, error) {
 	if ttl <= 0 {
 		return nil, nil, errors.New("mpu-gc: ttl must be > 0")
 	}
@@ -425,20 +475,45 @@ func MPUGCPlan(metaPath string, ttl time.Duration) (*Report, []meta.MultipartUpl
 	}
 	report.Candidates = len(uploads)
 	for _, up := range uploads {
+		_, bytes, err := store.MultipartUploadStats(context.Background(), up.UploadID)
+		if err == nil {
+			report.CandidateBytes += bytes
+		}
+	}
+	for _, up := range uploads {
 		report.CandidateIDs = append(report.CandidateIDs, up.UploadID)
 	}
+	if guardrails.WarnUploads > 0 && report.Candidates >= guardrails.WarnUploads {
+		report.addWarning(fmt.Sprintf("mpu-gc: uploads=%d exceeds warn threshold=%d", report.Candidates, guardrails.WarnUploads))
+	}
+	if guardrails.WarnReclaimedBytes > 0 && report.CandidateBytes >= guardrails.WarnReclaimedBytes {
+		report.addWarning(fmt.Sprintf("mpu-gc: candidate_bytes=%d exceeds warn threshold=%d", report.CandidateBytes, guardrails.WarnReclaimedBytes))
+	}
+	if guardrails.MaxUploads > 0 && report.Candidates > guardrails.MaxUploads {
+		report.addWarning(fmt.Sprintf("mpu-gc: uploads=%d exceeds max=%d (mpu-gc-run will refuse)", report.Candidates, guardrails.MaxUploads))
+	}
+	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
+		report.addWarning(fmt.Sprintf("mpu-gc: candidate_bytes=%d exceeds max=%d (mpu-gc-run will refuse)", report.CandidateBytes, guardrails.MaxReclaimedBytes))
+	}
 	report.FinishedAt = time.Now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, uploads, nil
 }
 
 // MPUGCRun deletes multipart uploads older than TTL.
-func MPUGCRun(metaPath string, ttl time.Duration, force bool) (*Report, error) {
+func MPUGCRun(metaPath string, ttl time.Duration, force bool, guardrails MPUGCGuardrails) (*Report, error) {
 	if !force {
 		return nil, errors.New("mpu-gc: refuse to run without --force")
 	}
-	report, uploads, err := MPUGCPlan(metaPath, ttl)
+	report, uploads, err := MPUGCPlan(metaPath, ttl, guardrails)
 	if err != nil {
 		return nil, err
+	}
+	if guardrails.MaxUploads > 0 && report.Candidates > guardrails.MaxUploads {
+		return nil, fmt.Errorf("mpu-gc: uploads=%d exceeds max=%d", report.Candidates, guardrails.MaxUploads)
+	}
+	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
+		return nil, fmt.Errorf("mpu-gc: candidate_bytes=%d exceeds max=%d", report.CandidateBytes, guardrails.MaxReclaimedBytes)
 	}
 	store, err := meta.Open(metaPath)
 	if err != nil {

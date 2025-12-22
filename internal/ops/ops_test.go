@@ -234,7 +234,7 @@ func TestGCPlanAndRun(t *testing.T) {
 		t.Fatalf("RecordPut: %v", err)
 	}
 
-	report, candidates, err := GCPlan(layout, metaPath, 0)
+	report, candidates, err := GCPlan(layout, metaPath, 0, GCGuardrails{})
 	if err != nil {
 		t.Fatalf("GCPlan: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestGCPlanAndRun(t *testing.T) {
 		t.Fatalf("expected dead segment candidate, got %+v", candidates)
 	}
 
-	if _, err := GCRun(layout, metaPath, 0, true); err != nil {
+	if _, err := GCRun(layout, metaPath, 0, true, GCGuardrails{}); err != nil {
 		t.Fatalf("GCRun: %v", err)
 	}
 	if _, err := os.Stat(deadSegPath); !os.IsNotExist(err) {
@@ -281,7 +281,7 @@ func TestMPUGCPlanAndRun(t *testing.T) {
 	}
 
 	time.Sleep(2 * time.Millisecond)
-	report, uploads, err := MPUGCPlan(metaPath, time.Nanosecond)
+	report, uploads, err := MPUGCPlan(metaPath, time.Nanosecond, MPUGCGuardrails{})
 	if err != nil {
 		t.Fatalf("MPUGCPlan: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestMPUGCPlanAndRun(t *testing.T) {
 		t.Fatalf("expected candidates")
 	}
 
-	report, err = MPUGCRun(metaPath, time.Nanosecond, true)
+	report, err = MPUGCRun(metaPath, time.Nanosecond, true, MPUGCGuardrails{})
 	if err != nil {
 		t.Fatalf("MPUGCRun: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestGCPlanIncludesMultipartParts(t *testing.T) {
 		t.Fatalf("PutMultipartPart: %v", err)
 	}
 
-	report, candidates, err := GCPlan(layout, metaPath, 0)
+	report, candidates, err := GCPlan(layout, metaPath, 0, GCGuardrails{})
 	if err != nil {
 		t.Fatalf("GCPlan: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestGCPlanMinAgeRespected(t *testing.T) {
 		t.Fatalf("RecordSegment: %v", err)
 	}
 
-	report, candidates, err := GCPlan(layout, metaPath, 24*time.Hour)
+	report, candidates, err := GCPlan(layout, metaPath, 24*time.Hour, GCGuardrails{})
 	if err != nil {
 		t.Fatalf("GCPlan: %v", err)
 	}

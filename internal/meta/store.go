@@ -166,6 +166,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 5 {
+		if err = applyV5(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -291,6 +299,23 @@ func applyV4(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV5(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE ops_runs ADD COLUMN candidates INTEGER`,
+		`ALTER TABLE ops_runs ADD COLUMN candidate_bytes INTEGER`,
+		`ALTER TABLE ops_runs ADD COLUMN warnings INTEGER`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
 			return err
 		}
 	}
@@ -692,6 +717,20 @@ ORDER BY created_at`, ts)
 	return out, nil
 }
 
+// MultipartUploadStats returns part count and total bytes for an upload.
+func (s *Store) MultipartUploadStats(ctx context.Context, uploadID string) (int, int64, error) {
+	if uploadID == "" {
+		return 0, 0, errors.New("meta: upload id required")
+	}
+	row := s.db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(SUM(size),0) FROM multipart_parts WHERE upload_id=?", uploadID)
+	var parts int
+	var bytes int64
+	if err := row.Scan(&parts, &bytes); err != nil {
+		return 0, 0, err
+	}
+	return parts, bytes, nil
+}
+
 // DeleteMultipartUpload removes an upload and its parts.
 func (s *Store) DeleteMultipartUpload(ctx context.Context, uploadID string) (int, int64, error) {
 	if uploadID == "" {
@@ -901,9 +940,9 @@ func (s *Store) RecordOpsRun(ctx context.Context, mode string, report *ReportOps
 		return errors.New("meta: ops run requires mode and finished_at")
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO ops_runs(mode, finished_at, errors, deleted, reclaimed_bytes, rewritten_segments, rewritten_bytes, new_segments)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		mode, report.FinishedAt, report.Errors, report.Deleted, report.ReclaimedBytes, report.RewrittenSegments, report.RewrittenBytes, report.NewSegments)
+INSERT INTO ops_runs(mode, finished_at, errors, warnings, candidates, candidate_bytes, deleted, reclaimed_bytes, rewritten_segments, rewritten_bytes, new_segments)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mode, report.FinishedAt, report.Errors, report.Warnings, report.Candidates, report.CandidateBytes, report.Deleted, report.ReclaimedBytes, report.RewrittenSegments, report.RewrittenBytes, report.NewSegments)
 	return err
 }
 
@@ -911,6 +950,9 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 type ReportOps struct {
 	FinishedAt        string
 	Errors            int
+	Warnings          int
+	Candidates        int
+	CandidateBytes    int64
 	Deleted           int
 	ReclaimedBytes    int64
 	RewrittenSegments int
@@ -920,18 +962,22 @@ type ReportOps struct {
 
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
-	Objects           int64  `json:"objects"`
-	Segments          int64  `json:"segments"`
-	BytesLive         int64  `json:"bytes_live"`
-	LastFsckAt        string `json:"last_fsck_at,omitempty"`
-	LastFsckErrors    int    `json:"last_fsck_errors,omitempty"`
-	LastScrubAt       string `json:"last_scrub_at,omitempty"`
-	LastScrubErrors   int    `json:"last_scrub_errors,omitempty"`
-	LastGCAt          string `json:"last_gc_at,omitempty"`
-	LastGCErrors      int    `json:"last_gc_errors,omitempty"`
-	LastGCReclaimed   int64  `json:"last_gc_reclaimed_bytes,omitempty"`
-	LastGCRewritten   int64  `json:"last_gc_rewritten_bytes,omitempty"`
-	LastGCNewSegments int    `json:"last_gc_new_segments,omitempty"`
+	Objects            int64  `json:"objects"`
+	Segments           int64  `json:"segments"`
+	BytesLive          int64  `json:"bytes_live"`
+	LastFsckAt         string `json:"last_fsck_at,omitempty"`
+	LastFsckErrors     int    `json:"last_fsck_errors,omitempty"`
+	LastScrubAt        string `json:"last_scrub_at,omitempty"`
+	LastScrubErrors    int    `json:"last_scrub_errors,omitempty"`
+	LastGCAt           string `json:"last_gc_at,omitempty"`
+	LastGCErrors       int    `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed    int64  `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten    int64  `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments  int    `json:"last_gc_new_segments,omitempty"`
+	LastMPUGCAt        string `json:"last_mpu_gc_at,omitempty"`
+	LastMPUGCErrors    int    `json:"last_mpu_gc_errors,omitempty"`
+	LastMPUGCDeleted   int    `json:"last_mpu_gc_deleted,omitempty"`
+	LastMPUGCReclaimed int64  `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
 }
 
 // GCTrend captures recent GC outcomes for trend reporting.
@@ -976,6 +1022,12 @@ FROM ops_runs
 WHERE mode LIKE 'gc-%' AND mode NOT LIKE 'gc-plan%'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastGCAt, &stats.LastGCErrors, &stats.LastGCReclaimed, &stats.LastGCRewritten, &stats.LastGCNewSegments)
+	_ = s.db.QueryRowContext(ctx, `
+SELECT finished_at, errors, COALESCE(deleted,0), COALESCE(reclaimed_bytes,0)
+FROM ops_runs
+WHERE mode='mpu-gc-run'
+ORDER BY finished_at DESC
+LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDeleted, &stats.LastMPUGCReclaimed)
 	return stats, nil
 }
 

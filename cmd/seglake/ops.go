@@ -11,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -33,7 +33,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		report, err = ops.Rebuild(layout, metaPath)
 	case "gc-plan":
 		var candidates []meta.Segment
-		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge)
+		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge, gcGuardrails)
 		if err == nil {
 			report.Candidates = len(candidates)
 			report.CandidateIDs = nil
@@ -42,7 +42,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 			}
 		}
 	case "gc-run":
-		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce)
+		report, err = ops.GCRun(layout, metaPath, gcMinAge, gcForce, gcGuardrails)
 	case "gc-rewrite":
 		report, err = ops.GCRewrite(layout, metaPath, gcMinAge, gcLiveThreshold, gcForce, gcRewriteBps, gcPauseFile)
 	case "gc-rewrite-plan":
@@ -64,7 +64,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		}
 	case "mpu-gc-plan":
 		var uploads []meta.MultipartUpload
-		report, uploads, err = ops.MPUGCPlan(metaPath, mpuTTL)
+		report, uploads, err = ops.MPUGCPlan(metaPath, mpuTTL, mpuGuardrails)
 		if err == nil {
 			report.Candidates = len(uploads)
 			report.CandidateIDs = nil
@@ -73,7 +73,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 			}
 		}
 	case "mpu-gc-run":
-		report, err = ops.MPUGCRun(metaPath, mpuTTL, mpuForce)
+		report, err = ops.MPUGCRun(metaPath, mpuTTL, mpuForce, mpuGuardrails)
 	case "support-bundle":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
@@ -99,6 +99,9 @@ func fmtTime() string {
 func formatReport(report *ops.Report) string {
 	if report == nil {
 		return ""
+	}
+	if report.Warnings > 0 {
+		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
 	}
 	return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d", report.Mode, report.Manifests, report.Segments, report.Errors)
 }
@@ -134,10 +137,10 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -rebuild-meta (optional path to target meta.db).")
 	case "gc-plan":
 		fmt.Println("Mode gc-plan: prints segments eligible for removal.")
-		fmt.Println("Flags: -gc-min-age (default 24h).")
+		fmt.Println("Flags: -gc-min-age (default 24h), -gc-warn-segments, -gc-warn-reclaim-bytes, -gc-max-segments, -gc-max-reclaim-bytes.")
 	case "gc-run":
 		fmt.Println("Mode gc-run: deletes 100% dead segments.")
-		fmt.Println("Flags: -gc-min-age, -gc-force (required).")
+		fmt.Println("Flags: -gc-min-age, -gc-force (required), -gc-warn-segments, -gc-warn-reclaim-bytes, -gc-max-segments, -gc-max-reclaim-bytes.")
 	case "gc-rewrite":
 		fmt.Println("Mode gc-rewrite: rewrites partially-dead sealed segments.")
 		fmt.Println("Flags: -gc-min-age, -gc-live-threshold (default 0.5), -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
@@ -149,10 +152,10 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -gc-rewrite-from-plan, -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
 	case "mpu-gc-plan":
 		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
-		fmt.Println("Flags: -mpu-ttl (default 7d).")
+		fmt.Println("Flags: -mpu-ttl (default 7d), -mpu-warn-uploads, -mpu-warn-reclaim-bytes, -mpu-max-uploads, -mpu-max-reclaim-bytes.")
 	case "mpu-gc-run":
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
-		fmt.Println("Flags: -mpu-ttl, -mpu-force (required).")
+		fmt.Println("Flags: -mpu-ttl, -mpu-force (required), -mpu-warn-uploads, -mpu-warn-reclaim-bytes, -mpu-max-uploads, -mpu-max-reclaim-bytes.")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 		fmt.Println("Flags: -snapshot-dir (output directory).")
