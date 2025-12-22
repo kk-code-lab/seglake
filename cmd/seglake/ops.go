@@ -11,7 +11,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -31,6 +31,8 @@ func runOps(mode, dataDir, metaPath, snapshotDir string, gcMinAge time.Duration,
 		report, err = ops.Snapshot(layout, metaPath, snapshotDir)
 	case "rebuild-index":
 		report, err = ops.Rebuild(layout, metaPath)
+	case "repl-validate":
+		report, err = ops.ReplValidate(layout, metaPath, replCompareDir)
 	case "gc-plan":
 		var candidates []meta.Segment
 		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge, gcGuardrails)
@@ -99,6 +101,16 @@ func fmtTime() string {
 func formatReport(report *ops.Report) string {
 	if report == nil {
 		return ""
+	}
+	if report.Mode == "repl-validate" {
+		return fmt.Sprintf("mode=%s local_manifests=%d remote_manifests=%d local_live=%d remote_live=%d errors=%d",
+			report.Mode,
+			report.CompareManifestsLocal,
+			report.CompareManifestsRemote,
+			report.CompareLiveLocal,
+			report.CompareLiveRemote,
+			report.Errors,
+		)
 	}
 	if report.Warnings > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
@@ -171,6 +183,9 @@ func printModeHelp(mode string) {
 	case "repl-push":
 		fmt.Println("Mode repl-push: push local oplog to remote.")
 		fmt.Println("Flags: -repl-remote, -repl-push-since, -repl-push-limit, -repl-push-watch, -repl-push-interval, -repl-push-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
+	case "repl-validate":
+		fmt.Println("Mode repl-validate: compare manifests and live versions between data dirs.")
+		fmt.Println("Flags: -repl-compare-dir (remote data dir).")
 	case "repl-bootstrap":
 		fmt.Println("Mode repl-bootstrap: download snapshot and catch up oplog.")
 		fmt.Println("Flags: -repl-remote, -repl-bootstrap-force, -repl-access-key, -repl-secret-key, -repl-region.")

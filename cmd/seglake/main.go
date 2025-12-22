@@ -101,6 +101,7 @@ func main() {
 	replPushInterval := flag.Duration("repl-push-interval", 5*time.Second, "Replication push interval")
 	replPushBackoffMax := flag.Duration("repl-push-backoff-max", time.Minute, "Replication push max backoff on errors")
 	replBootstrapForce := flag.Bool("repl-bootstrap-force", false, "Overwrite local meta.db during bootstrap")
+	replCompareDir := flag.String("repl-compare-dir", "", "Replication validation compare data dir")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -198,7 +199,7 @@ func main() {
 			MaxUploads:         *mpuMaxUploads,
 			MaxReclaimedBytes:  *mpuMaxReclaim,
 		}
-		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *mpuTTL, *mpuForce, gcGuard, mpuGuard, *jsonOut); err != nil {
+		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *replCompareDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *mpuTTL, *mpuForce, gcGuard, mpuGuard, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
 			os.Exit(1)
 		}
