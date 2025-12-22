@@ -2,10 +2,12 @@ package ops
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
@@ -146,4 +148,52 @@ func TestRebuildIndexSkipsCorruptManifest(t *testing.T) {
 	if _, err := RebuildIndex(layout, metaPath); err == nil {
 		t.Fatalf("expected rebuild error for corrupt manifest")
 	}
+}
+
+func TestRebuildIndexRebuildsOplogWithDeterministicHLC(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	man := &manifest.Manifest{
+		VersionID: "v1",
+		Size:      4,
+	}
+	path := filepath.Join(layout.ManifestsDir, "bucket__key__v1")
+	if err := writeManifest(path, man); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	mtime := time.Date(2025, 12, 22, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	if _, err := RebuildIndex(layout, metaPath); err != nil {
+		t.Fatalf("RebuildIndex: %v", err)
+	}
+
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	entries, err := store.ListOplog(context.Background())
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 oplog entry, got %d", len(entries))
+	}
+	wantHLC := formatHLC(mtime.UnixNano(), 0)
+	if entries[0].HLCTS != wantHLC {
+		t.Fatalf("expected hlc %s, got %s", wantHLC, entries[0].HLCTS)
+	}
+}
+
+func formatHLC(physical int64, logical uint32) string {
+	return fmt.Sprintf("%019d-%010d", physical, logical)
 }

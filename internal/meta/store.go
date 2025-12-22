@@ -1107,40 +1107,7 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
-
-	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
-		return err
-	}
-	putPayload, err := json.Marshal(oplogPutPayload{
-		ETag:         etag,
-		Size:         size,
-		LastModified: now,
-	})
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `
-INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-		versionID, bucket, key, etag, size, now, hlcTS, siteID); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `
-INSERT INTO objects_current(bucket, key, version_id)
-VALUES(?, ?, ?)
-ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
-		bucket, key, versionID); err != nil {
-		return err
-	}
-	if manifestPath != "" {
-		if _, err = tx.ExecContext(ctx, `
-INSERT INTO manifests(version_id, path) VALUES(?, ?)
-ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
-			versionID, manifestPath); err != nil {
-			return err
-		}
-	}
-	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, string(putPayload)); err != nil {
+	if err := s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, now, true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1153,22 +1120,33 @@ func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, siz
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
-	putPayload, err := json.Marshal(oplogPutPayload{
-		ETag:         etag,
-		Size:         size,
-		LastModified: now,
-	})
-	if err != nil {
-		return err
-	}
+	return s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, now, true)
+}
 
-	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
+// RecordPutWithHLC inserts a new version using the provided HLC/site_id.
+func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, versionID, etag string, size int64, manifestPath, lastModified string, writeOplog bool) error {
+	if tx == nil {
+		return errors.New("meta: transaction required")
+	}
+	if bucket == "" || key == "" {
+		return errors.New("meta: bucket and key required")
+	}
+	if lastModified == "" {
+		lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if siteID == "" {
+		siteID = s.siteID
+	}
+	if siteID == "" {
+		siteID = "local"
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, lastModified); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
 INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-		versionID, bucket, key, etag, size, now, hlcTS, siteID); err != nil {
+		versionID, bucket, key, etag, size, lastModified, hlcTS, siteID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -1186,8 +1164,18 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			return err
 		}
 	}
-	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, string(putPayload)); err != nil {
-		return err
+	if writeOplog {
+		putPayload, err := json.Marshal(oplogPutPayload{
+			ETag:         etag,
+			Size:         size,
+			LastModified: lastModified,
+		})
+		if err != nil {
+			return err
+		}
+		if err := s.recordOplogTxWithSite(tx, hlcTS, siteID, "put", bucket, key, versionID, string(putPayload)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1250,6 +1238,14 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`, versionID, manifestPa
 }
 
 func (s *Store) recordOplogTx(tx *sql.Tx, hlcTS, opType, bucket, key, versionID, payload string) error {
+	siteID := s.siteID
+	if siteID == "" {
+		siteID = "local"
+	}
+	return s.recordOplogTxWithSite(tx, hlcTS, siteID, opType, bucket, key, versionID, payload)
+}
+
+func (s *Store) recordOplogTxWithSite(tx *sql.Tx, hlcTS, siteID, opType, bucket, key, versionID, payload string) error {
 	if tx == nil {
 		return errors.New("meta: transaction required")
 	}
@@ -1259,7 +1255,6 @@ func (s *Store) recordOplogTx(tx *sql.Tx, hlcTS, opType, bucket, key, versionID,
 	if opType == "" {
 		return errors.New("meta: op type required")
 	}
-	siteID := s.siteID
 	if siteID == "" {
 		siteID = "local"
 	}
