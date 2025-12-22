@@ -220,5 +220,4 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) Replikacja / multi-site: projekt oplogu + HLC + mechanizm synchronizacji.
-2) Utrzymanie i stabilizacja: monitoring, narzędzia ops, dokumentacja.
+- Plan szczegółowy replikacji / multi‑site znajduje się w `TODO.md`.
