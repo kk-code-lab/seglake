@@ -3,8 +3,10 @@ package ops
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,9 +37,23 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	defer func() { _ = store.Close() }()
 
 	segmentRefs := make(map[string]struct{})
+	type rebuildEntry struct {
+		path      string
+		bucket    string
+		key       string
+		versionID string
+		size      int64
+		chunks    []manifest.ChunkRef
+		modTime   time.Time
+	}
+	var entries []rebuildEntry
 	if err := store.FlushWith([]func(tx *sql.Tx) error{
 		func(tx *sql.Tx) error {
 			for _, path := range manifests {
+				info, err := os.Stat(path)
+				if err != nil {
+					return err
+				}
 				file, err := os.Open(path)
 				if err != nil {
 					return err
@@ -57,11 +73,51 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 					report.SkippedManifests++
 					continue
 				}
-				if err := store.RecordPutTx(tx, bucket, key, man.VersionID, "", man.Size, path); err != nil {
+				entries = append(entries, rebuildEntry{
+					path:      path,
+					bucket:    bucket,
+					key:       key,
+					versionID: man.VersionID,
+					size:      man.Size,
+					chunks:    man.Chunks,
+					modTime:   info.ModTime().UTC(),
+				})
+			}
+			sort.Slice(entries, func(i, j int) bool {
+				if entries[i].modTime.Before(entries[j].modTime) {
+					return true
+				}
+				if entries[i].modTime.After(entries[j].modTime) {
+					return false
+				}
+				if entries[i].bucket != entries[j].bucket {
+					return entries[i].bucket < entries[j].bucket
+				}
+				if entries[i].key != entries[j].key {
+					return entries[i].key < entries[j].key
+				}
+				if entries[i].versionID != entries[j].versionID {
+					return entries[i].versionID < entries[j].versionID
+				}
+				return entries[i].path < entries[j].path
+			})
+			lastPhysical := int64(-1)
+			var logical uint32
+			for _, entry := range entries {
+				physical := entry.modTime.UnixNano()
+				if physical == lastPhysical {
+					logical++
+				} else {
+					lastPhysical = physical
+					logical = 0
+				}
+				hlcTS := fmt.Sprintf("%019d-%010d", physical, logical)
+				lastModified := entry.modTime.Format(time.RFC3339Nano)
+				if err := store.RecordPutWithHLC(tx, hlcTS, "local", entry.bucket, entry.key, entry.versionID, "", entry.size, entry.path, lastModified, true); err != nil {
 					return err
 				}
 				report.RebuiltObjects++
-				for _, ch := range man.Chunks {
+				for _, ch := range entry.chunks {
 					segmentRefs[ch.SegmentID] = struct{}{}
 				}
 			}

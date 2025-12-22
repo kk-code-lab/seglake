@@ -39,12 +39,12 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 
 ### Faza 3 — bootstrap i recovery
 - Zrobione: snapshot + oplog replay (`repl-bootstrap`), `repl-pull`, `repl-push`.
-- Otwarte: rebuild-index z uwzględnieniem `oplog` i HLC (deterministyczne odtwarzanie).
+- Zrobione: rebuild-index z uwzględnieniem `oplog` i HLC (deterministyczne odtwarzanie).
 
 ### Faza 4 — spójność i edge-case
 - Zrobione: konflikty LWW (PUT vs DELETE, PUT vs PUT, MPU complete vs DELETE) + tie-break po site_id.
 - Zrobione: out-of-order apply (starszy PUT nie nadpisuje nowszego DELETE).
-- Otwarte: replikacja ACL/polityk i API keys jako osobne typy operacji.
+- Zrobione: replikacja ACL/polityk i API keys jako osobne typy operacji.
 
 ### Faza 5 — testy i observability
 - Testy symulacyjne: opóźnienia, duplikaty, reorder, split-brain.
