@@ -176,6 +176,7 @@ Przechowywanie:
 - wspierasz `x-amz-content-sha256: UNSIGNED-PAYLOAD` oraz pełny hash payloadu (weryfikowany streamingowo)
 - path‑style: `/<bucket>/<key>` (tylko)
  - wspierasz `?location` (GetBucketLocation) dla kompatybilności tooling/SDK
+- kompatybilność: dla starych narzędzi akceptujesz SigV2 **tylko** dla listowania (GET `/` lub list bucketu) i tylko gdy SigV4 się nie powiedzie
 
 ### 8.2 Presigned URLs
 - GET i PUT obiektów
