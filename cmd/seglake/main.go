@@ -29,7 +29,7 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	virtualHosted := flag.Bool("virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys|bucket-policy")
 	tlsEnable := flag.Bool("tls", false, "Enable HTTPS listener with TLS")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
 	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
@@ -61,6 +61,10 @@ func main() {
 	keyEnabled := flag.Bool("key-enabled", true, "API key enabled flag")
 	keyInflight := flag.Int64("key-inflight", 0, "API key inflight limit (0=default)")
 	keyBucket := flag.String("key-bucket", "", "Bucket name for keys-action allow-bucket")
+	bucketPolicyAction := flag.String("bucket-policy-action", "get", "Bucket policy action: get|set|delete")
+	bucketPolicyBucket := flag.String("bucket-policy-bucket", "", "Bucket name for bucket-policy action")
+	bucketPolicy := flag.String("bucket-policy", "", "Bucket policy JSON")
+	bucketPolicyFile := flag.String("bucket-policy-file", "", "Bucket policy JSON file path")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -111,6 +115,13 @@ func main() {
 		if *mode == "keys" {
 			if err := runKeys(*keysAction, metaArg, *keyAccess, *keySecret, *keyPolicy, *keyBucket, *keyEnabled, *keyInflight, *jsonOut); err != nil {
 				fmt.Fprintf(os.Stderr, "keys error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if *mode == "bucket-policy" {
+			if err := runBucketPolicy(*bucketPolicyAction, metaArg, *bucketPolicyBucket, *bucketPolicy, *bucketPolicyFile, *jsonOut); err != nil {
+				fmt.Fprintf(os.Stderr, "bucket policy error: %v\n", err)
 				os.Exit(1)
 			}
 			return

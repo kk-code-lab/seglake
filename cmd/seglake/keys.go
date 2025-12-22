@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -145,13 +144,4 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 	default:
 		return fmt.Errorf("unknown keys-action %q", action)
 	}
-}
-
-func writeJSON(v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
-	return nil
 }

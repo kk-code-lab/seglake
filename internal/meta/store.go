@@ -194,6 +194,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 7 {
+		if err = applyV7(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -353,6 +361,22 @@ func applyV6(ctx context.Context, tx *sql.Tx) error {
 			if strings.Contains(err.Error(), "duplicate column") {
 				continue
 			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV7(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS bucket_policies (
+			bucket TEXT PRIMARY KEY,
+			policy TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -584,6 +608,43 @@ ORDER BY access_key`)
 		out = append(out, key)
 		return nil
 	})
+}
+
+// SetBucketPolicy sets or replaces a bucket policy.
+func (s *Store) SetBucketPolicy(ctx context.Context, bucket, policy string) error {
+	if bucket == "" || policy == "" {
+		return errors.New("meta: bucket and policy required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO bucket_policies(bucket, policy, updated_at)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET
+	policy=excluded.policy,
+	updated_at=excluded.updated_at`, bucket, policy, now)
+	return err
+}
+
+// GetBucketPolicy returns a policy string for the bucket.
+func (s *Store) GetBucketPolicy(ctx context.Context, bucket string) (string, error) {
+	if bucket == "" {
+		return "", errors.New("meta: bucket required")
+	}
+	row := s.db.QueryRowContext(ctx, "SELECT policy FROM bucket_policies WHERE bucket=?", bucket)
+	var policy string
+	if err := row.Scan(&policy); err != nil {
+		return "", err
+	}
+	return policy, nil
+}
+
+// DeleteBucketPolicy removes a bucket policy.
+func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM bucket_policies WHERE bucket=?", bucket)
+	return err
 }
 
 // Segment holds segment metadata.

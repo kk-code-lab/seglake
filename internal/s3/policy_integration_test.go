@@ -52,7 +52,7 @@ func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, f
 }
 
 func TestPolicyEnforcedOnRequests(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo","prefix":"public/"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}]}]}`
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -90,7 +90,7 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 }
 
 func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]},{"effect":"deny","actions":["read"],"resources":[{"bucket":"demo","prefix":"secret/"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]},{"effect":"deny","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"secret/"}]}]}`
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -114,7 +114,7 @@ func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
 }
 
 func TestPolicyMPUDenied(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
 	server, _, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -134,7 +134,7 @@ func TestPolicyMPUDenied(t *testing.T) {
 }
 
 func TestPolicyCopyDenied(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -159,7 +159,7 @@ func TestPolicyCopyDenied(t *testing.T) {
 }
 
 func TestPolicyMetaDenied(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
 	server, _, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -179,7 +179,7 @@ func TestPolicyMetaDenied(t *testing.T) {
 }
 
 func TestPolicyListBucketsDenied(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
 	server, _, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
@@ -199,7 +199,7 @@ func TestPolicyListBucketsDenied(t *testing.T) {
 }
 
 func TestPolicyListObjectsDenied(t *testing.T) {
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
 	server, _, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
