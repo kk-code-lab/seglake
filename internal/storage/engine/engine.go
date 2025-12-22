@@ -54,6 +54,11 @@ type Engine struct {
 	barrier        *writeBarrier
 }
 
+// Layout returns the engine storage layout.
+func (e *Engine) Layout() fs.Layout {
+	return e.layout
+}
+
 // MissingChunk describes a missing segment range for replication.
 type MissingChunk struct {
 	SegmentID string

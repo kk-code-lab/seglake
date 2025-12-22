@@ -1,15 +1,20 @@
 package s3
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/ops"
 )
 
 type oplogResponse struct {
@@ -192,4 +197,66 @@ func (h *Handler) handleReplicationChunk(ctx context.Context, w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(data)
+}
+
+func (h *Handler) handleReplicationSnapshot(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+	if h == nil || h.Engine == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID, r.URL.Path)
+		return
+	}
+	layout := h.Engine.Layout()
+	metaPath := filepath.Join(filepath.Dir(layout.Root), "meta.db")
+	tmpDir, err := os.MkdirTemp("", "seglake-snapshot-")
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "snapshot temp failed", requestID, r.URL.Path)
+		return
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if _, err := ops.Snapshot(layout, metaPath, tmpDir); err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "snapshot failed", requestID, r.URL.Path)
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"snapshot.tar.gz\"")
+	if err := writeTarGz(w, tmpDir); err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "snapshot stream failed", requestID, r.URL.Path)
+		return
+	}
+}
+
+func writeTarGz(w http.ResponseWriter, root string) error {
+	gz := gzip.NewWriter(w)
+	defer func() { _ = gz.Close() }()
+	tw := tar.NewWriter(gz)
+	defer func() { _ = tw.Close() }()
+
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = file.Close() }()
+		if _, err := io.Copy(tw, file); err != nil {
+			return err
+		}
+		return nil
+	})
 }

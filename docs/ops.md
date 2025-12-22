@@ -93,6 +93,11 @@ Pull oplog + fetch missing data:
 ./build/seglake -mode repl-pull -repl-remote http://peer:9000
 ```
 
+Bootstrap nowego węzła (snapshot + oplog):
+```
+./build/seglake -mode repl-bootstrap -repl-remote http://peer:9000 -repl-bootstrap-force
+```
+
 Continuous pull with backoff:
 ```
 ./build/seglake -mode repl-pull -repl-remote http://peer:9000 -repl-watch -repl-interval 5s -repl-backoff-max 1m -repl-retry-timeout 2m
