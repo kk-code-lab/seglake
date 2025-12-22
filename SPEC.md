@@ -125,6 +125,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
 - Rate limiting błędów auth per IP i per access key.
+- Limity inflight per access key (domyślnie 32).
 - Referencje testów: `internal/s3/e2e_test.go`.
 
 ### 4.3 ETag

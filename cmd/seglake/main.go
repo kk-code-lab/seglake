@@ -103,9 +103,10 @@ func main() {
 			Region:    *region,
 			MaxSkew:   5 * time.Minute,
 		},
-		Metrics:       s3.NewMetrics(),
-		AuthLimiter:   s3.NewAuthLimiter(),
-		VirtualHosted: *virtualHosted,
+		Metrics:         s3.NewMetrics(),
+		AuthLimiter:     s3.NewAuthLimiter(),
+		InflightLimiter: s3.NewInflightLimiter(32),
+		VirtualHosted:   *virtualHosted,
 	}
 	if *logRequests {
 		handler = s3.LoggingMiddleware(handler)
