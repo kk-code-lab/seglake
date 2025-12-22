@@ -124,6 +124,9 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		return requestID, true
 	}
 	if err := h.Auth.VerifyRequest(r); err != nil {
+		if isSigV2ListRequest(r) {
+			return requestID, true
+		}
 		switch err {
 		case errAccessDenied:
 			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
@@ -135,6 +138,26 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		return requestID, false
 	}
 	return requestID, true
+}
+
+func isSigV2ListRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "AWS ") {
+		return false
+	}
+	if r.URL.Path == "/" {
+		return true
+	}
+	if _, _, ok := parsePath(r.URL.Path); ok {
+		return false
+	}
+	if _, ok := parseBucket(r.URL.Path); ok {
+		return true
+	}
+	return false
 }
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {

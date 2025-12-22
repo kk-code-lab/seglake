@@ -57,13 +57,14 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	}
 	accessKey := credParts[0]
 	dateScope := credParts[1]
-	region := credParts[2]
+	regionRaw := credParts[2]
+	region := normalizeRegion(regionRaw)
 	service := credParts[3]
 	term := credParts[4]
 	if accessKey != c.AccessKey || term != "aws4_request" || service != "s3" {
 		return errSignatureMismatch
 	}
-	if c.Region != "" && region != c.Region {
+	if c.Region != "" && region != normalizeRegion(c.Region) {
 		return errSignatureMismatch
 	}
 
@@ -106,7 +107,7 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	}, "\n")
 
 	hashed := sha256.Sum256([]byte(canonicalRequest))
-	scope := fmt.Sprintf("%s/%s/s3/aws4_request", dateScope, region)
+	scope := fmt.Sprintf("%s/%s/s3/aws4_request", dateScope, regionRaw)
 	stringToSign := strings.Join([]string{
 		"AWS4-HMAC-SHA256",
 		amzDate,
@@ -114,7 +115,7 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 		hex.EncodeToString(hashed[:]),
 	}, "\n")
 
-	signingKey := deriveSigningKey(c.SecretKey, dateScope, region, "s3")
+	signingKey := deriveSigningKey(c.SecretKey, dateScope, regionRaw, "s3")
 	expected := hmacSHA256Hex(signingKey, stringToSign)
 	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
 		return errSignatureMismatch
@@ -143,13 +144,14 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	}
 	accessKey := credParts[0]
 	dateScope := credParts[1]
-	region := credParts[2]
+	regionRaw := credParts[2]
+	region := normalizeRegion(regionRaw)
 	service := credParts[3]
 	term := credParts[4]
 	if accessKey != c.AccessKey || term != "aws4_request" || service != "s3" {
 		return errSignatureMismatch
 	}
-	if c.Region != "" && region != c.Region {
+	if c.Region != "" && region != normalizeRegion(c.Region) {
 		return errSignatureMismatch
 	}
 
@@ -184,7 +186,7 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	}, "\n")
 
 	hashed := sha256.Sum256([]byte(canonicalRequest))
-	scope := fmt.Sprintf("%s/%s/s3/aws4_request", dateScope, region)
+	scope := fmt.Sprintf("%s/%s/s3/aws4_request", dateScope, regionRaw)
 	stringToSign := strings.Join([]string{
 		"AWS4-HMAC-SHA256",
 		amzDate,
@@ -192,7 +194,7 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 		hex.EncodeToString(hashed[:]),
 	}, "\n")
 
-	signingKey := deriveSigningKey(c.SecretKey, dateScope, region, "s3")
+	signingKey := deriveSigningKey(c.SecretKey, dateScope, regionRaw, "s3")
 	expected := hmacSHA256Hex(signingKey, stringToSign)
 	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
 		return errSignatureMismatch
@@ -328,6 +330,14 @@ func buildCanonicalHeaders(r *http.Request, signedHeaders string) (string, []str
 func normalizeSpaces(s string) string {
 	fields := strings.Fields(s)
 	return strings.Join(fields, " ")
+}
+
+func normalizeRegion(r string) string {
+	r = strings.ToLower(r)
+	if r == "us" {
+		return "us-east-1"
+	}
+	return r
 }
 
 func encodeRfc3986(s string) string {
