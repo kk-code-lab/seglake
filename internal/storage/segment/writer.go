@@ -79,6 +79,49 @@ func (w *Writer) Seal(footer Footer) error {
 	return EncodeFooter(w.file, footer)
 }
 
+// SealWithIndex writes optional bloom/index data and the footer.
+func (w *Writer) SealWithIndex(footer Footer, bloom, index []byte) (Footer, error) {
+	if w.file == nil {
+		return Footer{}, errors.New("segment: writer closed")
+	}
+	pos, err := w.file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return Footer{}, err
+	}
+	if len(bloom) > 0 {
+		footer.BloomOffset = pos
+		footer.BloomBytes = uint32(len(bloom))
+		if _, err := w.file.Write(bloom); err != nil {
+			return Footer{}, err
+		}
+		pos += int64(len(bloom))
+	} else {
+		footer.BloomOffset = 0
+		footer.BloomBytes = 0
+	}
+	if len(index) > 0 {
+		footer.IndexOffset = pos
+		footer.IndexBytes = uint32(len(index))
+		if _, err := w.file.Write(index); err != nil {
+			return Footer{}, err
+		}
+	} else {
+		footer.IndexOffset = 0
+		footer.IndexBytes = 0
+	}
+	footer = FinalizeFooter(footer)
+	if err := ValidateFooter(footer); err != nil {
+		return Footer{}, err
+	}
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return Footer{}, err
+	}
+	if err := EncodeFooter(w.file, footer); err != nil {
+		return Footer{}, err
+	}
+	return footer, nil
+}
+
 // Close closes the underlying file.
 func (w *Writer) Close() error {
 	if w.file == nil {

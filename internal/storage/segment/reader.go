@@ -35,7 +35,27 @@ func NewReader(path string) (*Reader, error) {
 		_ = file.Close()
 		return nil, err
 	}
+	if info.Size() < footerLen {
+		_ = file.Close()
+		return nil, io.ErrUnexpectedEOF
+	}
+	if _, err := file.Seek(-footerLen, io.SeekEnd); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	footer, err := DecodeFooter(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := ValidateFooter(footer); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
 	dataEnd := info.Size() - footerLen
+	if footer.BloomOffset > 0 {
+		dataEnd = footer.BloomOffset
+	}
 	if dataEnd < segmentHdrLen {
 		_ = file.Close()
 		return nil, io.ErrUnexpectedEOF

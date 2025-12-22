@@ -7,7 +7,6 @@
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 
 ## 3) Storage / durability
-- Realny bloom + sparse index w footerze segmentu.
 - Dodatkowe testy E2E durability (fsync / WAL semantics).
 
 ## 4) Ops / observability
@@ -31,4 +30,5 @@
 - Virtual-hosted-style (za flagą).
 - Multipart cleanup TTL (mpu-gc plan/run).
 - GC-aware multipart (części traktowane jako live).
-- Crash-consistency harness jako test opcjonalny (SEGLAKE_CRASH_TEST).
+- Crash-consistency harness jako test opcjonalny (tag crashharness).
+- Bloom + sparse index w footerze segmentu.

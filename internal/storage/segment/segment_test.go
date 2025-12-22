@@ -26,10 +26,6 @@ func TestSegmentHeaderAndFooter(t *testing.T) {
 	}
 
 	footer := NewFooter(1)
-	footer.BloomOffset = 123
-	footer.IndexOffset = 456
-	footer = FinalizeFooter(footer)
-
 	if err := writer.Seal(footer); err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -99,13 +95,7 @@ func TestReadFooterWithMissingFooter(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reader, err := NewReader(path)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	if _, err := reader.ReadFooter(); err == nil {
+	if _, err := NewReader(path); err == nil {
 		t.Fatalf("expected error for invalid footer")
 	}
 }
@@ -137,5 +127,73 @@ func TestFooterRoundTripFields(t *testing.T) {
 	}
 	if got.ChecksumHash != footer.ChecksumHash {
 		t.Fatalf("checksum mismatch")
+	}
+}
+
+func TestSealWithIndexAndReaderBounds(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seg-idx")
+
+	writer, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	data := []byte("abcdef")
+	hash := HashChunk(data)
+	offset, err := writer.AppendRecord(ChunkRecordHeader{Hash: hash, Len: uint32(len(data))}, data)
+	if err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+
+	entries := []IndexEntry{{Offset: offset, Hash: hash}}
+	bloom := BuildBloom(entries)
+	index := EncodeIndex(entries)
+	if _, err := writer.SealWithIndex(NewFooter(1), bloom, index); err != nil {
+		t.Fatalf("SealWithIndex: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	if _, _, err := reader.ReadRecord(); err != nil {
+		t.Fatalf("ReadRecord: %v", err)
+	}
+	if _, _, err := reader.ReadRecord(); err != io.EOF {
+		t.Fatalf("expected EOF after last record, got %v", err)
+	}
+
+	footer, err := reader.ReadFooter()
+	if err != nil {
+		t.Fatalf("ReadFooter: %v", err)
+	}
+	if footer.BloomBytes == 0 || footer.IndexBytes == 0 {
+		t.Fatalf("expected bloom/index bytes, got %+v", footer)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	bloomBuf := make([]byte, footer.BloomBytes)
+	if _, err := file.ReadAt(bloomBuf, footer.BloomOffset); err != nil {
+		t.Fatalf("ReadAt bloom: %v", err)
+	}
+	indexBuf := make([]byte, footer.IndexBytes)
+	if _, err := file.ReadAt(indexBuf, footer.IndexOffset); err != nil {
+		t.Fatalf("ReadAt index: %v", err)
+	}
+	decoded, err := DecodeIndex(indexBuf)
+	if err != nil {
+		t.Fatalf("DecodeIndex: %v", err)
+	}
+	if len(decoded) != 1 || decoded[0].Offset != offset {
+		t.Fatalf("decoded index mismatch: %+v", decoded)
 	}
 }

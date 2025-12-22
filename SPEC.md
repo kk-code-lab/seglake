@@ -63,7 +63,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Format:
   - Header: magic + version.
   - Rekordy: `chunk_hash(32B) + len(u32) + data`.
-  - Footer: magic + version + offsety bloom/index (na razie puste) + checksum (BLAKE3 po stopce).
+- Footer: magic + version + offsety bloom/index + checksum (BLAKE3 po stopce).
 - Stan: OPEN → SEALED.
 - Rotacja: 1 GiB lub 10 min bezczynności.
 
@@ -192,7 +192,6 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Brak TLS w aplikacji (zakładany reverse proxy).
 - Virtual-hosted-style dostępny tylko za flagą.
 - Brak pełnej paginacji ListMultipartUploads (brak markerów).
-- Stopka segmentu nie zawiera jeszcze realnego bloom/index (pola są placeholderami).
 - Brak replikacji / multi-site / oplogu / HLC.
 
 ---

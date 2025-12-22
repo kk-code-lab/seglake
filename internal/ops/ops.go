@@ -97,8 +97,8 @@ func Fsck(layout fs.Layout) (*Report, error) {
 		}
 		for _, ch := range man.Chunks {
 			info, ok := segmentInfo[ch.SegmentID]
+			segPath := layout.SegmentPath(ch.SegmentID)
 			if !ok {
-				segPath := layout.SegmentPath(ch.SegmentID)
 				info, err = os.Stat(segPath)
 				if err != nil {
 					report.MissingSegments++
@@ -122,7 +122,14 @@ func Fsck(layout fs.Layout) (*Report, error) {
 			}
 			segmentSeen[ch.SegmentID] = struct{}{}
 			dataEnd := info.Size()
-			if dataEnd > segment.FooterLen() {
+			if reader, err := segment.NewReader(segPath); err == nil {
+				if footer, err := reader.ReadFooter(); err == nil && footer.BloomOffset > 0 {
+					dataEnd = footer.BloomOffset
+				} else if dataEnd > segment.FooterLen() {
+					dataEnd = info.Size() - segment.FooterLen()
+				}
+				_ = reader.Close()
+			} else if dataEnd > segment.FooterLen() {
 				dataEnd = info.Size() - segment.FooterLen()
 			}
 			if ch.Offset < segment.SegmentHeaderLen() || ch.Offset+int64(ch.Len) > dataEnd {
