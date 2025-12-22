@@ -85,6 +85,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleOplog(r.Context(), mw, r, requestID)
 		return
 	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/manifest") {
+		h.handleReplicationManifest(r.Context(), mw, r, requestID)
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/chunk") {
+		h.handleReplicationChunk(r.Context(), mw, r, requestID)
+		return
+	}
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		h.handleOplogApply(r.Context(), mw, r, requestID)
 		return
@@ -741,6 +749,12 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		return "repl_oplog"
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/manifest") {
+		return "repl_manifest"
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/chunk") {
+		return "repl_chunk"
 	}
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		return "repl_oplog_apply"

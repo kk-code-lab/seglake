@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -280,6 +281,50 @@ func (e *Engine) GetObject(ctx context.Context, bucket, key string) (io.ReadClos
 		return nil, nil, err
 	}
 	return e.Get(ctx, versionID)
+}
+
+// ManifestBytes returns the encoded manifest for a version id.
+func (e *Engine) ManifestBytes(ctx context.Context, versionID string) ([]byte, error) {
+	if versionID == "" {
+		return nil, errors.New("engine: version id required")
+	}
+	file, man, err := e.openManifestByVersion(ctx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if file != nil {
+		_ = file.Close()
+	}
+	var buf bytes.Buffer
+	if err := e.manifestCodec.Encode(&buf, man); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// ReadSegmentRange reads raw bytes from a segment file at offset for length.
+func (e *Engine) ReadSegmentRange(segmentID string, offset, length int64) ([]byte, error) {
+	if segmentID == "" {
+		return nil, errors.New("engine: segment id required")
+	}
+	if offset < 0 || length <= 0 {
+		return nil, errors.New("engine: invalid segment range")
+	}
+	path := e.layout.SegmentPath(segmentID)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, length)
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if int64(n) != length {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return buf, nil
 }
 
 func (e *Engine) ensureDirs() error {

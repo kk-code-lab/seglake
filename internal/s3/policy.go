@@ -359,6 +359,10 @@ func policyActionForRequest(op string) string {
 		return policyActionGetMetaStats
 	case "repl_oplog":
 		return policyActionReplicationRead
+	case "repl_manifest":
+		return policyActionReplicationRead
+	case "repl_chunk":
+		return policyActionReplicationRead
 	case "repl_oplog_apply":
 		return policyActionReplicationWrite
 	case "list_buckets":
