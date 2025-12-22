@@ -88,6 +88,9 @@ func main() {
 	replSince := flag.String("repl-since", "", "Replication oplog HLC watermark")
 	replLimit := flag.Int("repl-limit", 1000, "Replication oplog batch size")
 	replFetchData := flag.Bool("repl-fetch-data", true, "Fetch missing manifests/chunks after oplog apply")
+	replWatch := flag.Bool("repl-watch", false, "Continuously poll replication oplog")
+	replInterval := flag.Duration("repl-interval", 5*time.Second, "Replication poll interval")
+	replBackoffMax := flag.Duration("repl-backoff-max", time.Minute, "Replication max backoff on errors")
 	replAccessKey := flag.String("repl-access-key", "", "Replication access key for SigV4 presign")
 	replSecretKey := flag.String("repl-secret-key", "", "Replication secret key for SigV4 presign")
 	replRegion := flag.String("repl-region", "us-east-1", "Replication SigV4 region")
@@ -140,7 +143,7 @@ func main() {
 			metaArg = *rebuildMeta
 		}
 		if *mode == "repl-pull" {
-			if err := runReplPull(*replRemote, *replSince, *replLimit, *replFetchData, *replAccessKey, *replSecretKey, *replRegion, eng); err != nil {
+			if err := runReplPull(*replRemote, *replSince, *replLimit, *replFetchData, *replWatch, *replInterval, *replBackoffMax, *replAccessKey, *replSecretKey, *replRegion, store, eng); err != nil {
 				fmt.Fprintf(os.Stderr, "repl pull error: %v\n", err)
 				os.Exit(1)
 			}
