@@ -177,6 +177,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 5.3 Crash harness
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`
   - Uruchamia binarkę i wykonuje PUT/multipart + kill -9 + fsck/rebuild-index.
+  - `CRASH_CORRUPT=1` włącza kontrolowaną korupcję segmentu (oczekiwane błędy scrub/GET=500).
 - Test trwałości po crashu (opcjonalny): `go test -tags durability ./internal/ops -run TestDurabilityAfterCrash`
 
 ---
