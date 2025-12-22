@@ -52,6 +52,32 @@ func TestReplPushWatermark(t *testing.T) {
 	}
 }
 
+func TestReplRemoteWatermark(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+
+	if err := store.SetReplRemotePullWatermark(context.Background(), "http://peer-a:9000", "0000000000000000010-0000000001"); err != nil {
+		t.Fatalf("SetReplRemotePullWatermark: %v", err)
+	}
+	if err := store.SetReplRemotePushWatermark(context.Background(), "http://peer-a:9000", "0000000000000000011-0000000001"); err != nil {
+		t.Fatalf("SetReplRemotePushWatermark: %v", err)
+	}
+	state, err := store.GetReplRemoteState(context.Background(), "http://peer-a:9000")
+	if err != nil {
+		t.Fatalf("GetReplRemoteState: %v", err)
+	}
+	if state.LastPullHLC == "" || state.LastPushHLC == "" {
+		t.Fatalf("expected pull/push HLC, got %+v", state)
+	}
+	list, err := store.ListReplRemoteStates(context.Background())
+	if err != nil {
+		t.Fatalf("ListReplRemoteStates: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 remote state, got %d", len(list))
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
