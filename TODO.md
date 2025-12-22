@@ -47,9 +47,7 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Zrobione: replikacja ACL/polityk i API keys jako osobne typy operacji.
 
 ### Faza 5 — testy i observability
-- Testy symulacyjne: opóźnienia, duplikaty, reorder, split-brain.
-- Metryki: lag HLC, backlog oplog, replikowane bajty, konflikt count.
-- Walidacja spójności: porównanie manifestów i listy wersji między węzłami.
+- Zrobione (opisane w SPEC).
 
 ### Poza zakresem pierwszej iteracji
 - Silna konsystencja globalna.
@@ -80,7 +78,4 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 - ListMultipartUploads: dopracowanie pełnej zgodności (edge‑case’y marker/prefix/delimiter).
 - Lepsze błędy AWS (mapowania kodów i domyślne komunikaty).
-- Testy replikacji: reorder/duplikaty/split‑brain (konwergencja LWW).
-- Ops: repl-validate (porównanie manifestów i live wersji między węzłami).
-- Ops: repl-validate (porównanie wszystkich wersji między węzłami).
-- Metryki replikacji w /v1/meta/stats (oplog bytes, backlog bytes, conflict count, repl bytes in).
+- Replikacja: testy reorder/duplikaty/split‑brain, repl-validate (live + wszystkie wersje), metryki replikacji (oplog bytes, backlog bytes, conflict count, repl bytes in).
