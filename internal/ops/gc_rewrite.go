@@ -219,6 +219,7 @@ type gcWriter struct {
 	closed    bool
 	throttle  *gcThrottle
 	pauseFile string
+	entries   []segment.IndexEntry
 }
 
 func (w *gcWriter) ensure() error {
@@ -237,6 +238,7 @@ func (w *gcWriter) ensure() error {
 	w.writer = writer
 	w.id = id
 	w.size = 0
+	w.entries = nil
 	return nil
 }
 
@@ -265,6 +267,7 @@ func (w *gcWriter) append(hash [32]byte, data []byte) (string, int64, error) {
 		return "", 0, err
 	}
 	w.size += int64(len(data)) + segment.RecordHeaderLen()
+	w.entries = append(w.entries, segment.IndexEntry{Offset: offset, Hash: hash})
 	if w.throttle != nil {
 		w.throttle.wait(int64(len(data)))
 	}
@@ -275,8 +278,10 @@ func (w *gcWriter) seal() error {
 	if w.writer == nil || w.closed {
 		return nil
 	}
-	footer := segment.FinalizeFooter(segment.NewFooter(1))
-	if err := w.writer.Seal(footer); err != nil {
+	footer := segment.NewFooter(1)
+	bloom := segment.BuildBloom(w.entries)
+	index := segment.EncodeIndex(w.entries)
+	if _, err := w.writer.SealWithIndex(footer, bloom, index); err != nil {
 		return err
 	}
 	if err := w.writer.Sync(); err != nil {

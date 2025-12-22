@@ -24,6 +24,8 @@ type segmentManager struct {
 	createdAt time.Time
 	size      int64
 	lastWrite time.Time
+
+	indexEntries []segment.IndexEntry
 }
 
 func newSegmentManager(layout fs.Layout, version uint32, metaStore *meta.Store, maxBytes int64, maxAge time.Duration) *segmentManager {
@@ -58,6 +60,10 @@ func (m *segmentManager) appendChunk(ctx context.Context, hash [32]byte, data []
 	}
 	m.size += int64(len(data)) + int64(segment.RecordHeaderLen())
 	m.lastWrite = time.Now().UTC()
+	m.indexEntries = append(m.indexEntries, segment.IndexEntry{
+		Offset: offset,
+		Hash:   hash,
+	})
 	return m.segmentID, offset, nil
 }
 
@@ -113,6 +119,7 @@ func (m *segmentManager) openNewSegment(ctx context.Context) error {
 	} else {
 		m.size = 0
 	}
+	m.indexEntries = nil
 	if m.metaStore != nil {
 		if err := m.metaStore.RecordSegment(ctx, segmentID, segmentPath, string(segment.StateOpen), m.size, nil); err != nil {
 			return err
@@ -129,8 +136,11 @@ func (m *segmentManager) sealCurrent(ctx context.Context) error {
 }
 
 func (m *segmentManager) sealCurrentLocked(ctx context.Context) error {
-	footer := segment.FinalizeFooter(segment.NewFooter(m.segmentVersion))
-	if err := m.writer.Seal(footer); err != nil {
+	footer := segment.NewFooter(m.segmentVersion)
+	bloom := segment.BuildBloom(m.indexEntries)
+	index := segment.EncodeIndex(m.indexEntries)
+	footer, err := m.writer.SealWithIndex(footer, bloom, index)
+	if err != nil {
 		return err
 	}
 	if err := m.writer.Sync(); err != nil {
@@ -152,5 +162,6 @@ func (m *segmentManager) sealCurrentLocked(ctx context.Context) error {
 	m.writer = nil
 	m.segmentID = ""
 	m.size = 0
+	m.indexEntries = nil
 	return nil
 }
