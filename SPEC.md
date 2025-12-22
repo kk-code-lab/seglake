@@ -128,6 +128,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
 - Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
+- Format polityk: JSON z listą `statements` (effect allow/deny, actions: read/write/list/mpu/copy/meta/*, resources: bucket + prefix).
 - Rate limiting błędów auth per IP i per access key.
 - Limity inflight per access key (domyślnie 32, per‑key override).
 - Logi redagują sekrety w query (np. X-Amz-Signature/Credential).

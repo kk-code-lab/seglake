@@ -104,6 +104,24 @@ Policies:
 - `rw` (default): full access.
 - `ro` / `read-only`: blocks PUT/POST/DELETE.
 
+Custom JSON policy (stored in `api_keys.policy`):
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["read", "list"],
+      "resources": [
+        { "bucket": "demo", "prefix": "public/" }
+      ]
+    }
+  ]
+}
+```
+
+Actions: `read`, `write`, `list`, `mpu`, `copy`, `meta`, `*`.
+
 ## s3cmd examples
 
 List buckets:
