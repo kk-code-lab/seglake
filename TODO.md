@@ -12,7 +12,6 @@
 - Raporty trendów GC (historyka, reclaim rate).
 
 ## 5) Security / auth
-- Rate-limiting auth failures (per IP/per key).
 - Per-key limity inflight.
 - Pełna redakcja sekretów w logach.
 
@@ -32,3 +31,4 @@
 - E2E durability test (tag durability).
 - `/v1/meta/stats` z ruchem i latencjami.
 - Uspójnione raporty ops JSON (schema_version).
+- Rate-limiting błędów auth (per IP/per key).

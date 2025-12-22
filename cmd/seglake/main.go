@@ -104,6 +104,7 @@ func main() {
 			MaxSkew:   5 * time.Minute,
 		},
 		Metrics:       s3.NewMetrics(),
+		AuthLimiter:   s3.NewAuthLimiter(),
 		VirtualHosted: *virtualHosted,
 	}
 	if *logRequests {

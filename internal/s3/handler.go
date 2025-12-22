@@ -22,6 +22,8 @@ type Handler struct {
 	Meta    *meta.Store
 	Auth    *AuthConfig
 	Metrics *Metrics
+	// AuthLimiter rate-limits failed auth attempts.
+	AuthLimiter *AuthLimiter
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
 }
@@ -163,6 +165,15 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	if err := h.Auth.VerifyRequest(r); err != nil {
 		if h.isSigV2ListRequest(r) {
 			return requestID, true
+		}
+		if h.AuthLimiter != nil {
+			ip := clientIP(r.RemoteAddr)
+			key := extractAccessKey(r)
+			if !h.AuthLimiter.Allow(ip, key) {
+				writeErrorWithResource(w, http.StatusServiceUnavailable, "SlowDown", "too many auth failures", requestID, r.URL.Path)
+				return requestID, false
+			}
+			h.AuthLimiter.ObserveFailure(ip, key)
 		}
 		switch err {
 		case errAccessDenied:

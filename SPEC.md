@@ -124,6 +124,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `X-Amz-Content-Sha256` obsługiwany; `STREAMING-*` odrzucone.
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
+- Rate limiting błędów auth per IP i per access key.
 - Referencje testów: `internal/s3/e2e_test.go`.
 
 ### 4.3 ETag
@@ -174,7 +175,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `scripts/crash_harness.sh <iterations>`
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`
   - Parametry: `SYNC_INTERVAL` i `SYNC_BYTES` wpływają na ustawienia bariery.
- - Test trwałości po crashu (opcjonalny): `go test -tags durability ./internal/ops -run TestDurabilityAfterCrash`
+- Test trwałości po crashu (opcjonalny): `go test -tags durability ./internal/ops -run TestDurabilityAfterCrash`
 
 ---
 
@@ -193,7 +194,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ## 7) Znane braki / ograniczenia (stan obecny)
 
  - Brak wersjonowania po API.
-- Brak ACL/IAM/polityk, brak per-key limitów i rate-limitów.
+- Brak ACL/IAM/polityk, brak per-key limitów inflight.
 - Brak TLS w aplikacji (zakładany reverse proxy).
 - Virtual-hosted-style dostępny tylko za flagą.
 - Brak pełnej paginacji ListMultipartUploads (brak markerów).
