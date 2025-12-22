@@ -973,6 +973,35 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 	return nil
 }
 
+// RecordMPUComplete records an MPU completion in the oplog.
+func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, etag string, size int64) error {
+	if bucket == "" || key == "" || versionID == "" {
+		return errors.New("meta: bucket, key, and version id required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	hlcTS, _ := s.nextHLC()
+	payload, err := json.Marshal(oplogMPUCompletePayload{
+		ETag:         etag,
+		Size:         size,
+		LastModified: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.recordOplogTx(tx, hlcTS, "mpu_complete", bucket, key, versionID, string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // RecordManifestTx records a manifest path for a version id.
 func (s *Store) RecordManifestTx(tx *sql.Tx, versionID, manifestPath string) error {
 	if versionID == "" || manifestPath == "" {

@@ -232,6 +232,9 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	}
 
 	multiETag := multipartETag(ordered)
+	if h.Meta != nil && result != nil {
+		_ = h.Meta.RecordMPUComplete(ctx, upload.Bucket, upload.Key, result.VersionID, multiETag, result.Size)
+	}
 	resp := completeMultipartResult{
 		Bucket: upload.Bucket,
 		Key:    upload.Key,

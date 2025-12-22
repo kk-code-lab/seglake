@@ -332,6 +332,30 @@ func TestApplyOplogDeleteConflicts(t *testing.T) {
 	}
 }
 
+func TestRecordMPUCompleteWritesOplog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.RecordMPUComplete(context.Background(), "bucket", "key", "v1", "etag-mpu", 10); err != nil {
+		t.Fatalf("RecordMPUComplete: %v", err)
+	}
+	entries, err := store.ListOplog(context.Background())
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].OpType != "mpu_complete" {
+		t.Fatalf("expected mpu_complete, got %s", entries[0].OpType)
+	}
+}
+
 func addHLC(hlc string, delta int64) string {
 	parts := strings.SplitN(hlc, "-", 2)
 	if len(parts) != 2 {
