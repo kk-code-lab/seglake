@@ -14,6 +14,14 @@ type oplogResponse struct {
 	LastHLC string            `json:"last_hlc,omitempty"`
 }
 
+type oplogApplyRequest struct {
+	Entries []meta.OplogEntry `json:"entries"`
+}
+
+type oplogApplyResponse struct {
+	Applied int `json:"applied"`
+}
+
 func (h *Handler) handleOplog(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
 	if h == nil || h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, r.URL.Path)
@@ -40,4 +48,23 @@ func (h *Handler) handleOplog(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) handleOplogApply(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+	if h == nil || h.Meta == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, r.URL.Path)
+		return
+	}
+	var req oplogApplyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid json body", requestID, r.URL.Path)
+		return
+	}
+	applied, err := h.Meta.ApplyOplogEntries(ctx, req.Entries)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "oplog apply failed", requestID, r.URL.Path)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(oplogApplyResponse{Applied: applied})
 }
