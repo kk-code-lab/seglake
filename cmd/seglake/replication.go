@@ -221,8 +221,9 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 	}
 	backoff := interval
 	missingCache := newReplMissingCache()
+	retryDeadline := time.Now().Add(5 * time.Minute)
 	for {
-		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng, missingCache)
+		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng, missingCache, retryDeadline)
 		if err != nil {
 			if !watch {
 				return err
@@ -248,6 +249,9 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 		if applied == 0 {
 			time.Sleep(interval)
 		}
+		if watch {
+			retryDeadline = time.Now().Add(5 * time.Minute)
+		}
 	}
 }
 
@@ -255,13 +259,16 @@ func chunkKey(ch replMissingChunk) string {
 	return fmt.Sprintf("%s:%d:%d", ch.SegmentID, ch.Offset, ch.Length)
 }
 
-func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.Engine, ch replMissingChunk, attempts int) error {
+func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.Engine, ch replMissingChunk, attempts int, deadline time.Time) error {
 	if attempts <= 0 {
 		attempts = 1
 	}
 	backoff := 200 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return errors.New("repl: retry deadline exceeded")
+		}
 		data, err := client.getChunk(ch.SegmentID, ch.Offset, ch.Length)
 		if err == nil {
 			if err := eng.WriteSegmentRange(ctx, ch.SegmentID, ch.Offset, data); err != nil {
@@ -276,7 +283,7 @@ func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.En
 	return lastErr
 }
 
-func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine, cache *replMissingCache) (string, int, error) {
+func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine, cache *replMissingCache, retryDeadline time.Time) (string, int, error) {
 	oplogResp, err := client.getOplog(since, limit)
 	if err != nil {
 		return "", 0, err
@@ -341,7 +348,10 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 	fetched := 0
 	if len(missingChunks) > 0 {
 		for _, ch := range missingChunks {
-			if err := fetchChunkWithRetry(ctx, client, eng, ch, 3); err != nil {
+			if time.Now().After(retryDeadline) {
+				return "", applyResp.Applied, errors.New("repl: retry deadline exceeded")
+			}
+			if err := fetchChunkWithRetry(ctx, client, eng, ch, 3, retryDeadline); err != nil {
 				return "", applyResp.Applied, err
 			}
 			fetched++
