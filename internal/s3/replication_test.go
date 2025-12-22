@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
+	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
 
 func TestReplicationOplogEndpoint(t *testing.T) {
@@ -118,5 +121,98 @@ func TestReplicationOplogApplyEndpoint(t *testing.T) {
 	}
 	if metaObj.VersionID != "v1" {
 		t.Fatalf("expected current v1, got %s", metaObj.VersionID)
+	}
+}
+
+func TestReplicationManifestEndpoint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	_, putResult, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello world"))
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/replication/manifest?versionId="+putResult.VersionID, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var codec manifest.BinaryCodec
+	got, err := codec.Decode(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.VersionID != putResult.VersionID || got.Bucket != "bucket" || got.Key != "key" {
+		t.Fatalf("unexpected manifest: %+v", got)
+	}
+	if got.Size != int64(len("hello world")) {
+		t.Fatalf("unexpected size: %d", got.Size)
+	}
+}
+
+func TestReplicationChunkEndpoint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	data := "hello world"
+	man, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader(data))
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if len(man.Chunks) == 0 {
+		t.Fatalf("expected chunks")
+	}
+	ch := man.Chunks[0]
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/replication/chunk?segmentId="+ch.SegmentID+
+		"&offset="+strconv.FormatInt(ch.Offset, 10)+
+		"&len="+strconv.FormatInt(int64(ch.Len), 10), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != data {
+		t.Fatalf("expected %q, got %q", data, rec.Body.String())
 	}
 }
