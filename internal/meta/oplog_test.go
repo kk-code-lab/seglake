@@ -652,6 +652,29 @@ func TestApplyOplogReorderAndDuplicatesConverge(t *testing.T) {
 	}
 }
 
+func TestApplyOplogTracksConflicts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putOld := makePutEntry("site-a", "0000000000000000600-0000000001", "bucket", "key", "v1")
+	putNew := makePutEntry("site-b", "0000000000000000601-0000000001", "bucket", "key", "v2")
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{putNew, putOld}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	stats, err := store.GetStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if stats.ReplConflicts != 1 {
+		t.Fatalf("expected repl conflicts=1 got %d", stats.ReplConflicts)
+	}
+}
+
 func TestApplyOplogPutVsPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

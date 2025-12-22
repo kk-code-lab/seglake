@@ -315,6 +315,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 11 {
+		if err = applyV11(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(11, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 12 {
+		if err = applyV12(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -507,6 +523,7 @@ func applyV8(ctx context.Context, tx *sql.Tx) error {
 			key TEXT NOT NULL,
 			version_id TEXT,
 			payload TEXT,
+			bytes INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS oplog_hlc_idx ON oplog(hlc_ts)`,
@@ -561,6 +578,40 @@ UPDATE repl_state
 SET last_pull_hlc=last_hlc
 WHERE COALESCE(last_pull_hlc,'')='' AND COALESCE(last_hlc,'')<>''`); err != nil {
 		if !strings.Contains(err.Error(), "no such column") {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV11(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE oplog ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV12(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS repl_metrics (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			conflict_count INTEGER NOT NULL DEFAULT 0
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -1259,11 +1310,30 @@ func (s *Store) recordOplogTxWithSite(tx *sql.Tx, hlcTS, siteID, opType, bucket,
 		siteID = "local"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	bytes := oplogPayloadBytes(opType, payload)
 	_, err := tx.Exec(`
-INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, created_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		siteID, hlcTS, opType, bucket, key, versionID, payload, now)
+INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, bytes, created_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		siteID, hlcTS, opType, bucket, key, versionID, payload, bytes, now)
 	return err
+}
+
+func oplogPayloadBytes(opType, payload string) int64 {
+	if payload == "" {
+		return 0
+	}
+	switch opType {
+	case "put", "mpu_complete":
+		var data struct {
+			Size int64 `json:"size"`
+		}
+		if err := json.Unmarshal([]byte(payload), &data); err != nil {
+			return 0
+		}
+		return data.Size
+	default:
+		return 0
+	}
 }
 
 func (s *Store) insertOplogEntryTx(tx *sql.Tx, entry OplogEntry) (bool, error) {
@@ -1289,10 +1359,11 @@ LIMIT 1`,
 	if createdAt == "" {
 		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
+	bytes := oplogPayloadBytes(entry.OpType, entry.Payload)
 	_, err = tx.Exec(`
-INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, created_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		entry.SiteID, entry.HLCTS, entry.OpType, entry.Bucket, entry.Key, entry.VersionID, entry.Payload, createdAt)
+INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, bytes, created_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.SiteID, entry.HLCTS, entry.OpType, entry.Bucket, entry.Key, entry.VersionID, entry.Payload, bytes, createdAt)
 	if err != nil {
 		return false, err
 	}
@@ -1346,6 +1417,7 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 		return 0, nil
 	}
 	applied := 0
+	var conflicts int64
 	err := s.WithTx(func(tx *sql.Tx) error {
 		for _, entry := range entries {
 			if entry.SiteID == "" || entry.HLCTS == "" || entry.OpType == "" || entry.Bucket == "" || entry.Key == "" {
@@ -1410,6 +1482,7 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 						return err
 					}
 					if ok && compareHLC(entry.HLCTS, entry.SiteID, latestHLC, latestSite) < 0 {
+						conflicts++
 						continue
 					}
 				}
@@ -1421,6 +1494,8 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 						entry.Bucket, entry.Key, entry.VersionID); err != nil {
 						return err
 					}
+				} else if !errors.Is(err, sql.ErrNoRows) {
+					conflicts++
 				}
 			case "delete":
 				if entry.VersionID == "" {
@@ -1462,9 +1537,13 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return err
 				}
-				if !errors.Is(err, sql.ErrNoRows) && compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
-					if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
-						return err
+				if !errors.Is(err, sql.ErrNoRows) {
+					if compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
+						if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+							return err
+						}
+					} else {
+						conflicts++
 					}
 				}
 			case "bucket_policy":
@@ -1558,6 +1637,16 @@ ON CONFLICT(access_key) DO UPDATE SET
 				return errors.New("meta: unknown oplog op")
 			}
 			applied++
+		}
+		if conflicts > 0 {
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := tx.Exec(`
+INSERT INTO repl_metrics(id, updated_at, conflict_count)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET conflict_count=conflict_count + excluded.conflict_count, updated_at=excluded.updated_at`,
+				now, conflicts); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -2328,17 +2417,20 @@ type Stats struct {
 	LastMPUGCErrors    int    `json:"last_mpu_gc_errors,omitempty"`
 	LastMPUGCDeleted   int    `json:"last_mpu_gc_deleted,omitempty"`
 	LastMPUGCReclaimed int64  `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
+	ReplConflicts      int64  `json:"repl_conflicts,omitempty"`
 }
 
 // ReplStat describes replication state and lag per remote.
 type ReplStat struct {
-	Remote         string  `json:"remote"`
-	LastPullHLC    string  `json:"last_pull_hlc,omitempty"`
-	LastPushHLC    string  `json:"last_push_hlc,omitempty"`
-	PullLagSeconds float64 `json:"pull_lag_seconds,omitempty"`
-	PushLagSeconds float64 `json:"push_lag_seconds,omitempty"`
-	PushBacklog    int64   `json:"push_backlog,omitempty"`
-	LastOplogHLC   string  `json:"last_oplog_hlc,omitempty"`
+	Remote           string  `json:"remote"`
+	LastPullHLC      string  `json:"last_pull_hlc,omitempty"`
+	LastPushHLC      string  `json:"last_push_hlc,omitempty"`
+	PullLagSeconds   float64 `json:"pull_lag_seconds,omitempty"`
+	PushLagSeconds   float64 `json:"push_lag_seconds,omitempty"`
+	PushBacklog      int64   `json:"push_backlog,omitempty"`
+	PushBacklogBytes int64   `json:"push_backlog_bytes,omitempty"`
+	LastOplogHLC     string  `json:"last_oplog_hlc,omitempty"`
+	OplogBytesTotal  int64   `json:"oplog_bytes_total,omitempty"`
 }
 
 // GCTrend captures recent GC outcomes for trend reporting.
@@ -2389,6 +2481,14 @@ FROM ops_runs
 WHERE mode='mpu-gc-run'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDeleted, &stats.LastMPUGCReclaimed)
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(conflict_count,0) FROM repl_metrics WHERE id=1").Scan(&stats.ReplConflicts); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return stats, nil
+		}
+		if !strings.Contains(err.Error(), "no such table") {
+			return nil, err
+		}
+	}
 	return stats, nil
 }
 
@@ -2402,6 +2502,8 @@ func (s *Store) GetReplStats(ctx context.Context) ([]ReplStat, error) {
 
 	var totalOplog int64
 	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM oplog").Scan(&totalOplog)
+	var totalOplogBytes int64
+	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(bytes),0) FROM oplog").Scan(&totalOplogBytes)
 
 	stats := make([]ReplStat, 0)
 
@@ -2410,7 +2512,7 @@ func (s *Store) GetReplStats(ctx context.Context) ([]ReplStat, error) {
 	var defaultPush string
 	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(last_pull_hlc,''), COALESCE(last_push_hlc,'') FROM repl_state WHERE id=1").Scan(&defaultPull, &defaultPush)
 	if defaultPull != "" || defaultPush != "" {
-		stat := buildReplStat("default", defaultPull, defaultPush, lastOplog, totalOplog, s)
+		stat := buildReplStat("default", defaultPull, defaultPush, lastOplog, totalOplog, totalOplogBytes, s)
 		stats = append(stats, stat)
 	}
 
@@ -2426,7 +2528,7 @@ ORDER BY remote`)
 		if err := scan(&remote, &pull, &push); err != nil {
 			return err
 		}
-		stats = append(stats, buildReplStat(remote, pull, push, lastOplog, totalOplog, s))
+		stats = append(stats, buildReplStat(remote, pull, push, lastOplog, totalOplog, totalOplogBytes, s))
 		return nil
 	})
 	if err != nil {
@@ -2435,12 +2537,13 @@ ORDER BY remote`)
 	return stats, nil
 }
 
-func buildReplStat(remote, pull, push, lastOplog string, totalOplog int64, store *Store) ReplStat {
+func buildReplStat(remote, pull, push, lastOplog string, totalOplog, totalOplogBytes int64, store *Store) ReplStat {
 	stat := ReplStat{
-		Remote:       remote,
-		LastPullHLC:  pull,
-		LastPushHLC:  push,
-		LastOplogHLC: lastOplog,
+		Remote:          remote,
+		LastPullHLC:     pull,
+		LastPushHLC:     push,
+		LastOplogHLC:    lastOplog,
+		OplogBytesTotal: totalOplogBytes,
 	}
 	if pull != "" {
 		stat.PullLagSeconds = lagSeconds(pull)
@@ -2451,9 +2554,13 @@ func buildReplStat(remote, pull, push, lastOplog string, totalOplog int64, store
 			if backlog, err := store.countOplogSince(context.Background(), push); err == nil {
 				stat.PushBacklog = backlog
 			}
+			if backlogBytes, err := store.sumOplogBytesSince(context.Background(), push); err == nil {
+				stat.PushBacklogBytes = backlogBytes
+			}
 		}
 	} else if totalOplog > 0 {
 		stat.PushBacklog = totalOplog
+		stat.PushBacklogBytes = totalOplogBytes
 	}
 	return stat
 }
@@ -2497,6 +2604,23 @@ func (s *Store) countOplogSince(ctx context.Context, since string) (int64, error
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *Store) sumOplogBytesSince(ctx context.Context, since string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("meta: db not initialized")
+	}
+	var total int64
+	if since == "" {
+		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(bytes),0) FROM oplog").Scan(&total); err != nil {
+			return 0, err
+		}
+		return total, nil
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(bytes),0) FROM oplog WHERE hlc_ts > ?", since).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // ListGCTrends returns recent GC runs (excluding plans) in reverse chronological order.

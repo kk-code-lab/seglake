@@ -121,8 +121,14 @@ func TestReplStatsBacklog(t *testing.T) {
 			if stat.PushBacklog != 1 {
 				t.Fatalf("expected backlog=1 got %d", stat.PushBacklog)
 			}
+			if stat.PushBacklogBytes != 2 {
+				t.Fatalf("expected backlog bytes=2 got %d", stat.PushBacklogBytes)
+			}
 			if stat.LastOplogHLC != entries[1].HLCTS {
 				t.Fatalf("expected last oplog %s got %s", entries[1].HLCTS, stat.LastOplogHLC)
+			}
+			if stat.OplogBytesTotal != 3 {
+				t.Fatalf("expected oplog bytes total=3 got %d", stat.OplogBytesTotal)
 			}
 		}
 	}
