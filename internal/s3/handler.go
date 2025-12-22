@@ -28,6 +28,8 @@ type Handler struct {
 	InflightLimiter *InflightLimiter
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
+	// TrustedProxies contains CIDR ranges for trusted proxy IPs; used for X-Forwarded-For.
+	TrustedProxies []string
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +246,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 	if !key.Enabled {
 		return errAccessDenied
 	}
-	policy := strings.ToLower(strings.TrimSpace(key.Policy))
+	policy := strings.TrimSpace(key.Policy)
 	action := policyActionForRequest(h.opForRequest(r))
 	bucket := ""
 	keyName := ""
@@ -272,7 +274,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if targetBucket == "" {
 			targetBucket = "*"
 		}
-		reqCtx := policyContextFromRequest(r)
+		reqCtx := h.policyContextFromRequest(r)
 		identityAllowed, identityDenied := pol.DecisionWithContext(action, targetBucket, keyName, reqCtx)
 		if identityDenied {
 			return errAccessDenied
@@ -299,7 +301,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 	return nil
 }
 
-func policyContextFromRequest(r *http.Request) *PolicyContext {
+func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 	if r == nil {
 		return &PolicyContext{Now: time.Now().UTC()}
 	}
@@ -311,7 +313,7 @@ func policyContextFromRequest(r *http.Request) *PolicyContext {
 		headers[strings.ToLower(k)] = values[0]
 	}
 	ip := clientIP(r.RemoteAddr)
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" && h.isTrustedProxy(r.RemoteAddr) {
 		parts := strings.Split(forwarded, ",")
 		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
 			ip = strings.TrimSpace(parts[0])
@@ -322,6 +324,29 @@ func policyContextFromRequest(r *http.Request) *PolicyContext {
 		SourceIP: ip,
 		Headers:  headers,
 	}
+}
+
+func (h *Handler) isTrustedProxy(remoteAddr string) bool {
+	if h == nil {
+		return false
+	}
+	if len(h.TrustedProxies) == 0 {
+		return false
+	}
+	ip := net.ParseIP(clientIP(remoteAddr))
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range h.TrustedProxies {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) isSigV2ListRequest(r *http.Request) bool {

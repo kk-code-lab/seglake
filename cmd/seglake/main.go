@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/app"
@@ -18,6 +19,22 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
+
+func splitComma(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -33,6 +50,7 @@ func main() {
 	tlsEnable := flag.Bool("tls", false, "Enable HTTPS listener with TLS")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
 	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
+	trustedProxies := flag.String("trusted-proxies", "", "Comma-separated CIDR ranges trusted for X-Forwarded-For")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
@@ -162,6 +180,9 @@ func main() {
 		AuthLimiter:     s3.NewAuthLimiter(),
 		InflightLimiter: s3.NewInflightLimiter(32),
 		VirtualHosted:   *virtualHosted,
+	}
+	if *trustedProxies != "" {
+		handler.(*s3.Handler).TrustedProxies = splitComma(*trustedProxies)
 	}
 	if *logRequests {
 		handler = s3.LoggingMiddleware(handler)

@@ -197,6 +197,9 @@ Example with source IP + header condition:
 }
 ```
 
+Proxy note:
+- `X-Forwarded-For` is only trusted when the client IP matches `-trusted-proxies` CIDR list.
+
 ## s3cmd examples
 
 List buckets:
