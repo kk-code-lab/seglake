@@ -89,6 +89,48 @@ func TestReplRemoteWatermark(t *testing.T) {
 	}
 }
 
+func TestReplStatsBacklog(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag1", 1, ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag2", 2, ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	entries, err := store.ListOplog(context.Background())
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("expected >=2 oplog entries")
+	}
+	remote := "http://peer-a:9000"
+	if err := store.SetReplRemotePushWatermark(context.Background(), remote, entries[0].HLCTS); err != nil {
+		t.Fatalf("SetReplRemotePushWatermark: %v", err)
+	}
+	stats, err := store.GetReplStats(context.Background())
+	if err != nil {
+		t.Fatalf("GetReplStats: %v", err)
+	}
+	var found bool
+	for _, stat := range stats {
+		if stat.Remote == remote {
+			found = true
+			if stat.PushBacklog != 1 {
+				t.Fatalf("expected backlog=1 got %d", stat.PushBacklog)
+			}
+			if stat.LastOplogHLC != entries[1].HLCTS {
+				t.Fatalf("expected last oplog %s got %s", entries[1].HLCTS, stat.LastOplogHLC)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing repl stat for %s", remote)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()

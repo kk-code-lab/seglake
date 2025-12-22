@@ -35,6 +35,7 @@ type statsResponse struct {
 	RequestsByKey      map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
 	LatencyByKeyMs     map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
 	GCTrends           []meta.GCTrend              `json:"gc_trends,omitempty"`
+	Replication        []meta.ReplStat             `json:"replication,omitempty"`
 }
 
 func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
@@ -48,6 +49,11 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		return
 	}
 	gcTrends, err := h.Meta.ListGCTrends(ctx, 30)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+		return
+	}
+	replStats, err := h.Meta.GetReplStats(ctx)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
@@ -70,6 +76,7 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		LastMPUGCDeleted:   stats.LastMPUGCDeleted,
 		LastMPUGCReclaimed: stats.LastMPUGCReclaimed,
 		GCTrends:           gcTrends,
+		Replication:        replStats,
 	}
 	if h.Metrics != nil {
 		reqs, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()

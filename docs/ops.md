@@ -86,6 +86,33 @@ GC warnings and hard limits can be tuned:
 ./build/seglake -mode mpu-gc-run -mpu-force -mpu-max-uploads=500 -mpu-max-reclaim-bytes=$((5<<30))
 ```
 
+## Replication (multi-site)
+
+Pull oplog + fetch missing data:
+```
+./build/seglake -mode repl-pull -repl-remote http://peer:9000
+```
+
+Continuous pull with backoff:
+```
+./build/seglake -mode repl-pull -repl-remote http://peer:9000 -repl-watch -repl-interval 5s -repl-backoff-max 1m
+```
+
+Push local oplog:
+```
+./build/seglake -mode repl-push -repl-remote http://peer:9000
+```
+
+Continuous push:
+```
+./build/seglake -mode repl-push -repl-remote http://peer:9000 -repl-push-watch -repl-push-interval 5s -repl-push-backoff-max 1m
+```
+
+Notes:
+- Watermarki są przechowywane per-remote (pull i push osobno).
+- Endpointy repl są chronione politykami (`ReplicationRead` / `ReplicationWrite`).
+- `/v1/meta/stats` zawiera sekcję `replication` (lag i backlog).
+
 ## API keys / policies
 
 Manage keys with `-mode keys`:
@@ -131,7 +158,7 @@ Custom JSON policy (stored in `api_keys.policy`):
 Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
 `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
-`GetMetaStats`, `*`.
+`GetMetaStats`, `ReplicationRead`, `ReplicationWrite`, `*`.
 
 Conditions (optional) in statements:
 - `source_ip`: list of CIDR blocks (e.g. `"10.0.0.0/8"`).
