@@ -259,6 +259,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 9 {
+		if err = applyV9(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -455,6 +463,22 @@ func applyV8(ctx context.Context, tx *sql.Tx) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS oplog_hlc_idx ON oplog(hlc_ts)`,
 		`CREATE INDEX IF NOT EXISTS oplog_site_hlc_idx ON oplog(site_id, hlc_ts)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV9(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS repl_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			last_hlc TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -1171,6 +1195,38 @@ LIMIT ?`, since, limit)
 		out = append(out, entry)
 		return nil
 	})
+}
+
+// GetReplWatermark returns the last stored replication HLC watermark.
+func (s *Store) GetReplWatermark(ctx context.Context) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("meta: db not initialized")
+	}
+	var hlc string
+	err := s.db.QueryRowContext(ctx, "SELECT last_hlc FROM repl_state WHERE id=1").Scan(&hlc)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hlc, nil
+}
+
+// SetReplWatermark stores the last replication HLC watermark.
+func (s *Store) SetReplWatermark(ctx context.Context, hlc string) error {
+	if s == nil || s.db == nil {
+		return errors.New("meta: db not initialized")
+	}
+	if hlc == "" {
+		return errors.New("meta: repl watermark required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO repl_state(id, updated_at, last_hlc)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_hlc=excluded.last_hlc`, now, hlc)
+	return err
 }
 
 // MarkDamaged sets version state to DAMAGED.
