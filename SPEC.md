@@ -14,6 +14,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - **twardy kontrakt trwałości**: fsync segmentów + commit WAL zanim obiekt jest widoczny,
 - **narzędzia ops**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite plan/run,
 - **S3 API**: PUT/GET/HEAD (z `versionId`), LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
+- **ACL/IAM (MVP)**: per‑action JSON policy v1 + bucket policies + warunki (wystarczające na obecny etap rozwoju).
 
 ---
 
@@ -130,6 +131,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
 - Polityki są egzekwowane na wszystkich operacjach, w tym `list_buckets` i `meta`.
 - Format polityk: JSON z listą `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match).
+- Egzekwowanie: deny > allow; bucket policy i identity policy są łączone (jeśli żadna nie pozwala, access denied).
 - `X-Forwarded-For` jest brany pod uwagę tylko dla zaufanych proxy (`-trusted-proxies`).
 - Rate limiting błędów auth per IP i per access key.
 - Limity inflight per access key (domyślnie 32, per‑key override).
@@ -205,6 +207,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ## 6.1) Ops / TLS / tooling
 - Checklist TLS i przykłady awscli/s3cmd: `docs/ops.md`.
 - Opcjonalny TLS w aplikacji: `-tls`, `-tls-cert`, `-tls-key` (hot reload certów).
+- Zarządzanie politykami: `-mode keys` (per‑key) oraz `-mode bucket-policy` (per‑bucket).
 
 ---
 
@@ -217,5 +220,5 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) Rozbudowa ACL/IAM: reguły per‑prefix/per‑action, warunki i lepsze narzędzia zarządzania.
-2) Replikacja / multi-site: projekt oplogu + HLC + mechanizm synchronizacji.
+1) Replikacja / multi-site: projekt oplogu + HLC + mechanizm synchronizacji.
+2) Utrzymanie i stabilizacja: monitoring, narzędzia ops, dokumentacja.
