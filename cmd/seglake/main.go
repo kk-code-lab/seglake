@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +30,9 @@ func main() {
 	virtualHosted := flag.Bool("virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
 	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys")
+	tlsEnable := flag.Bool("tls", false, "Enable HTTPS listener with TLS")
+	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
+	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
@@ -149,6 +154,29 @@ func main() {
 	}
 	if *logRequests {
 		handler = s3.LoggingMiddleware(handler)
+	}
+	if *tlsEnable || (*tlsCert != "" || *tlsKey != "") {
+		cfg, err := newTLSConfig(*tlsCert, *tlsKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tls config error: %v\n", err)
+			os.Exit(1)
+		}
+		server := &http.Server{
+			Addr:      *addr,
+			Handler:   handler,
+			TLSConfig: cfg,
+		}
+		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
+			os.Exit(1)
+		}
+		tlsLn := tls.NewListener(ln, cfg)
+		if err := server.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
