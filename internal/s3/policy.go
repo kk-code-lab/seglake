@@ -3,7 +3,9 @@ package s3
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
+	"time"
 )
 
 type Policy struct {
@@ -12,14 +14,28 @@ type Policy struct {
 }
 
 type Statement struct {
-	Effect    string     `json:"effect"`
-	Actions   []string   `json:"actions"`
-	Resources []Resource `json:"resources"`
+	Effect     string     `json:"effect"`
+	Actions    []string   `json:"actions"`
+	Resources  []Resource `json:"resources"`
+	Conditions Conditions `json:"conditions,omitempty"`
 }
 
 type Resource struct {
 	Bucket string `json:"bucket"`
 	Prefix string `json:"prefix,omitempty"`
+}
+
+type Conditions struct {
+	SourceIP []string          `json:"source_ip,omitempty"`
+	Before   string            `json:"before,omitempty"`
+	After    string            `json:"after,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+}
+
+type PolicyContext struct {
+	Now      time.Time
+	SourceIP string
+	Headers  map[string]string
 }
 
 const (
@@ -142,6 +158,9 @@ func (p *Policy) validate() error {
 				return errors.New("policy resource bucket required")
 			}
 		}
+		if err := stmt.Conditions.validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -156,7 +175,7 @@ func (p *Policy) Allows(action, bucket, key string) bool {
 	key = strings.TrimSpace(key)
 	allowed := false
 	for _, stmt := range p.Statements {
-		if !stmt.matches(action, bucket, key) {
+		if !stmt.matches(action, bucket, key, nil) {
 			continue
 		}
 		if stmt.Effect == policyEffectDeny {
@@ -178,7 +197,7 @@ func (p *Policy) Decision(action, bucket, key string) (bool, bool) {
 	allowed := false
 	denied := false
 	for _, stmt := range p.Statements {
-		if !stmt.matches(action, bucket, key) {
+		if !stmt.matches(action, bucket, key, nil) {
 			continue
 		}
 		if stmt.Effect == policyEffectDeny {
@@ -190,11 +209,37 @@ func (p *Policy) Decision(action, bucket, key string) (bool, bool) {
 	return allowed, denied
 }
 
-func (s *Statement) matches(action, bucket, key string) bool {
+// DecisionWithContext evaluates policy with request context (ip/time/headers).
+func (p *Policy) DecisionWithContext(action, bucket, key string, ctx *PolicyContext) (bool, bool) {
+	if p == nil {
+		return false, false
+	}
+	action = normalizeAction(action)
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimSpace(key)
+	allowed := false
+	denied := false
+	for _, stmt := range p.Statements {
+		if !stmt.matches(action, bucket, key, ctx) {
+			continue
+		}
+		if stmt.Effect == policyEffectDeny {
+			denied = true
+		} else {
+			allowed = true
+		}
+	}
+	return allowed, denied
+}
+
+func (s *Statement) matches(action, bucket, key string, ctx *PolicyContext) bool {
 	if s == nil {
 		return false
 	}
 	if !actionsMatch(s.Actions, action) {
+		return false
+	}
+	if !s.Conditions.match(ctx) {
 		return false
 	}
 	for _, res := range s.Resources {
@@ -222,6 +267,86 @@ func (r Resource) matches(bucket, key string) bool {
 		return true
 	}
 	return strings.HasPrefix(key, r.Prefix)
+}
+
+func (c *Conditions) validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Before != "" {
+		if _, err := time.Parse(time.RFC3339, c.Before); err != nil {
+			return errors.New("policy condition before must be RFC3339")
+		}
+	}
+	if c.After != "" {
+		if _, err := time.Parse(time.RFC3339, c.After); err != nil {
+			return errors.New("policy condition after must be RFC3339")
+		}
+	}
+	for _, cidr := range c.SourceIP {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return errors.New("policy condition source_ip must be CIDR")
+		}
+	}
+	for k := range c.Headers {
+		if strings.TrimSpace(k) == "" {
+			return errors.New("policy condition headers require keys")
+		}
+	}
+	return nil
+}
+
+func (c *Conditions) match(ctx *PolicyContext) bool {
+	if c == nil {
+		return true
+	}
+	if ctx == nil {
+		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0
+	}
+	if len(c.SourceIP) > 0 {
+		ip := net.ParseIP(ctx.SourceIP)
+		if ip == nil {
+			return false
+		}
+		ok := false
+		for _, cidr := range c.SourceIP {
+			_, network, err := net.ParseCIDR(cidr)
+			if err != nil {
+				continue
+			}
+			if network.Contains(ip) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if c.Before != "" {
+		before, err := time.Parse(time.RFC3339, c.Before)
+		if err != nil || !ctx.Now.Before(before) {
+			return false
+		}
+	}
+	if c.After != "" {
+		after, err := time.Parse(time.RFC3339, c.After)
+		if err != nil || !ctx.Now.After(after) {
+			return false
+		}
+	}
+	if len(c.Headers) > 0 {
+		for k, v := range c.Headers {
+			got := ""
+			if ctx.Headers != nil {
+				got = ctx.Headers[strings.ToLower(k)]
+			}
+			if got != v {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func policyActionForRequest(op string) string {

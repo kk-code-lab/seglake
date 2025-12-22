@@ -133,6 +133,11 @@ Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetObject`, `HeadObj
 `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
 `GetMetaStats`, `*`.
 
+Conditions (optional) in statements:
+- `source_ip`: list of CIDR blocks (e.g. `"10.0.0.0/8"`).
+- `before` / `after`: RFC3339 time window.
+- `headers`: exact match on request headers (lowercased keys).
+
 Example with deny override:
 ```
 {
@@ -167,6 +172,26 @@ Example read + list for a single bucket:
       "resources": [
         { "bucket": "demo" }
       ]
+    }
+  ]
+}
+```
+
+Example with source IP + header condition:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["GetObject"],
+      "resources": [
+        { "bucket": "demo", "prefix": "public/" }
+      ],
+      "conditions": {
+        "source_ip": ["10.0.0.0/8"],
+        "headers": { "x-tenant": "alpha" }
+      }
     }
   ]
 }
