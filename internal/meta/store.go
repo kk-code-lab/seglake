@@ -918,6 +918,28 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 	return err
 }
 
+// ListOplog returns all oplog entries ordered by insert id.
+func (s *Store) ListOplog(ctx context.Context) (out []OplogEntry, err error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, site_id, hlc_ts, op_type, bucket, key, COALESCE(version_id,''), COALESCE(payload,''), created_at
+FROM oplog
+ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var entry OplogEntry
+		if err := scan(&entry.ID, &entry.SiteID, &entry.HLCTS, &entry.OpType, &entry.Bucket, &entry.Key, &entry.VersionID, &entry.Payload, &entry.CreatedAt); err != nil {
+			return err
+		}
+		out = append(out, entry)
+		return nil
+	})
+}
+
 // MarkDamaged sets version state to DAMAGED.
 func (s *Store) MarkDamaged(ctx context.Context, versionID string) error {
 	if versionID == "" {
