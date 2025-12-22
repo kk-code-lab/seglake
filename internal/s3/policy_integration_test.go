@@ -13,16 +13,15 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func TestPolicyEnforcedOnRequests(t *testing.T) {
+func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer func() { _ = store.Close() }()
-
-	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo","prefix":"public/"}]}]}`
 	if err := store.UpsertAPIKey(context.Background(), "ak", "sk", policy, true, 0); err != nil {
+		_ = store.Close()
 		t.Fatalf("UpsertAPIKey: %v", err)
 	}
 
@@ -31,11 +30,8 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 		MetaStore: store,
 	})
 	if err != nil {
+		_ = store.Close()
 		t.Fatalf("engine.New: %v", err)
-	}
-
-	if _, _, err := eng.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
-		t.Fatalf("PutObject seed: %v", err)
 	}
 
 	handler := &Handler{
@@ -48,7 +44,21 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 	}
 
 	server := httptest.NewServer(handler)
-	defer server.Close()
+	cleanup := func() {
+		server.Close()
+		_ = store.Close()
+	}
+	return server, handler, cleanup
+}
+
+func TestPolicyEnforcedOnRequests(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo","prefix":"public/"}]}]}`
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
 
 	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
 	if err != nil {
@@ -80,41 +90,13 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 }
 
 func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
-	dir := t.TempDir()
-	store, err := meta.Open(filepath.Join(dir, "meta.db"))
-	if err != nil {
-		t.Fatalf("meta.Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]},{"effect":"deny","actions":["read"],"resources":[{"bucket":"demo","prefix":"secret/"}]}]}`
-	if err := store.UpsertAPIKey(context.Background(), "ak", "sk", policy, true, 0); err != nil {
-		t.Fatalf("UpsertAPIKey: %v", err)
-	}
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
 
-	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
-		MetaStore: store,
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	if _, _, err := eng.PutObject(context.Background(), "demo", "secret/x", bytes.NewReader([]byte("x"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "secret/x", bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
-
-	handler := &Handler{
-		Engine: eng,
-		Meta:   store,
-		Auth: &AuthConfig{
-			Region:       "us-east-1",
-			SecretLookup: store.LookupAPISecret,
-		},
-	}
-
-	server := httptest.NewServer(handler)
-	defer server.Close()
 
 	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo/secret/x", nil)
 	if err != nil {
@@ -132,37 +114,9 @@ func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
 }
 
 func TestPolicyMPUDenied(t *testing.T) {
-	dir := t.TempDir()
-	store, err := meta.Open(filepath.Join(dir, "meta.db"))
-	if err != nil {
-		t.Fatalf("meta.Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
-	if err := store.UpsertAPIKey(context.Background(), "ak", "sk", policy, true, 0); err != nil {
-		t.Fatalf("UpsertAPIKey: %v", err)
-	}
-
-	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
-		MetaStore: store,
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	handler := &Handler{
-		Engine: eng,
-		Meta:   store,
-		Auth: &AuthConfig{
-			Region:       "us-east-1",
-			SecretLookup: store.LookupAPISecret,
-		},
-	}
-
-	server := httptest.NewServer(handler)
-	defer server.Close()
+	server, _, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
 
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/demo/key?uploads", nil)
 	if err != nil {
@@ -176,5 +130,50 @@ func TestPolicyMPUDenied(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("MPU initiate status: %d", resp.StatusCode)
+	}
+}
+
+func TestPolicyCopyDenied(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "src", bytes.NewReader([]byte("x"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/demo/dst", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Amz-Copy-Source", "/demo/src")
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("COPY error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("COPY status: %d", resp.StatusCode)
+	}
+}
+
+func TestPolicyMetaDenied(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	server, _, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/meta/stats", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("meta stats error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("meta stats status: %d", resp.StatusCode)
 	}
 }

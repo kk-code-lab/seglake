@@ -146,6 +146,22 @@ Example with deny override:
 }
 ```
 
+Example read + list for a single bucket:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["read", "list"],
+      "resources": [
+        { "bucket": "demo" }
+      ]
+    }
+  ]
+}
+```
+
 ## s3cmd examples
 
 List buckets:
