@@ -13,6 +13,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - **metadane w SQLite (WAL, synchronous=FULL)**,
 - **twardy kontrakt trwałości**: fsync segmentów + commit WAL zanim obiekt jest widoczny,
 - **narzędzia ops**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite plan/run,
+- repl-validate (porównanie spójności między węzłami),
 - **S3 API**: PUT/GET/HEAD (z `versionId`), LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per‑action JSON policy v1 + bucket policies + warunki (wystarczające na obecny etap rozwoju).
 
@@ -43,7 +44,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ### 2.4 Ops i observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
-  gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL).
+  gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL), repl-validate.
 - `/v1/meta/stats` z podstawowymi licznikami + ruch i latencje.
 - Request-id w logach i odpowiedziach.
 
@@ -169,6 +170,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `rebuild-index` — odbudowa meta z manifestów.
 - `snapshot` — kopia meta.db(+wal/shm) + raport.
 - `support-bundle` — snapshot + fsck + scrub.
+- `repl-validate` — porównanie manifestów i live wersji między dwoma data-dir.
 - `gc-plan`/`gc-run` — usuwa segmenty w 100% martwe.
 - `gc-rewrite-plan`/`gc-rewrite-run` — rewrite segmentów częściowo martwych (throttle + pause file).
 - `mpu-gc-plan`/`mpu-gc-run` — czyszczenie starych multipart uploadów (TTL).
@@ -183,7 +185,9 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - latency_ms{op}: p50/p95/p99,
 - requests_total_by_bucket / latency_ms_by_bucket,
 - requests_total_by_key / latency_ms_by_key,
-- gc_trends: historia GC (mode, finished_at, errors, reclaimed/rewritten, reclaim_rate).
+- gc_trends: historia GC (mode, finished_at, errors, reclaimed/rewritten, reclaim_rate),
+- replication: per‑remote {last_pull_hlc, last_push_hlc, push_backlog, push_backlog_bytes, oplog_bytes_total, last_oplog_hlc, lag_seconds},
+- replication_conflicts: licznik konfliktów z apply (LWW).
 
 ### 5.3 Crash harness
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`
@@ -214,7 +218,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ## 7) Znane braki / ograniczenia (stan obecny)
 
  - Brak pełnych ACL/IAM/polityk (jest per‑action JSON policy v1, bucket policies i warunki; brak np. ACL per‑object/STS/zaawansowanych condition).
-- Brak replikacji / multi-site / oplogu / HLC.
+ - Brak pełnej walidacji spójności wersji (repl-validate porównuje manifesty i live pointers, nie wszystkie wersje).
 
 ---
 
