@@ -1245,6 +1245,18 @@ LIMIT ?`, since, limit)
 	})
 }
 
+// MaxOplogHLC returns the max HLC value recorded in oplog.
+func (s *Store) MaxOplogHLC(ctx context.Context) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("meta: db not initialized")
+	}
+	var hlc string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(hlc_ts),'') FROM oplog").Scan(&hlc); err != nil {
+		return "", err
+	}
+	return hlc, nil
+}
+
 // GetReplWatermark returns the last stored replication HLC watermark.
 func (s *Store) GetReplWatermark(ctx context.Context) (string, error) {
 	return s.GetReplPullWatermark(ctx)

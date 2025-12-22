@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +21,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
+	storagefs "github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
 type replClient struct {
@@ -44,6 +49,92 @@ type replOplogApplyResponse struct {
 	Applied          int                `json:"applied"`
 	MissingManifests []string           `json:"missing_manifests,omitempty"`
 	MissingChunks    []replMissingChunk `json:"missing_chunks,omitempty"`
+}
+
+func runReplBootstrap(remote, accessKey, secretKey, region, dataDir string, force bool) error {
+	if remote == "" {
+		return errors.New("replication: -repl-remote required")
+	}
+	base, err := url.Parse(remote)
+	if err != nil {
+		return err
+	}
+	if base.Scheme == "" {
+		base.Scheme = "http"
+	}
+	if base.Host == "" && base.Path != "" && !strings.Contains(base.Path, "/") {
+		base.Host = base.Path
+		base.Path = ""
+	}
+	client := &replClient{
+		base: base,
+		client: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
+	if accessKey != "" && secretKey != "" {
+		if region == "" {
+			region = "us-east-1"
+		}
+		client.signer = &s3.AuthConfig{
+			AccessKey: accessKey,
+			SecretKey: secretKey,
+			Region:    region,
+		}
+	}
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	metaPath := filepath.Join(dataDir, "meta.db")
+	if !force {
+		if _, err := os.Stat(metaPath); err == nil {
+			return errors.New("replication: meta.db exists (use -repl-bootstrap-force to overwrite)")
+		}
+	}
+	tmpDir, err := os.MkdirTemp("", "seglake-bootstrap-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	resp, err := client.getSnapshot()
+	if err != nil {
+		return err
+	}
+	if err := extractTarGz(resp, tmpDir); err != nil {
+		return err
+	}
+	if err := resp.Close(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "meta.db")); err != nil {
+		return fmt.Errorf("replication: snapshot missing meta.db: %v", err)
+	}
+	if err := replaceMetaFiles(tmpDir, dataDir, force); err != nil {
+		return err
+	}
+
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	layout := storagefs.NewLayout(filepath.Join(dataDir, "objects"))
+	eng, err := engine.New(engine.Options{Layout: layout, MetaStore: store})
+	if err != nil {
+		return err
+	}
+	since, err := store.MaxOplogHLC(context.Background())
+	if err != nil {
+		return err
+	}
+	if err := runReplPull(remote, since, 1000, true, false, 0, 0, 5*time.Minute, accessKey, secretKey, region, store, eng); err != nil {
+		return err
+	}
+	return nil
 }
 
 type replMissingCache struct {
@@ -430,6 +521,19 @@ func (c *replClient) getOplog(since string, limit int) (*replOplogResponse, erro
 	return &out, nil
 }
 
+func (c *replClient) getSnapshot() (io.ReadCloser, error) {
+	resp, err := c.do(http.MethodGet, "/v1/replication/snapshot", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("snapshot fetch failed: status=%d body=%s", resp.StatusCode, string(payload))
+	}
+	return resp.Body, nil
+}
+
 func (c *replClient) applyOplog(entries []meta.OplogEntry) (*replOplogApplyResponse, error) {
 	body, err := json.Marshal(replOplogApplyRequest{Entries: entries})
 	if err != nil {
@@ -508,4 +612,92 @@ func (c *replClient) do(method, route string, query url.Values, body io.Reader) 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return c.client.Do(req)
+}
+
+func extractTarGz(r io.Reader, dst string) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if hdr.Name == "" {
+			continue
+		}
+		clean := filepath.Clean(hdr.Name)
+		if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+			return fmt.Errorf("replication: invalid snapshot path %q", hdr.Name)
+		}
+		target := filepath.Join(dst, clean)
+		if hdr.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, tr); err != nil {
+			_ = out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceMetaFiles(srcDir, dataDir string, force bool) error {
+	targets := []string{"meta.db", "meta.db-wal", "meta.db-shm"}
+	for _, name := range targets {
+		src := filepath.Join(srcDir, name)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(dataDir, name)
+		if !force {
+			if _, err := os.Stat(dst); err == nil {
+				return fmt.Errorf("replication: %s exists (use -repl-bootstrap-force)", name)
+			}
+		}
+		_ = os.Remove(dst)
+		if err := copyFile(src, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }

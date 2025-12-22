@@ -158,3 +158,31 @@ func TestApplyOplogEntries(t *testing.T) {
 		t.Fatalf("expected object to be deleted")
 	}
 }
+
+func TestMaxOplogHLC(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	hlc, err := store.MaxOplogHLC(context.Background())
+	if err != nil {
+		t.Fatalf("MaxOplogHLC: %v", err)
+	}
+	if hlc != "" {
+		t.Fatalf("expected empty HLC, got %q", hlc)
+	}
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	hlc, err = store.MaxOplogHLC(context.Background())
+	if err != nil {
+		t.Fatalf("MaxOplogHLC: %v", err)
+	}
+	if hlc == "" {
+		t.Fatalf("expected HLC value")
+	}
+}

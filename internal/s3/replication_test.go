@@ -1,9 +1,12 @@
 package s3
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -215,6 +218,79 @@ func TestReplicationChunkEndpoint(t *testing.T) {
 	if rec.Body.String() != data {
 		t.Fatalf("expected %q, got %q", data, rec.Body.String())
 	}
+}
+
+func TestReplicationSnapshotEndpoint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	if _, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/replication/snapshot", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/gzip") {
+		t.Fatalf("expected gzip content type")
+	}
+	names, err := listTarGz(rec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("list tar: %v", err)
+	}
+	found := false
+	for _, name := range names {
+		if name == "meta.db" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("meta.db not found in snapshot")
+	}
+}
+
+func listTarGz(data []byte) ([]string, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	var out []string
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		out = append(out, hdr.Name)
+	}
+	return out, nil
 }
 
 func TestReplicationOplogLimitCap(t *testing.T) {
