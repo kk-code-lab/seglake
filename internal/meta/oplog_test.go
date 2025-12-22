@@ -186,3 +186,120 @@ func TestMaxOplogHLC(t *testing.T) {
 		t.Fatalf("expected HLC value")
 	}
 }
+
+func TestApplyOplogPutDeleteConflict(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         123,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	delPayload, err := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	put := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000005-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	del := OplogEntry{
+		SiteID:    "site-b",
+		HLCTS:     "0000000000000000006-0000000001",
+		OpType:    "delete",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(delPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put, del}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected object to be deleted by higher HLC delete")
+	}
+
+	put2 := OplogEntry{
+		SiteID:    "site-c",
+		HLCTS:     "0000000000000000007-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v2",
+		Payload:   string(putPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put2}); err != nil {
+		t.Fatalf("ApplyOplogEntries put2: %v", err)
+	}
+	meta, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.VersionID != "v2" {
+		t.Fatalf("expected v2 to win after higher HLC put, got %s", meta.VersionID)
+	}
+}
+
+func TestApplyOplogTieBreakSite(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         1,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	hlc := "0000000000000000100-0000000001"
+	putA := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     hlc,
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	putB := OplogEntry{
+		SiteID:    "site-z",
+		HLCTS:     hlc,
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v2",
+		Payload:   string(putPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{putA, putB}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	meta, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.VersionID != "v2" {
+		t.Fatalf("expected site tie-break to pick v2, got %s", meta.VersionID)
+	}
+}
