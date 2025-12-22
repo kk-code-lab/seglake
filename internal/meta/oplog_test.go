@@ -43,3 +43,49 @@ func TestOplogPutDelete(t *testing.T) {
 		t.Fatalf("expected site/hlc, got site=%q hlc=%q", entries[1].SiteID, entries[1].HLCTS)
 	}
 }
+
+func TestOplogSinceLimit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.SetSiteID("site-a")
+
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag", 124, ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+
+	entries, err := store.ListOplog(context.Background())
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+
+	since := entries[0].HLCTS
+	filtered, err := store.ListOplogSince(context.Background(), since, 10)
+	if err != nil {
+		t.Fatalf("ListOplogSince: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(filtered))
+	}
+	if filtered[0].VersionID != "v2" {
+		t.Fatalf("expected v2, got %s", filtered[0].VersionID)
+	}
+
+	limited, err := store.ListOplogSince(context.Background(), "", 1)
+	if err != nil {
+		t.Fatalf("ListOplogSince limit: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(limited))
+	}
+}

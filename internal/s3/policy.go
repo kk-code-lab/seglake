@@ -62,6 +62,7 @@ const (
 	policyActionListMultipartUploads  = "listmultipartuploads"
 	policyActionListMultipartParts    = "listmultipartparts"
 	policyActionGetMetaStats          = "getmetastats"
+	policyActionReplicationRead       = "replicationread"
 )
 
 var validPolicyActions = map[string]struct{}{
@@ -82,6 +83,7 @@ var validPolicyActions = map[string]struct{}{
 	policyActionListMultipartUploads:  {},
 	policyActionListMultipartParts:    {},
 	policyActionGetMetaStats:          {},
+	policyActionReplicationRead:       {},
 }
 
 // ParsePolicy parses a policy JSON string or accepts short-hands "rw" and "ro".
@@ -353,6 +355,8 @@ func policyActionForRequest(op string) string {
 	switch op {
 	case "meta_stats":
 		return policyActionGetMetaStats
+	case "repl_oplog":
+		return policyActionReplicationRead
 	case "list_buckets":
 		return policyActionListBuckets
 	case "list_v1", "list_v2":
