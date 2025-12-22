@@ -42,6 +42,7 @@ type Report struct {
 	RebuiltObjects    int       `json:"rebuilt_objects,omitempty"`
 	SkippedManifests  int       `json:"skipped_manifests,omitempty"`
 	MissingSegmentIDs []string  `json:"missing_segment_ids,omitempty"`
+	Replication       []meta.ReplStat `json:"replication,omitempty"`
 }
 
 const reportSchemaVersion = 1
@@ -92,6 +93,12 @@ func Status(layout fs.Layout) (*Report, error) {
 	report.Manifests = len(manifests)
 	report.Segments = len(segments)
 	report.FinishedAt = time.Now().UTC()
+	if store, err := meta.Open(filepath.Join(layout.Root, "meta.db")); err == nil {
+		if repl, err := store.GetReplStats(context.Background()); err == nil {
+			report.Replication = repl
+		}
+		_ = store.Close()
+	}
 	return report, nil
 }
 
