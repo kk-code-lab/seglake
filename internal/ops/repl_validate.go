@@ -84,6 +84,28 @@ func ReplValidate(layout fs.Layout, metaPath, compareDir string) (*Report, error
 		addError(fmt.Sprintf("live version missing locally: %s", rel))
 	}
 
+	localVersions, err := localStore.ListVersionManifestPaths(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	remoteVersions, err := remoteStore.ListVersionManifestPaths(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	localVersionSet := normalizePaths(layout.ManifestsDir, localVersions)
+	remoteVersionSet := normalizePaths(otherLayout.ManifestsDir, remoteVersions)
+	report.CompareVersionsLocal = len(localVersionSet)
+	report.CompareVersionsRemote = len(remoteVersionSet)
+	extraVersions, missingVersions := diffSets(localVersionSet, remoteVersionSet)
+	report.CompareVersionsExtra = len(extraVersions)
+	report.CompareVersionsMissing = len(missingVersions)
+	for _, rel := range extraVersions {
+		addError(fmt.Sprintf("version missing on remote: %s", rel))
+	}
+	for _, rel := range missingVersions {
+		addError(fmt.Sprintf("version missing locally: %s", rel))
+	}
+
 	report.FinishedAt = time.Now().UTC()
 	return report, nil
 }

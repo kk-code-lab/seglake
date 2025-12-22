@@ -51,6 +51,10 @@ type Report struct {
 	CompareLiveExtra        int             `json:"compare_live_extra,omitempty"`
 	CompareLiveLocal        int             `json:"compare_live_local,omitempty"`
 	CompareLiveRemote       int             `json:"compare_live_remote,omitempty"`
+	CompareVersionsMissing  int             `json:"compare_versions_missing,omitempty"`
+	CompareVersionsExtra    int             `json:"compare_versions_extra,omitempty"`
+	CompareVersionsLocal    int             `json:"compare_versions_local,omitempty"`
+	CompareVersionsRemote   int             `json:"compare_versions_remote,omitempty"`
 }
 
 const reportSchemaVersion = 1

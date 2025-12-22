@@ -60,6 +60,9 @@ func TestReplValidateNoDiff(t *testing.T) {
 	if report.CompareLiveExtra != 0 || report.CompareLiveMissing != 0 {
 		t.Fatalf("unexpected live diffs: %+v", report)
 	}
+	if report.CompareVersionsExtra != 0 || report.CompareVersionsMissing != 0 {
+		t.Fatalf("unexpected version diffs: %+v", report)
+	}
 }
 
 func TestReplValidateDetectsDiff(t *testing.T) {
@@ -103,6 +106,9 @@ func TestReplValidateDetectsDiff(t *testing.T) {
 	}
 	if report.CompareLiveExtra != 1 {
 		t.Fatalf("expected 1 extra live entry, got %d", report.CompareLiveExtra)
+	}
+	if report.CompareVersionsExtra != 1 {
+		t.Fatalf("expected 1 extra version entry, got %d", report.CompareVersionsExtra)
 	}
 	if report.Errors == 0 {
 		t.Fatalf("expected errors")
