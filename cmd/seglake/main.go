@@ -23,6 +23,7 @@ func main() {
 	accessKey := flag.String("access-key", "", "S3 access key (enables SigV4)")
 	secretKey := flag.String("secret-key", "", "S3 secret key (enables SigV4)")
 	region := flag.String("region", "us-east-1", "S3 region")
+	virtualHosted := flag.Bool("virtual-hosted", false, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
 	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|support-bundle")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
@@ -96,6 +97,7 @@ func main() {
 			Region:    *region,
 			MaxSkew:   5 * time.Minute,
 		},
+		VirtualHosted: *virtualHosted,
 	}
 	if *logRequests {
 		handler = s3.LoggingMiddleware(handler)

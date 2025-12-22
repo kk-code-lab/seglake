@@ -106,6 +106,9 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `PUT /<bucket>/<key>` — PUT object.
 - `GET /<bucket>/<key>` — GET object.
 - `HEAD /<bucket>/<key>` — HEAD object.
+- `DELETE /<bucket>/<key>` — DELETE object (idempotentny).
+- `DELETE /<bucket>` — DELETE bucket (tylko gdy pusty).
+- `PUT /<bucket>/<key>` + `x-amz-copy-source` — CopyObject (pełny copy).
 - Multipart:
   - `POST /<bucket>/<key>?uploads` — Initiate.
   - `PUT /<bucket>/<key>?partNumber=N&uploadId=...` — UploadPart.
@@ -134,7 +137,11 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Nieobsługiwane/niepoprawne zakresy → `416 InvalidRange` + `Content-Range: bytes */<size>`.
 - Referencje testów: `internal/s3/range_test.go`, `internal/s3/e2e_test.go`.
 
-### 4.5 Błędy
+### 4.5 Conditional GET/HEAD
+- `If-Match` → 412 `PreconditionFailed` gdy ETag się nie zgadza.
+- `If-None-Match` → 304 `NotModified` gdy ETag się zgadza.
+
+### 4.6 Błędy
 - XML zgodny z AWS (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
 - Przykłady walidowane w testach (m.in. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
   `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.
@@ -177,8 +184,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 7) Znane braki / ograniczenia (stan obecny)
 
-- Brak DELETE obiektów i bucketów.
-- Brak CopyObject i wersjonowania po API.
+ - Brak wersjonowania po API.
 - Brak ACL/IAM/polityk, brak per-key limitów i rate-limitów.
 - Brak TLS w aplikacji (zakładany reverse proxy).
 - Brak virtual-hosted-style.
