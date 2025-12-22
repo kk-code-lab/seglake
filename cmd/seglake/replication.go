@@ -46,6 +46,51 @@ type replOplogApplyResponse struct {
 	MissingChunks    []replMissingChunk `json:"missing_chunks,omitempty"`
 }
 
+type replMissingCache struct {
+	chunks map[string]replMissingChunk
+}
+
+func newReplMissingCache() *replMissingCache {
+	return &replMissingCache{chunks: make(map[string]replMissingChunk)}
+}
+
+func (c *replMissingCache) addChunk(ch replMissingChunk) {
+	if c == nil {
+		return
+	}
+	if c.chunks == nil {
+		c.chunks = make(map[string]replMissingChunk)
+	}
+	c.chunks[chunkKey(ch)] = ch
+}
+
+func (c *replMissingCache) addChunks(chunks []replMissingChunk) {
+	if c == nil {
+		return
+	}
+	for _, ch := range chunks {
+		c.addChunk(ch)
+	}
+}
+
+func (c *replMissingCache) snapshot() map[string]replMissingChunk {
+	if c == nil {
+		return nil
+	}
+	out := make(map[string]replMissingChunk, len(c.chunks))
+	for k, v := range c.chunks {
+		out[k] = v
+	}
+	return out
+}
+
+func (c *replMissingCache) clear() {
+	if c == nil {
+		return
+	}
+	c.chunks = make(map[string]replMissingChunk)
+}
+
 func runReplPush(remote, since string, limit int, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store) error {
 	if store == nil {
 		return errors.New("replication: store required")
@@ -175,8 +220,9 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 		backoffMax = time.Minute
 	}
 	backoff := interval
+	missingCache := newReplMissingCache()
 	for {
-		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng)
+		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng, missingCache)
 		if err != nil {
 			if !watch {
 				return err
@@ -209,7 +255,28 @@ func chunkKey(ch replMissingChunk) string {
 	return fmt.Sprintf("%s:%d:%d", ch.SegmentID, ch.Offset, ch.Length)
 }
 
-func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine) (string, int, error) {
+func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.Engine, ch replMissingChunk, attempts int) error {
+	if attempts <= 0 {
+		attempts = 1
+	}
+	backoff := 200 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		data, err := client.getChunk(ch.SegmentID, ch.Offset, ch.Length)
+		if err == nil {
+			if err := eng.WriteSegmentRange(ctx, ch.SegmentID, ch.Offset, data); err != nil {
+				return err
+			}
+			return nil
+		}
+		lastErr = err
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+	return lastErr
+}
+
+func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine, cache *replMissingCache) (string, int, error) {
 	oplogResp, err := client.getOplog(since, limit)
 	if err != nil {
 		return "", 0, err
@@ -235,9 +302,17 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 	}
 	missingChunks := make(map[string]replMissingChunk)
 	for _, ch := range applyResp.MissingChunks {
-		key := chunkKey(ch)
-		missingChunks[key] = ch
+		missingChunks[chunkKey(ch)] = ch
 	}
+	if cache != nil {
+		cache.addChunks(applyResp.MissingChunks)
+		for k, v := range cache.snapshot() {
+			if _, ok := missingChunks[k]; !ok {
+				missingChunks[k] = v
+			}
+		}
+	}
+	fetchedManifests := 0
 	for versionID := range missingManifests {
 		manifestBytes, err := client.getManifest(versionID)
 		if err != nil {
@@ -261,18 +336,22 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 				}
 			}
 		}
+		fetchedManifests++
 	}
-	for _, ch := range missingChunks {
-		data, err := client.getChunk(ch.SegmentID, ch.Offset, ch.Length)
-		if err != nil {
-			return "", applyResp.Applied, err
-		}
-		if err := eng.WriteSegmentRange(ctx, ch.SegmentID, ch.Offset, data); err != nil {
-			return "", applyResp.Applied, err
+	fetched := 0
+	if len(missingChunks) > 0 {
+		for _, ch := range missingChunks {
+			if err := fetchChunkWithRetry(ctx, client, eng, ch, 3); err != nil {
+				return "", applyResp.Applied, err
+			}
+			fetched++
 		}
 	}
-	if len(missingManifests) > 0 || len(missingChunks) > 0 {
-		fmt.Printf("repl: fetched manifests=%d chunks=%d\n", len(missingManifests), len(missingChunks))
+	if cache != nil && fetched == len(missingChunks) {
+		cache.clear()
+	}
+	if fetchedManifests > 0 || fetched > 0 {
+		fmt.Printf("repl: fetched manifests=%d chunks=%d\n", fetchedManifests, fetched)
 	}
 	return oplogResp.LastHLC, applyResp.Applied, nil
 }
