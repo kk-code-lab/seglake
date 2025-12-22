@@ -81,7 +81,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeError(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID)
+			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
 			return
 		}
 		_ = bucket
@@ -111,6 +111,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, ok := h.parseBucketOnly(r); ok {
+			writeErrorWithResource(mw, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
+			return
+		}
 		writeErrorWithResource(mw, http.StatusBadRequest, "InvalidURI", "", requestID, r.URL.Path)
 		return
 	}
@@ -137,7 +141,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDeleteObject(r.Context(), mw, bucket, key, requestID, r.URL.Path)
 	default:
 		if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
-			h.handleInitiateMultipart(r.Context(), mw, bucket, key, requestID)
+			h.handleInitiateMultipart(r.Context(), mw, bucket, key, requestID, r.URL.Path)
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" {
@@ -145,7 +149,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != "" {
-			h.handleAbortMultipart(r.Context(), mw, r.URL.Query().Get("uploadId"), requestID)
+			h.handleAbortMultipart(r.Context(), mw, r.URL.Query().Get("uploadId"), requestID, r.URL.Path)
 			return
 		}
 		writeErrorWithResource(mw, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)

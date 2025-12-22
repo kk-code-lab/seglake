@@ -55,10 +55,10 @@ type listPartContent struct {
 	LastModified string `xml:"LastModified"`
 }
 
-func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, bucket, key, requestID string) {
+func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	if err := h.Meta.CreateMultipartUpload(ctx, bucket, key, uploadID); err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
 	resp := initiateMultipartResult{
@@ -106,7 +106,7 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	if err := h.Meta.PutMultipartPart(ctx, uploadID, partNumber, result.VersionID, result.ETag, result.Size); err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	w.Header().Set("ETag", `"`+result.ETag+`"`)
@@ -246,9 +246,9 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
-func (h *Handler) handleAbortMultipart(ctx context.Context, w http.ResponseWriter, uploadID string, requestID string) {
+func (h *Handler) handleAbortMultipart(ctx context.Context, w http.ResponseWriter, uploadID string, requestID, resource string) {
 	if err := h.Meta.AbortMultipartUpload(ctx, uploadID); err != nil {
-		writeError(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID)
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

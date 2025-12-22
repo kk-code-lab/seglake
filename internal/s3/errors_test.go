@@ -26,6 +26,17 @@ func TestWriteErrorWithResourceDefaultMessage(t *testing.T) {
 	}
 }
 
+func TestWriteErrorWithResourceSetsRequestHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "", "req-123", "/bucket/key")
+	if got := w.Header().Get("x-amz-request-id"); got != "req-123" {
+		t.Fatalf("expected x-amz-request-id to be set, got %q", got)
+	}
+	if got := w.Header().Get("x-amz-id-2"); got == "" {
+		t.Fatalf("expected x-amz-id-2 to be set")
+	}
+}
+
 func containsString(s, sub string) bool {
 	return strings.Contains(s, sub)
 }
