@@ -1497,6 +1497,94 @@ func TestS3E2EListMultipartUploadsPagination(t *testing.T) {
 	}
 }
 
+func TestS3E2EListMultipartUploadsDelimiterPrefix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	init := func(key string) {
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/"+key+"?uploads", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		signRequest(req, "test", "testsecret", "us-east-1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("init error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("init status: %d", resp.StatusCode)
+		}
+	}
+
+	init("logs/2025/a")
+	init("logs/2024/b")
+	init("logs/file")
+	init("other")
+
+	listReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket?uploads&prefix=logs/&delimiter=/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(listReq, "test", "testsecret", "us-east-1")
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("list error: %v", err)
+	}
+	body, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status: %d", listResp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("<Prefix>logs/</Prefix>")) {
+		t.Fatalf("expected prefix in response")
+	}
+	if !bytes.Contains(body, []byte("<Delimiter>/</Delimiter>")) {
+		t.Fatalf("expected delimiter in response")
+	}
+	if !bytes.Contains(body, []byte("<CommonPrefixes><Prefix>logs/2024/</Prefix></CommonPrefixes>")) {
+		t.Fatalf("expected logs/2024/ common prefix")
+	}
+	if !bytes.Contains(body, []byte("<CommonPrefixes><Prefix>logs/2025/</Prefix></CommonPrefixes>")) {
+		t.Fatalf("expected logs/2025/ common prefix")
+	}
+	if !bytes.Contains(body, []byte("<Key>logs/file</Key>")) {
+		t.Fatalf("expected logs/file upload entry")
+	}
+	if bytes.Contains(body, []byte("<Key>logs/2024/b</Key>")) || bytes.Contains(body, []byte("<Key>logs/2025/a</Key>")) {
+		t.Fatalf("unexpected nested upload entry")
+	}
+	if bytes.Contains(body, []byte("<Key>other</Key>")) {
+		t.Fatalf("unexpected upload outside prefix")
+	}
+}
+
 func extractXMLTag(body, tag string) string {
 	start := "<" + tag + ">"
 	end := "</" + tag + ">"
