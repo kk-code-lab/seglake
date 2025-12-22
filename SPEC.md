@@ -116,6 +116,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
   - `POST /<bucket>/<key>?uploadId=...` — Complete.
   - `DELETE /<bucket>/<key>?uploadId=...` — Abort.
 - `GET /<bucket>?uploads` — ListMultipartUploads (bez paginacji markerami).
+- `GET /<bucket>?uploads` — ListMultipartUploads (key-marker/upload-id-marker, max-uploads).
 
 ### 4.2 Auth
 - SigV4: Authorization header lub presigned query.
@@ -202,7 +203,6 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Brak ACL/IAM/polityk, brak per-key limitów inflight.
 - Brak TLS w aplikacji (zakładany reverse proxy).
 - Virtual-hosted-style dostępny tylko za flagą.
-- Brak pełnej paginacji ListMultipartUploads (brak markerów).
 - Brak replikacji / multi-site / oplogu / HLC.
 
 ---

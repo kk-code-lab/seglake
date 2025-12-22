@@ -19,7 +19,7 @@ func TestMultipartUploadLifecycle(t *testing.T) {
 		t.Fatalf("CreateMultipartUpload: %v", err)
 	}
 
-	uploads, err := store.ListMultipartUploads(ctx, "bucket", "prefix/", 100)
+	uploads, err := store.ListMultipartUploads(ctx, "bucket", "prefix/", "", "", 100)
 	if err != nil {
 		t.Fatalf("ListMultipartUploads: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestMultipartUploadLifecycle(t *testing.T) {
 		t.Fatalf("AbortMultipartUpload: %v", err)
 	}
 
-	uploads, err = store.ListMultipartUploads(ctx, "bucket", "prefix/", 100)
+	uploads, err = store.ListMultipartUploads(ctx, "bucket", "prefix/", "", "", 100)
 	if err != nil {
 		t.Fatalf("ListMultipartUploads: %v", err)
 	}
