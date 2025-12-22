@@ -331,6 +331,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 13 {
+		if err = applyV13(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -607,11 +615,30 @@ func applyV12(ctx context.Context, tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS repl_metrics (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			updated_at TEXT NOT NULL,
-			conflict_count INTEGER NOT NULL DEFAULT 0
+			conflict_count INTEGER NOT NULL DEFAULT 0,
+			bytes_in_total INTEGER NOT NULL DEFAULT 0
 		)`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV13(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE repl_metrics ADD COLUMN bytes_in_total INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
 			return err
 		}
 	}
@@ -2418,6 +2445,7 @@ type Stats struct {
 	LastMPUGCDeleted   int    `json:"last_mpu_gc_deleted,omitempty"`
 	LastMPUGCReclaimed int64  `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
 	ReplConflicts      int64  `json:"repl_conflicts,omitempty"`
+	ReplBytesInTotal   int64  `json:"repl_bytes_in_total,omitempty"`
 }
 
 // ReplStat describes replication state and lag per remote.
@@ -2481,7 +2509,7 @@ FROM ops_runs
 WHERE mode='mpu-gc-run'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDeleted, &stats.LastMPUGCReclaimed)
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(conflict_count,0) FROM repl_metrics WHERE id=1").Scan(&stats.ReplConflicts); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(conflict_count,0), COALESCE(bytes_in_total,0) FROM repl_metrics WHERE id=1").Scan(&stats.ReplConflicts, &stats.ReplBytesInTotal); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return stats, nil
 		}
@@ -2621,6 +2649,23 @@ func (s *Store) sumOplogBytesSince(ctx context.Context, since string) (int64, er
 		return 0, err
 	}
 	return total, nil
+}
+
+// RecordReplBytes increments replicated bytes counter.
+func (s *Store) RecordReplBytes(ctx context.Context, bytes int64) error {
+	if s == nil || s.db == nil {
+		return errors.New("meta: db not initialized")
+	}
+	if bytes <= 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO repl_metrics(id, updated_at, bytes_in_total)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET bytes_in_total=bytes_in_total + excluded.bytes_in_total, updated_at=excluded.updated_at`,
+		now, bytes)
+	return err
 }
 
 // ListGCTrends returns recent GC runs (excluding plans) in reverse chronological order.

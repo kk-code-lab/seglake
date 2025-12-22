@@ -187,7 +187,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - requests_total_by_key / latency_ms_by_key,
 - gc_trends: historia GC (mode, finished_at, errors, reclaimed/rewritten, reclaim_rate),
 - replication: per‑remote {last_pull_hlc, last_push_hlc, push_backlog, push_backlog_bytes, oplog_bytes_total, last_oplog_hlc, lag_seconds},
-- replication_conflicts: licznik konfliktów z apply (LWW).
+- replication_conflicts: licznik konfliktów z apply (LWW),
+- replication_bytes_in_total: suma bajtów pobranych przez replikację (manifesty + chunk data).
 
 ### 5.3 Crash harness
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`

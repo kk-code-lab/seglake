@@ -9,34 +9,35 @@ import (
 )
 
 type statsResponse struct {
-	Objects              int64                       `json:"objects"`
-	Segments             int64                       `json:"segments"`
-	BytesLive            int64                       `json:"bytes_live"`
-	LastFsckAt           string                      `json:"last_fsck_at,omitempty"`
-	LastFsckErrors       int                         `json:"last_fsck_errors,omitempty"`
-	LastScrubAt          string                      `json:"last_scrub_at,omitempty"`
-	LastScrubErrors      int                         `json:"last_scrub_errors,omitempty"`
-	LastGCAt             string                      `json:"last_gc_at,omitempty"`
-	LastGCErrors         int                         `json:"last_gc_errors,omitempty"`
-	LastGCReclaimed      int64                       `json:"last_gc_reclaimed_bytes,omitempty"`
-	LastGCRewritten      int64                       `json:"last_gc_rewritten_bytes,omitempty"`
-	LastGCNewSegments    int                         `json:"last_gc_new_segments,omitempty"`
-	LastMPUGCAt          string                      `json:"last_mpu_gc_at,omitempty"`
-	LastMPUGCErrors      int                         `json:"last_mpu_gc_errors,omitempty"`
-	LastMPUGCDeleted     int                         `json:"last_mpu_gc_deleted,omitempty"`
-	LastMPUGCReclaimed   int64                       `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
-	ReplicationConflicts int64                       `json:"replication_conflicts,omitempty"`
-	RequestsTotal        map[string]map[string]int64 `json:"requests_total,omitempty"`
-	Inflight             map[string]int64            `json:"inflight,omitempty"`
-	BytesInTotal         int64                       `json:"bytes_in_total,omitempty"`
-	BytesOutTotal        int64                       `json:"bytes_out_total,omitempty"`
-	LatencyMs            map[string]LatencyStats     `json:"latency_ms,omitempty"`
-	RequestsByBucket     map[string]map[string]int64 `json:"requests_total_by_bucket,omitempty"`
-	LatencyByBucketMs    map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
-	RequestsByKey        map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
-	LatencyByKeyMs       map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
-	GCTrends             []meta.GCTrend              `json:"gc_trends,omitempty"`
-	Replication          []meta.ReplStat             `json:"replication,omitempty"`
+	Objects                 int64                       `json:"objects"`
+	Segments                int64                       `json:"segments"`
+	BytesLive               int64                       `json:"bytes_live"`
+	LastFsckAt              string                      `json:"last_fsck_at,omitempty"`
+	LastFsckErrors          int                         `json:"last_fsck_errors,omitempty"`
+	LastScrubAt             string                      `json:"last_scrub_at,omitempty"`
+	LastScrubErrors         int                         `json:"last_scrub_errors,omitempty"`
+	LastGCAt                string                      `json:"last_gc_at,omitempty"`
+	LastGCErrors            int                         `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed         int64                       `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten         int64                       `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments       int                         `json:"last_gc_new_segments,omitempty"`
+	LastMPUGCAt             string                      `json:"last_mpu_gc_at,omitempty"`
+	LastMPUGCErrors         int                         `json:"last_mpu_gc_errors,omitempty"`
+	LastMPUGCDeleted        int                         `json:"last_mpu_gc_deleted,omitempty"`
+	LastMPUGCReclaimed      int64                       `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
+	ReplicationConflicts    int64                       `json:"replication_conflicts,omitempty"`
+	ReplicationBytesInTotal int64                       `json:"replication_bytes_in_total,omitempty"`
+	RequestsTotal           map[string]map[string]int64 `json:"requests_total,omitempty"`
+	Inflight                map[string]int64            `json:"inflight,omitempty"`
+	BytesInTotal            int64                       `json:"bytes_in_total,omitempty"`
+	BytesOutTotal           int64                       `json:"bytes_out_total,omitempty"`
+	LatencyMs               map[string]LatencyStats     `json:"latency_ms,omitempty"`
+	RequestsByBucket        map[string]map[string]int64 `json:"requests_total_by_bucket,omitempty"`
+	LatencyByBucketMs       map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
+	RequestsByKey           map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
+	LatencyByKeyMs          map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
+	GCTrends                []meta.GCTrend              `json:"gc_trends,omitempty"`
+	Replication             []meta.ReplStat             `json:"replication,omitempty"`
 }
 
 func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
@@ -60,25 +61,26 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		return
 	}
 	resp := statsResponse{
-		Objects:              stats.Objects,
-		Segments:             stats.Segments,
-		BytesLive:            stats.BytesLive,
-		LastFsckAt:           stats.LastFsckAt,
-		LastFsckErrors:       stats.LastFsckErrors,
-		LastScrubAt:          stats.LastScrubAt,
-		LastScrubErrors:      stats.LastScrubErrors,
-		LastGCAt:             stats.LastGCAt,
-		LastGCErrors:         stats.LastGCErrors,
-		LastGCReclaimed:      stats.LastGCReclaimed,
-		LastGCRewritten:      stats.LastGCRewritten,
-		LastGCNewSegments:    stats.LastGCNewSegments,
-		LastMPUGCAt:          stats.LastMPUGCAt,
-		LastMPUGCErrors:      stats.LastMPUGCErrors,
-		LastMPUGCDeleted:     stats.LastMPUGCDeleted,
-		LastMPUGCReclaimed:   stats.LastMPUGCReclaimed,
-		ReplicationConflicts: stats.ReplConflicts,
-		GCTrends:             gcTrends,
-		Replication:          replStats,
+		Objects:                 stats.Objects,
+		Segments:                stats.Segments,
+		BytesLive:               stats.BytesLive,
+		LastFsckAt:              stats.LastFsckAt,
+		LastFsckErrors:          stats.LastFsckErrors,
+		LastScrubAt:             stats.LastScrubAt,
+		LastScrubErrors:         stats.LastScrubErrors,
+		LastGCAt:                stats.LastGCAt,
+		LastGCErrors:            stats.LastGCErrors,
+		LastGCReclaimed:         stats.LastGCReclaimed,
+		LastGCRewritten:         stats.LastGCRewritten,
+		LastGCNewSegments:       stats.LastGCNewSegments,
+		LastMPUGCAt:             stats.LastMPUGCAt,
+		LastMPUGCErrors:         stats.LastMPUGCErrors,
+		LastMPUGCDeleted:        stats.LastMPUGCDeleted,
+		LastMPUGCReclaimed:      stats.LastMPUGCReclaimed,
+		ReplicationConflicts:    stats.ReplConflicts,
+		ReplicationBytesInTotal: stats.ReplBytesInTotal,
+		GCTrends:                gcTrends,
+		Replication:             replStats,
 	}
 	if h.Metrics != nil {
 		reqs, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
