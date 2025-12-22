@@ -177,3 +177,43 @@ func TestPolicyMetaDenied(t *testing.T) {
 		t.Fatalf("meta stats status: %d", resp.StatusCode)
 	}
 }
+
+func TestPolicyListBucketsDenied(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	server, _, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list buckets error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("list buckets status: %d", resp.StatusCode)
+	}
+}
+
+func TestPolicyListObjectsDenied(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}`
+	server, _, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list objects error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("list objects status: %d", resp.StatusCode)
+	}
+}

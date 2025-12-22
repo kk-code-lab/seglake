@@ -245,7 +245,16 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		return errAccessDenied
 	}
 	policy := strings.ToLower(strings.TrimSpace(key.Policy))
-	if bucket, ok := h.bucketFromRequest(r); ok {
+	action := policyActionForRequest(h.opForRequest(r))
+	bucket := ""
+	keyName := ""
+	if bkt, ok := h.bucketFromRequest(r); ok {
+		bucket = bkt
+	}
+	if _, keyParsed, ok := h.parseBucketKey(r); ok {
+		keyName = keyParsed
+	}
+	if bucket != "" {
 		allowed, err := h.Meta.IsBucketAllowed(ctx, accessKey, bucket)
 		if err != nil {
 			return err
@@ -253,18 +262,18 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if !allowed {
 			return errAccessDenied
 		}
-		if action := policyActionForRequest(h.opForRequest(r)); action != "" {
-			pol, err := ParsePolicy(policy)
-			if err != nil {
-				return errAccessDenied
-			}
-			keyName := ""
-			if _, keyParsed, ok := h.parseBucketKey(r); ok {
-				keyName = keyParsed
-			}
-			if !pol.Allows(action, bucket, keyName) {
-				return errAccessDenied
-			}
+	}
+	if action != "" {
+		pol, err := ParsePolicy(policy)
+		if err != nil {
+			return errAccessDenied
+		}
+		targetBucket := bucket
+		if targetBucket == "" {
+			targetBucket = "*"
+		}
+		if !pol.Allows(action, targetBucket, keyName) {
+			return errAccessDenied
 		}
 	}
 	_ = h.Meta.RecordAPIKeyUse(ctx, accessKey)
