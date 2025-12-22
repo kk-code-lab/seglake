@@ -210,6 +210,9 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) Paginacja ListMultipartUploads (key-marker/upload-id-marker).
-2) Lepsze błędy AWS (pełniejsze mapowania kodów i komunikaty).
-3) Rozbudowa `/v1/meta/stats` o dodatkowe pola (np. p99 per op per bucket).
+1) ListMultipartUploads: dopracowanie pełnej zgodności (edge-case’y marker/prefix/delimiter).
+2) Metryki per‑bucket/per‑key (p50/p95/p99 i status classes).
+3) Dokładniejsze mapowanie AWS Errors (MethodNotAllowed vs InvalidRequest, bardziej AWS‑owe Message/Resource).
+4) S3 compat polish: konsekwentne nagłówki request‑id i region.
+5) Testy E2E SigV4/presigned dla edge‑case’ów (signed headers, UNSIGNED‑PAYLOAD, Range).
+6) Dalsze guard‑rail’e dla MPU/GC (telemetria, ostrzeżenia, limity).
