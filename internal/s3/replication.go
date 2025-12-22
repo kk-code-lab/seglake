@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 )
@@ -67,4 +68,55 @@ func (h *Handler) handleOplogApply(ctx context.Context, w http.ResponseWriter, r
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(oplogApplyResponse{Applied: applied})
+}
+
+func (h *Handler) handleReplicationManifest(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+	if h == nil || h.Engine == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID, r.URL.Path)
+		return
+	}
+	versionID := strings.TrimSpace(r.URL.Query().Get("versionId"))
+	if versionID == "" {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "versionId required", requestID, r.URL.Path)
+		return
+	}
+	data, err := h.Engine.ManifestBytes(ctx, versionID)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "manifest not found", requestID, r.URL.Path)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("x-amz-version-id", versionID)
+	_, _ = w.Write(data)
+}
+
+func (h *Handler) handleReplicationChunk(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+	if h == nil || h.Engine == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID, r.URL.Path)
+		return
+	}
+	segmentID := strings.TrimSpace(r.URL.Query().Get("segmentId"))
+	rawOffset := strings.TrimSpace(r.URL.Query().Get("offset"))
+	rawLen := strings.TrimSpace(r.URL.Query().Get("len"))
+	if segmentID == "" || rawOffset == "" || rawLen == "" {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "segmentId/offset/len required", requestID, r.URL.Path)
+		return
+	}
+	offset, err := strconv.ParseInt(rawOffset, 10, 64)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid offset", requestID, r.URL.Path)
+		return
+	}
+	length, err := strconv.ParseInt(rawLen, 10, 64)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid len", requestID, r.URL.Path)
+		return
+	}
+	data, err := h.Engine.ReadSegmentRange(segmentID, offset, length)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "segment data not found", requestID, r.URL.Path)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(data)
 }
