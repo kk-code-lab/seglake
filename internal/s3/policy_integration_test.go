@@ -345,3 +345,64 @@ func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 		t.Fatalf("GET status: %d", resp2.StatusCode)
 	}
 }
+
+func TestPolicyConditionsAfterFutureDenied(t *testing.T) {
+	future := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}],"conditions":{"after":"` + future + `"}}]}`
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/k", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+}
+
+func TestPolicyConditionsSourceIPMultipleCIDR(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"source_ip":["10.0.0.0/8","192.168.0.0/16"]}}]}`
+	server, handler, cleanup := newPolicyServer(t, policy)
+	defer cleanup()
+	handler.TrustedProxies = []string{"127.0.0.1/32"}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "192.168.1.10")
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list objects error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list objects status: %d", resp.StatusCode)
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req2.Header.Set("X-Forwarded-For", "172.16.0.1")
+	signRequestTest(req2, "ak", "sk", "us-east-1")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("list objects error: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("list objects status: %d", resp2.StatusCode)
+	}
+}
