@@ -8,8 +8,8 @@
 4) Pass through `Host` and `X-Forwarded-For` only from trusted IPs.
 5) Virtual-hosted-style is enabled by default; ensure DNS and proxy routing by host.
 6) Set request size limits at the proxy if needed (S3 SDKs may retry on 413).
-7) Disable request/response buffering for large PUT/GET when possible.
-8) Enable access logs at the proxy; Seglake logs redact presigned secrets.
+7) Tune proxy timeouts/keepalive for large PUT/GET; disable buffering only if you need streaming behavior.
+8) Keep access logs/metrics at the proxy (Seglake redacts presigned secrets).
 
 Example (nginx, minimal):
 ```
