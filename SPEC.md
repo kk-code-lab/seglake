@@ -210,7 +210,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 7) Znane braki / ograniczenia (stan obecny)
 
-- Brak pełnych ACL/IAM/polityk (jest tylko prosta polityka `rw`/`ro` + allow‑lista bucketów + JSON policy v1).
+ - Brak pełnych ACL/IAM/polityk (jest per‑action JSON policy v1, bucket policies i warunki; brak np. ACL per‑object/STS/zaawansowanych condition).
 - Brak replikacji / multi-site / oplogu / HLC.
 
 ---
