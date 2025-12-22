@@ -60,6 +60,45 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		}
 		fmt.Println("ok")
 		return nil
+	case "list-buckets":
+		if accessKey == "" {
+			return errors.New("key-access required")
+		}
+		buckets, err := store.ListAllowedBuckets(context.Background(), accessKey)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return writeJSON(buckets)
+		}
+		for _, name := range buckets {
+			fmt.Println(name)
+		}
+		return nil
+	case "disable":
+		if accessKey == "" {
+			return errors.New("key-access required")
+		}
+		if err := store.SetAPIKeyEnabled(context.Background(), accessKey, false); err != nil {
+			return err
+		}
+		if jsonOut {
+			return writeJSON(map[string]string{"status": "ok"})
+		}
+		fmt.Println("ok")
+		return nil
+	case "delete":
+		if accessKey == "" {
+			return errors.New("key-access required")
+		}
+		if err := store.DeleteAPIKey(context.Background(), accessKey); err != nil {
+			return err
+		}
+		if jsonOut {
+			return writeJSON(map[string]string{"status": "ok"})
+		}
+		fmt.Println("ok")
+		return nil
 	default:
 		return fmt.Errorf("unknown keys-action %q", action)
 	}

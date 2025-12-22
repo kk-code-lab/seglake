@@ -397,6 +397,29 @@ VALUES(?, ?)`, accessKey, bucket)
 	return err
 }
 
+// ListAllowedBuckets returns allowed buckets for the access key.
+func (s *Store) ListAllowedBuckets(ctx context.Context, accessKey string) (out []string, err error) {
+	if accessKey == "" {
+		return nil, errors.New("meta: access key required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket
+FROM api_key_bucket_allow
+WHERE access_key=?
+ORDER BY bucket`, accessKey)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var bucket string
+		if err := scan(&bucket); err != nil {
+			return err
+		}
+		out = append(out, bucket)
+		return nil
+	})
+}
+
 // GetAPIKey returns stored API key metadata.
 func (s *Store) GetAPIKey(ctx context.Context, accessKey string) (*APIKey, error) {
 	if accessKey == "" {
@@ -475,6 +498,42 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
 	return err
+}
+
+// SetAPIKeyEnabled enables or disables an API key.
+func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled bool) error {
+	if accessKey == "" {
+		return errors.New("meta: access key required")
+	}
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET enabled=? WHERE access_key=?", enabledInt, accessKey)
+	return err
+}
+
+// DeleteAPIKey removes an API key and its bucket allowlist.
+func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) error {
+	if accessKey == "" {
+		return errors.New("meta: access key required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM api_key_bucket_allow WHERE access_key=?", accessKey); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM api_keys WHERE access_key=?", accessKey); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListAPIKeys returns all API keys ordered by access key.
