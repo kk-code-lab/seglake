@@ -18,6 +18,12 @@
 Cel: asynchroniczna replikacja między węzłami z zachowaniem spójności metadanych,
 bez wymogu silnej konsystencji globalnej (eventual consistency).
 
+### Decyzje (wybrane) + ścieżki rozwoju
+- Wybrany wariant: **Zestaw B (multi-site P2P, multi-writer, LWW + tombstone, HTTP JSON)**.
+- Opcja rozwoju 1: tryb primary‑replica (prostsze operacje, mniej konfliktów).
+- Opcja rozwoju 2: aktywne strumieniowanie chunków/segmentów + push (szybsza konwergencja).
+- Opcja rozwoju 3: zachowanie konfliktów jako oddzielnych wersji (zaawansowane rozwiązywanie).
+
 ### Faza 0 — decyzje architektoniczne
 - Model konfliktów: Last-Write-Wins po HLC (per obiekt/wersja) + jawny delete-tombstone.
 - Granulat repliki: oplog na poziomie metadanych + strumieniowanie chunków/manifestów.
