@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/s3"
 )
 
 func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enabled bool, inflight int64, jsonOut bool) error {
@@ -39,6 +40,9 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 	case "create":
 		if accessKey == "" || secretKey == "" {
 			return errors.New("key-access and key-secret required")
+		}
+		if _, err := s3.ParsePolicy(policy); err != nil {
+			return fmt.Errorf("invalid policy: %w", err)
 		}
 		if err := store.UpsertAPIKey(context.Background(), accessKey, secretKey, policy, enabled, inflight); err != nil {
 			return err
@@ -116,6 +120,21 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 			return errors.New("key-access required")
 		}
 		if err := store.DeleteAPIKey(context.Background(), accessKey); err != nil {
+			return err
+		}
+		if jsonOut {
+			return writeJSON(map[string]string{"status": "ok"})
+		}
+		fmt.Println("ok")
+		return nil
+	case "set-policy":
+		if accessKey == "" {
+			return errors.New("key-access required")
+		}
+		if _, err := s3.ParsePolicy(policy); err != nil {
+			return fmt.Errorf("invalid policy: %w", err)
+		}
+		if err := store.UpdateAPIKeyPolicy(context.Background(), accessKey, policy); err != nil {
 			return err
 		}
 		if jsonOut {

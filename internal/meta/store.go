@@ -386,6 +386,18 @@ ON CONFLICT(access_key) DO UPDATE SET
 	return err
 }
 
+// UpdateAPIKeyPolicy updates policy for an API key.
+func (s *Store) UpdateAPIKeyPolicy(ctx context.Context, accessKey, policy string) error {
+	if accessKey == "" {
+		return errors.New("meta: access key required")
+	}
+	if policy == "" {
+		policy = "rw"
+	}
+	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET policy=? WHERE access_key=?", policy, accessKey)
+	return err
+}
+
 // AllowBucketForKey adds a bucket allow entry for the given access key.
 func (s *Store) AllowBucketForKey(ctx context.Context, accessKey, bucket string) error {
 	if accessKey == "" || bucket == "" {

@@ -161,7 +161,7 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -snapshot-dir (output directory).")
 	case "keys":
 		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
-		fmt.Println("Flags: -keys-action list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete, -key-access, -key-secret, -key-policy, -key-enabled, -key-inflight, -key-bucket, -json.")
+		fmt.Println("Flags: -keys-action list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy, -key-access, -key-secret, -key-policy, -key-enabled, -key-inflight, -key-bucket, -json.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}

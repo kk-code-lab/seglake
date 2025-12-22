@@ -61,6 +61,16 @@ func TestAPIKeyLifecycleAndBuckets(t *testing.T) {
 	if !key.Enabled {
 		t.Fatalf("expected key enabled")
 	}
+	if err := store.UpdateAPIKeyPolicy(ctx, "k1", "ro"); err != nil {
+		t.Fatalf("UpdateAPIKeyPolicy: %v", err)
+	}
+	key, err = store.GetAPIKey(ctx, "k1")
+	if err != nil {
+		t.Fatalf("GetAPIKey policy: %v", err)
+	}
+	if key.Policy != "ro" {
+		t.Fatalf("expected policy ro, got %q", key.Policy)
+	}
 	if err := store.DeleteAPIKey(ctx, "k1"); err != nil {
 		t.Fatalf("DeleteAPIKey: %v", err)
 	}

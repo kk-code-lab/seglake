@@ -98,6 +98,7 @@ Manage keys with `-mode keys`:
 ./build/seglake -mode keys -keys-action enable -key-access=test
 ./build/seglake -mode keys -keys-action disable -key-access=test
 ./build/seglake -mode keys -keys-action delete -key-access=test
+./build/seglake -mode keys -keys-action set-policy -key-access=test -key-policy='{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}'
 ```
 
 Policies:
