@@ -123,6 +123,29 @@ Custom JSON policy (stored in `api_keys.policy`):
 
 Actions: `read`, `write`, `list`, `mpu`, `copy`, `meta`, `*`.
 
+Example with deny override:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["read"],
+      "resources": [
+        { "bucket": "demo" }
+      ]
+    },
+    {
+      "effect": "deny",
+      "actions": ["read"],
+      "resources": [
+        { "bucket": "demo", "prefix": "secret/" }
+      ]
+    }
+  ]
+}
+```
+
 ## s3cmd examples
 
 List buckets:
