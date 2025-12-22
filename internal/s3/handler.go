@@ -36,6 +36,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = &countingReadCloser{reader: r.Body, counter: &bytesIn}
 	}
+	bucketName := ""
+	keyName := ""
+	if bucket, key, ok := h.parseBucketKey(r); ok {
+		bucketName = bucket
+		keyName = key
+	} else if bucket, ok := h.parseBucketOnly(r); ok {
+		bucketName = bucket
+	}
 	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
 	start := time.Now()
 	accessKey := extractAccessKey(r)
@@ -58,7 +66,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.Metrics != nil {
 			h.Metrics.AddBytesIn(bytesIn)
 			h.Metrics.AddBytesOut(mw.bytes)
-			h.Metrics.Record(op, mw.status, time.Since(start))
+			h.Metrics.Record(op, mw.status, time.Since(start), bucketName, keyName)
 		}
 	}()
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {

@@ -24,6 +24,10 @@ type statsResponse struct {
 	BytesInTotal      int64                       `json:"bytes_in_total,omitempty"`
 	BytesOutTotal     int64                       `json:"bytes_out_total,omitempty"`
 	LatencyMs         map[string]LatencyStats     `json:"latency_ms,omitempty"`
+	RequestsByBucket  map[string]map[string]int64 `json:"requests_total_by_bucket,omitempty"`
+	LatencyByBucketMs map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
+	RequestsByKey     map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
+	LatencyByKeyMs    map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
 }
 
 func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
@@ -51,12 +55,16 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		LastGCNewSegments: stats.LastGCNewSegments,
 	}
 	if h.Metrics != nil {
-		reqs, inflight, bytesIn, bytesOut, latency := h.Metrics.Snapshot()
+		reqs, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
 		resp.RequestsTotal = reqs
 		resp.Inflight = inflight
 		resp.BytesInTotal = bytesIn
 		resp.BytesOutTotal = bytesOut
 		resp.LatencyMs = latency
+		resp.RequestsByBucket = bucketReqs
+		resp.LatencyByBucketMs = bucketLatency
+		resp.RequestsByKey = keyReqs
+		resp.LatencyByKeyMs = keyLatency
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

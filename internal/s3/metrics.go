@@ -16,6 +16,14 @@ type Metrics struct {
 	latencyMu  sync.Mutex
 	latency    map[string]*latencyWindow
 
+	bucketMu       sync.Mutex
+	bucketRequests map[string]map[string]int64
+	bucketLatency  map[string]*latencyWindow
+
+	keyMu       sync.Mutex
+	keyRequests map[string]map[string]int64
+	keyLatency  map[string]*latencyWindow
+
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
 }
@@ -41,6 +49,10 @@ func NewMetrics() *Metrics {
 		requests: make(map[string]map[string]int64),
 		inflight: make(map[string]int64),
 		latency:  make(map[string]*latencyWindow),
+		bucketRequests: make(map[string]map[string]int64),
+		bucketLatency:  make(map[string]*latencyWindow),
+		keyRequests:    make(map[string]map[string]int64),
+		keyLatency:     make(map[string]*latencyWindow),
 	}
 }
 
@@ -78,7 +90,7 @@ func (m *Metrics) AddBytesOut(n int64) {
 	m.bytesOut.Add(n)
 }
 
-func (m *Metrics) Record(op string, status int, dur time.Duration) {
+func (m *Metrics) Record(op string, status int, dur time.Duration, bucketName, key string) {
 	if m == nil {
 		return
 	}
@@ -90,12 +102,12 @@ func (m *Metrics) Record(op string, status int, dur time.Duration) {
 		class = string([]byte{byte('0' + status/100), 'x', 'x'})
 	}
 	m.requestsMu.Lock()
-	bucket := m.requests[op]
-	if bucket == nil {
-		bucket = make(map[string]int64)
-		m.requests[op] = bucket
+	byClass := m.requests[op]
+	if byClass == nil {
+		byClass = make(map[string]int64)
+		m.requests[op] = byClass
 	}
-	bucket[class]++
+	byClass[class]++
 	m.requestsMu.Unlock()
 
 	m.latencyMu.Lock()
@@ -106,11 +118,31 @@ func (m *Metrics) Record(op string, status int, dur time.Duration) {
 	}
 	m.latencyMu.Unlock()
 	window.add(dur)
+
+	if bucketName != "" {
+		m.bucketMu.Lock()
+		updateClassMap(m.bucketRequests, bucketName, class, 100)
+		window = ensureLatencyWindow(m.bucketLatency, bucketName, 100)
+		m.bucketMu.Unlock()
+		if window != nil {
+			window.add(dur)
+		}
+		if key != "" {
+			keyLabel := bucketName + "/" + key
+			m.keyMu.Lock()
+			updateClassMap(m.keyRequests, keyLabel, class, 1000)
+			window = ensureLatencyWindow(m.keyLatency, keyLabel, 1000)
+			m.keyMu.Unlock()
+			if window != nil {
+				window.add(dur)
+			}
+		}
+	}
 }
 
-func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, latency map[string]LatencyStats) {
+func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, latency map[string]LatencyStats, bucketReqs map[string]map[string]int64, bucketLatency map[string]LatencyStats, keyReqs map[string]map[string]int64, keyLatency map[string]LatencyStats) {
 	if m == nil {
-		return nil, nil, 0, 0, nil
+		return nil, nil, 0, 0, nil, nil, nil, nil, nil
 	}
 	requests = make(map[string]map[string]int64)
 	m.requestsMu.Lock()
@@ -139,7 +171,68 @@ func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map
 		latency[op] = window.snapshot()
 	}
 	m.latencyMu.Unlock()
-	return requests, inflight, bytesIn, bytesOut, latency
+
+	bucketReqs = make(map[string]map[string]int64)
+	m.bucketMu.Lock()
+	for name, byClass := range m.bucketRequests {
+		copyClass := make(map[string]int64, len(byClass))
+		for class, v := range byClass {
+			copyClass[class] = v
+		}
+		bucketReqs[name] = copyClass
+	}
+	bucketLatency = make(map[string]LatencyStats)
+	for name, window := range m.bucketLatency {
+		bucketLatency[name] = window.snapshot()
+	}
+	m.bucketMu.Unlock()
+
+	keyReqs = make(map[string]map[string]int64)
+	m.keyMu.Lock()
+	for name, byClass := range m.keyRequests {
+		copyClass := make(map[string]int64, len(byClass))
+		for class, v := range byClass {
+			copyClass[class] = v
+		}
+		keyReqs[name] = copyClass
+	}
+	keyLatency = make(map[string]LatencyStats)
+	for name, window := range m.keyLatency {
+		keyLatency[name] = window.snapshot()
+	}
+	m.keyMu.Unlock()
+
+	return requests, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency
+}
+
+func updateClassMap(target map[string]map[string]int64, key, class string, limit int) {
+	if key == "" {
+		return
+	}
+	entry := target[key]
+	if entry == nil {
+		if limit > 0 && len(target) >= limit {
+			return
+		}
+		entry = make(map[string]int64)
+		target[key] = entry
+	}
+	entry[class]++
+}
+
+func ensureLatencyWindow(target map[string]*latencyWindow, key string, limit int) *latencyWindow {
+	if key == "" {
+		return nil
+	}
+	window := target[key]
+	if window == nil {
+		if limit > 0 && len(target) >= limit {
+			return nil
+		}
+		window = newLatencyWindow(1024)
+		target[key] = window
+	}
+	return window
 }
 
 func newLatencyWindow(size int) *latencyWindow {
