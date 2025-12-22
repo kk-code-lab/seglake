@@ -31,16 +31,11 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Gwarancje: brak transakcji globalnych; lokalny zapis jest natychmiast widoczny lokalnie.
 
 ### Faza 1 — fundamenty danych
-- Dodać tabelę `oplog` (op_type, bucket, key, version_id, ts_hlc, payload).
-- Wprowadzić HLC (wall time + counter) jako źródło porządku replikacji.
-- Zmiany metadanych zapisują wpis w `oplog` w tej samej transakcji.
-- Zdefiniować format payload (np. JSON lub binarny) dla operacji: PUT, DELETE, MPU complete.
+- Zrobione: tabela `oplog`, HLC, wpisy w transakcjach, payloady PUT/DELETE.
 
 ### Faza 2 — replikacja danych i metadanych
-- Endpoint replikacji: pobieranie wpisów `oplog` po watermark (HLC).
-- Replikacja segmentów/manifestów: wymiana brakujących chunków/manifestów na żądanie.
-- Mechanizm idempotencji po (site_id, hlc, op_id).
-- Garbage: ochrona segmentów widocznych w zdalnych replay (hold/lease).
+- Zrobione: endpointy oplog/manifest/chunk, idempotencja, repl-pull/push, fetch braków.
+- Otwarte: garbage/lease dla segmentów podczas replay.
 
 ### Faza 3 — bootstrap i recovery
 - Snapshot + oplog replay: nowy węzeł pobiera snapshot, potem dogrywa oplog.
