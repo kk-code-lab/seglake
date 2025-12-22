@@ -48,6 +48,11 @@ func GCRewritePlanBuild(layout fs.Layout, metaPath string, minAge time.Duration,
 	if err != nil {
 		return nil, nil, err
 	}
+	mpuPaths, err := store.ListMultipartPartManifestPaths(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	livePaths = mergeUniquePaths(livePaths, mpuPaths)
 	report.Manifests = len(livePaths)
 
 	liveBytes := make(map[string]int64)

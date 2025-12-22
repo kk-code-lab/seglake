@@ -287,6 +287,11 @@ func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration) (*Report, [
 	if err != nil {
 		return nil, nil, err
 	}
+	mpuPaths, err := store.ListMultipartPartManifestPaths(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	livePaths = mergeUniquePaths(livePaths, mpuPaths)
 	report.Manifests = len(livePaths)
 
 	liveBytes := make(map[string]int64)
@@ -372,14 +377,97 @@ func reportOpsFrom(report *Report) *meta.ReportOps {
 		return nil
 	}
 	return &meta.ReportOps{
-		FinishedAt:       report.FinishedAt.UTC().Format(time.RFC3339Nano),
-		Errors:           report.Errors,
-		Deleted:          report.Deleted,
-		ReclaimedBytes:   report.Reclaimed,
+		FinishedAt:        report.FinishedAt.UTC().Format(time.RFC3339Nano),
+		Errors:            report.Errors,
+		Deleted:           report.Deleted,
+		ReclaimedBytes:    report.Reclaimed,
 		RewrittenSegments: report.RewrittenSegments,
-		RewrittenBytes:   report.RewrittenBytes,
-		NewSegments:      report.NewSegments,
+		RewrittenBytes:    report.RewrittenBytes,
+		NewSegments:       report.NewSegments,
 	}
+}
+
+// MPUGCPlan computes which multipart uploads can be removed by TTL.
+func MPUGCPlan(metaPath string, ttl time.Duration) (*Report, []meta.MultipartUpload, error) {
+	if ttl <= 0 {
+		return nil, nil, errors.New("mpu-gc: ttl must be > 0")
+	}
+	report := &Report{Mode: "mpu-gc-plan", StartedAt: time.Now().UTC()}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = store.Close() }()
+
+	cutoff := time.Now().UTC().Add(-ttl)
+	uploads, err := store.ListMultipartUploadsBefore(context.Background(), cutoff)
+	if err != nil {
+		return nil, nil, err
+	}
+	report.Candidates = len(uploads)
+	for _, up := range uploads {
+		report.CandidateIDs = append(report.CandidateIDs, up.UploadID)
+	}
+	report.FinishedAt = time.Now().UTC()
+	return report, uploads, nil
+}
+
+// MPUGCRun deletes multipart uploads older than TTL.
+func MPUGCRun(metaPath string, ttl time.Duration, force bool) (*Report, error) {
+	if !force {
+		return nil, errors.New("mpu-gc: refuse to run without --force")
+	}
+	report, uploads, err := MPUGCPlan(metaPath, ttl)
+	if err != nil {
+		return nil, err
+	}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+	for _, up := range uploads {
+		_, bytes, err := store.DeleteMultipartUpload(context.Background(), up.UploadID)
+		if err != nil {
+			report.Errors++
+			continue
+		}
+		report.Deleted++
+		report.Reclaimed += bytes
+	}
+	report.Mode = "mpu-gc-run"
+	report.FinishedAt = time.Now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
+	return report, nil
+}
+
+func mergeUniquePaths(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, p := range a {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, p := range b {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 func listFiles(dir string) ([]string, error) {

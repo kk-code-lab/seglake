@@ -25,7 +25,7 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	virtualHosted := flag.Bool("virtual-hosted", false, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|support-bundle")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
@@ -35,6 +35,8 @@ func main() {
 	gcRewriteFromPlan := flag.String("gc-rewrite-from-plan", "", "GC rewrite plan input file")
 	gcRewriteBps := flag.Int64("gc-rewrite-bps", 0, "GC rewrite max bytes per second (0 = unlimited)")
 	gcPauseFile := flag.String("gc-pause-file", "", "GC pause while file exists")
+	mpuTTL := flag.Duration("mpu-ttl", 7*24*time.Hour, "Multipart upload TTL for cleanup")
+	mpuForce := flag.Bool("mpu-force", false, "Multipart GC delete uploads (required for mpu-gc-run)")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -80,7 +82,7 @@ func main() {
 		if *rebuildMeta != "" {
 			metaArg = *rebuildMeta
 		}
-		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *jsonOut); err != nil {
+		if err := runOps(*mode, *dataDir, metaArg, *snapshotDir, *gcMinAge, *gcForce, *gcLiveThreshold, *gcRewritePlanFile, *gcRewriteFromPlan, *gcRewriteBps, *gcPauseFile, *mpuTTL, *mpuForce, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "ops error: %v\n", err)
 			os.Exit(1)
 		}
