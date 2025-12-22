@@ -272,7 +272,8 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if targetBucket == "" {
 			targetBucket = "*"
 		}
-		identityAllowed, identityDenied := pol.Decision(action, targetBucket, keyName)
+		reqCtx := policyContextFromRequest(r)
+		identityAllowed, identityDenied := pol.DecisionWithContext(action, targetBucket, keyName, reqCtx)
 		if identityDenied {
 			return errAccessDenied
 		}
@@ -281,7 +282,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if bucket != "" {
 			if bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket); err == nil && bucketPolicy != "" {
 				if bpol, err := ParsePolicy(bucketPolicy); err == nil {
-					bucketAllowed, bucketDenied = bpol.Decision(action, bucket, keyName)
+					bucketAllowed, bucketDenied = bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
 				} else {
 					return errAccessDenied
 				}
@@ -296,6 +297,31 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 	}
 	_ = h.Meta.RecordAPIKeyUse(ctx, accessKey)
 	return nil
+}
+
+func policyContextFromRequest(r *http.Request) *PolicyContext {
+	if r == nil {
+		return &PolicyContext{Now: time.Now().UTC()}
+	}
+	headers := make(map[string]string)
+	for k, values := range r.Header {
+		if len(values) == 0 {
+			continue
+		}
+		headers[strings.ToLower(k)] = values[0]
+	}
+	ip := clientIP(r.RemoteAddr)
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+			ip = strings.TrimSpace(parts[0])
+		}
+	}
+	return &PolicyContext{
+		Now:      time.Now().UTC(),
+		SourceIP: ip,
+		Headers:  headers,
+	}
 }
 
 func (h *Handler) isSigV2ListRequest(r *http.Request) bool {
