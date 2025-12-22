@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -87,5 +88,73 @@ func TestOplogSinceLimit(t *testing.T) {
 	}
 	if len(limited) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(limited))
+	}
+}
+
+func TestApplyOplogEntries(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         123,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	put := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000001-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	applied, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put})
+	if err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("expected applied=1, got %d", applied)
+	}
+	meta, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.VersionID != "v1" {
+		t.Fatalf("expected current v1, got %s", meta.VersionID)
+	}
+
+	deletePayload, err := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	del := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000002-0000000001",
+		OpType:    "delete",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(deletePayload),
+	}
+	applied, err = store.ApplyOplogEntries(context.Background(), []OplogEntry{del, del})
+	if err != nil {
+		t.Fatalf("ApplyOplogEntries delete: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("expected applied=1 for delete, got %d", applied)
+	}
+	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected object to be deleted")
 	}
 }

@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -41,6 +42,16 @@ type OplogEntry struct {
 	VersionID string `json:"version_id,omitempty"`
 	Payload   string `json:"payload,omitempty"`
 	CreatedAt string `json:"created_at"`
+}
+
+type oplogPutPayload struct {
+	ETag         string `json:"etag"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"last_modified_utc"`
+}
+
+type oplogDeletePayload struct {
+	LastModified string `json:"last_modified_utc"`
 }
 
 // Open opens or creates the metadata database at the given path.
@@ -803,6 +814,14 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
 		return err
 	}
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         etag,
+		Size:         size,
+		LastModified: now,
+	})
+	if err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `
 INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
@@ -824,7 +843,7 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			return err
 		}
 	}
-	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, ""); err != nil {
+	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, string(putPayload)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -837,6 +856,14 @@ func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, siz
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         etag,
+		Size:         size,
+		LastModified: now,
+	})
+	if err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
 		return err
@@ -862,7 +889,7 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			return err
 		}
 	}
-	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, ""); err != nil {
+	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, string(putPayload)); err != nil {
 		return err
 	}
 	return nil
@@ -916,6 +943,176 @@ INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, cr
 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 		siteID, hlcTS, opType, bucket, key, versionID, payload, now)
 	return err
+}
+
+func (s *Store) insertOplogEntryTx(tx *sql.Tx, entry OplogEntry) (bool, error) {
+	if tx == nil {
+		return false, errors.New("meta: transaction required")
+	}
+	if entry.SiteID == "" || entry.HLCTS == "" || entry.OpType == "" || entry.Bucket == "" || entry.Key == "" {
+		return false, errors.New("meta: oplog entry missing required fields")
+	}
+	var exists int
+	err := tx.QueryRow(`
+SELECT 1 FROM oplog
+WHERE site_id=? AND hlc_ts=? AND op_type=? AND bucket=? AND key=? AND COALESCE(version_id,'')=COALESCE(?, '')
+LIMIT 1`,
+		entry.SiteID, entry.HLCTS, entry.OpType, entry.Bucket, entry.Key, entry.VersionID).Scan(&exists)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	createdAt := entry.CreatedAt
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	_, err = tx.Exec(`
+INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, created_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.SiteID, entry.HLCTS, entry.OpType, entry.Bucket, entry.Key, entry.VersionID, entry.Payload, createdAt)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func compareHLC(hlcA, siteA, hlcB, siteB string) int {
+	if hlcA == hlcB {
+		switch {
+		case siteA == siteB:
+			return 0
+		case siteA > siteB:
+			return 1
+		default:
+			return -1
+		}
+	}
+	if hlcA > hlcB {
+		return 1
+	}
+	return -1
+}
+
+// ApplyOplogEntries applies replication oplog entries using LWW + site_id tie-break.
+func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("meta: db not initialized")
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	applied := 0
+	err := s.WithTx(func(tx *sql.Tx) error {
+		for _, entry := range entries {
+			if entry.SiteID == "" || entry.HLCTS == "" || entry.OpType == "" || entry.Bucket == "" || entry.Key == "" {
+				return errors.New("meta: invalid oplog entry")
+			}
+			inserted, err := s.insertOplogEntryTx(tx, entry)
+			if err != nil {
+				return err
+			}
+			if !inserted {
+				continue
+			}
+			if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+			switch entry.OpType {
+			case "put":
+				if entry.VersionID == "" {
+					return errors.New("meta: put entry requires version id")
+				}
+				var payload oplogPutPayload
+				if entry.Payload != "" {
+					if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+						return err
+					}
+				}
+				lastModified := payload.LastModified
+				if lastModified == "" {
+					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+				}
+				if _, err := tx.Exec(`
+INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+					entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+					return err
+				}
+				var currentVersion string
+				var currentHLC string
+				var currentSite string
+				err := tx.QueryRow(`
+SELECT o.version_id, COALESCE(v.hlc_ts,''), COALESCE(v.site_id,'')
+FROM objects_current o
+LEFT JOIN versions v ON o.version_id=v.version_id
+WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &currentHLC, &currentSite)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				if errors.Is(err, sql.ErrNoRows) || compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) > 0 {
+					if _, err := tx.Exec(`
+INSERT INTO objects_current(bucket, key, version_id)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
+						entry.Bucket, entry.Key, entry.VersionID); err != nil {
+						return err
+					}
+				}
+			case "delete":
+				if entry.VersionID == "" {
+					return errors.New("meta: delete entry requires version id")
+				}
+				var payload oplogDeletePayload
+				if entry.Payload != "" {
+					if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+						return err
+					}
+				}
+				lastModified := payload.LastModified
+				if lastModified == "" {
+					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+				}
+				res, err := tx.Exec(`
+UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?`,
+					entry.HLCTS, entry.SiteID, entry.VersionID)
+				if err != nil {
+					return err
+				}
+				affected, _ := res.RowsAffected()
+				if affected == 0 {
+					if _, err := tx.Exec(`
+INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, '', 0, ?, ?, ?, 'DELETED')`,
+						entry.VersionID, entry.Bucket, entry.Key, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+						return err
+					}
+				}
+				var currentVersion string
+				var currentHLC string
+				var currentSite string
+				err = tx.QueryRow(`
+SELECT o.version_id, COALESCE(v.hlc_ts,''), COALESCE(v.site_id,'')
+FROM objects_current o
+LEFT JOIN versions v ON o.version_id=v.version_id
+WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &currentHLC, &currentSite)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				if !errors.Is(err, sql.ErrNoRows) && compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
+					if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+						return err
+					}
+				}
+			default:
+				return errors.New("meta: unknown oplog op")
+			}
+			applied++
+		}
+		return nil
+	})
+	return applied, err
 }
 
 // ListOplog returns all oplog entries ordered by insert id.
@@ -1679,11 +1876,15 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 		return false, err
 	}
 	hlcTS, siteID := s.nextHLC()
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return false, err
+	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
 		return false, err
 	}
 	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID)
-	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, ""); err != nil {
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1720,6 +1921,10 @@ WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
 		return false, err
 	}
 	hlcTS, siteID := s.nextHLC()
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return false, err
+	}
 	if _, err = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID); err != nil {
 		return false, err
 	}
@@ -1750,7 +1955,7 @@ LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
 			}
 		}
 	}
-	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, ""); err != nil {
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
