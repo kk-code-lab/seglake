@@ -578,6 +578,80 @@ func TestApplyOplogIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyOplogSplitBrainConverges(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	storeA, err := Open(filepath.Join(dir, "meta-a.db"))
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	t.Cleanup(func() { _ = storeA.Close() })
+	storeB, err := Open(filepath.Join(dir, "meta-b.db"))
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	t.Cleanup(func() { _ = storeB.Close() })
+
+	entryA := makePutEntry("site-a", "0000000000000000400-0000000001", "bucket", "key", "v1")
+	entryB := makePutEntry("site-z", "0000000000000000400-0000000001", "bucket", "key", "v2")
+
+	if _, err := storeA.ApplyOplogEntries(context.Background(), []OplogEntry{entryA, entryB}); err != nil {
+		t.Fatalf("ApplyOplogEntries A: %v", err)
+	}
+	if _, err := storeB.ApplyOplogEntries(context.Background(), []OplogEntry{entryB, entryA}); err != nil {
+		t.Fatalf("ApplyOplogEntries B: %v", err)
+	}
+	objA, err := storeA.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta A: %v", err)
+	}
+	objB, err := storeB.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta B: %v", err)
+	}
+	if objA.VersionID != objB.VersionID {
+		t.Fatalf("expected convergence, got %s vs %s", objA.VersionID, objB.VersionID)
+	}
+	if objA.VersionID != "v2" {
+		t.Fatalf("expected site-z to win, got %s", objA.VersionID)
+	}
+}
+
+func TestApplyOplogReorderAndDuplicatesConverge(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	storeA, err := Open(filepath.Join(dir, "meta-a.db"))
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	t.Cleanup(func() { _ = storeA.Close() })
+	storeB, err := Open(filepath.Join(dir, "meta-b.db"))
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	t.Cleanup(func() { _ = storeB.Close() })
+
+	putA := makePutEntry("site-a", "0000000000000000500-0000000001", "bucket", "key", "v1")
+	putB := makePutEntry("site-b", "0000000000000000501-0000000001", "bucket", "key", "v2")
+	del := makeDeleteEntry("site-b", "0000000000000000502-0000000001", "bucket", "key", "v1")
+
+	if _, err := storeA.ApplyOplogEntries(context.Background(), []OplogEntry{del, putA, putA, putB}); err != nil {
+		t.Fatalf("ApplyOplogEntries A: %v", err)
+	}
+	if _, err := storeB.ApplyOplogEntries(context.Background(), []OplogEntry{putB, del, putA}); err != nil {
+		t.Fatalf("ApplyOplogEntries B: %v", err)
+	}
+	if _, err := storeB.ApplyOplogEntries(context.Background(), []OplogEntry{putA}); err != nil {
+		t.Fatalf("ApplyOplogEntries B dup: %v", err)
+	}
+	if _, err := storeA.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected delete to win")
+	}
+	if _, err := storeB.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected delete to win")
+	}
+}
+
 func TestApplyOplogPutVsPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -725,4 +799,36 @@ func addHLC(hlc string, delta int64) string {
 		return hlc
 	}
 	return fmt.Sprintf("%019d-%s", physical+delta, parts[1])
+}
+
+func makePutEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
+	payload, _ := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         1,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	return OplogEntry{
+		SiteID:    siteID,
+		HLCTS:     hlc,
+		OpType:    "put",
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Payload:   string(payload),
+	}
+}
+
+func makeDeleteEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
+	payload, _ := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	return OplogEntry{
+		SiteID:    siteID,
+		HLCTS:     hlc,
+		OpType:    "delete",
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Payload:   string(payload),
+	}
 }
