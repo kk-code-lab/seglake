@@ -42,7 +42,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 2.4 Ops i observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
   gc-rewrite-plan/gc-rewrite-run (throttle + pause file).
-- `/v1/meta/stats` z podstawowymi licznikami (objects, segments, bytes_live, ostatnie fsck/scrub/gc).
+- `/v1/meta/stats` z podstawowymi licznikami + ruch i latencje.
 - Request-id w logach i odpowiedziach.
 
 ---
@@ -165,7 +165,10 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 5.2 Stats API
 `GET /v1/meta/stats` (JSON):
 - objects, segments, bytes_live,
-- ostatnie wyniki fsck/scrub/gc (czas + błędy + reclaim/rewritten).
+- ostatnie wyniki fsck/scrub/gc (czas + błędy + reclaim/rewritten),
+- requests_total{op,status_class}, inflight{op},
+- bytes_in_total, bytes_out_total,
+- latency_ms{op}: p50/p95/p99.
 
 ### 5.3 Crash harness
 - `scripts/crash_harness.sh <iterations>`
@@ -200,7 +203,6 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) Dokończyć API obiektowe (DELETE, CopyObject) i usunąć największe kompatybilnościowe luki.
-2) Bezpieczny GC względem multipartów (np. traktować parts jako live albo blokować GC).
-3) Dodać realny bloom/index w stopce segmentu.
-4) Rozszerzyć metryki `/v1/meta/stats` o latencje i ruch.
+1) Paginacja ListMultipartUploads (key-marker/upload-id-marker).
+2) Lepsze błędy AWS (pełniejsze mapowania kodów i komunikaty).
+3) Rozbudowa `/v1/meta/stats` o dodatkowe pola (np. p99 per op per bucket).
