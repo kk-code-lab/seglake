@@ -270,7 +270,7 @@ func TestMPUGCPlanAndRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	uploadID := "upload-1"
 	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", uploadID); err != nil {
@@ -316,7 +316,7 @@ func TestGCPlanIncludesMultipartParts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	segID := "seg-mpu"
 	segPath := layout.SegmentPath(segID)
