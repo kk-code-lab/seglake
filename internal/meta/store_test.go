@@ -123,3 +123,54 @@ func TestStatsIncludesOpsRuns(t *testing.T) {
 		t.Fatalf("unexpected gc stats: %+v", stats)
 	}
 }
+
+func TestListGCTrends(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Now().UTC()
+	if err := store.RecordOpsRun(context.Background(), "gc-plan", &ReportOps{
+		FinishedAt: base.Add(-2 * time.Hour).Format(time.RFC3339Nano),
+		Errors:     0,
+	}); err != nil {
+		t.Fatalf("RecordOpsRun gc-plan: %v", err)
+	}
+	if err := store.RecordOpsRun(context.Background(), "gc-run", &ReportOps{
+		FinishedAt:     base.Add(-time.Hour).Format(time.RFC3339Nano),
+		Errors:         1,
+		ReclaimedBytes: 100,
+	}); err != nil {
+		t.Fatalf("RecordOpsRun gc-run: %v", err)
+	}
+	if err := store.RecordOpsRun(context.Background(), "gc-rewrite", &ReportOps{
+		FinishedAt:     base.Format(time.RFC3339Nano),
+		Errors:         0,
+		ReclaimedBytes: 100,
+		RewrittenBytes: 100,
+		NewSegments:    2,
+	}); err != nil {
+		t.Fatalf("RecordOpsRun gc-rewrite: %v", err)
+	}
+
+	trends, err := store.ListGCTrends(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListGCTrends: %v", err)
+	}
+	if len(trends) != 2 {
+		t.Fatalf("expected 2 trends, got %d", len(trends))
+	}
+	if trends[0].Mode != "gc-rewrite" || trends[1].Mode != "gc-run" {
+		t.Fatalf("unexpected order: %+v", trends)
+	}
+	if trends[0].ReclaimRate < 0.49 || trends[0].ReclaimRate > 0.51 {
+		t.Fatalf("unexpected reclaim rate: %f", trends[0].ReclaimRate)
+	}
+	if trends[1].ReclaimRate != 1 {
+		t.Fatalf("unexpected reclaim rate: %f", trends[1].ReclaimRate)
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/kk-code-lab/seglake/internal/meta"
 )
 
 type statsResponse struct {
@@ -28,6 +30,7 @@ type statsResponse struct {
 	LatencyByBucketMs map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
 	RequestsByKey     map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
 	LatencyByKeyMs    map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
+	GCTrends          []meta.GCTrend              `json:"gc_trends,omitempty"`
 }
 
 func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
@@ -36,6 +39,11 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		return
 	}
 	stats, err := h.Meta.GetStats(ctx)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+		return
+	}
+	gcTrends, err := h.Meta.ListGCTrends(ctx, 30)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
@@ -53,6 +61,7 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		LastGCReclaimed:   stats.LastGCReclaimed,
 		LastGCRewritten:   stats.LastGCRewritten,
 		LastGCNewSegments: stats.LastGCNewSegments,
+		GCTrends:          gcTrends,
 	}
 	if h.Metrics != nil {
 		reqs, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
