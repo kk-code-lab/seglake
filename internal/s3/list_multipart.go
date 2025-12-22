@@ -33,6 +33,11 @@ func (h *Handler) handleListMultipartUploads(ctx context.Context, w http.Respons
 	uploadIDMarker := q.Get("upload-id-marker")
 	maxUploads := parseMaxUploads(q.Get("max-uploads"))
 
+	if keyMarker == "" && uploadIDMarker != "" {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "upload-id-marker requires key-marker", requestID, r.URL.Path)
+		return
+	}
+
 	uploads, err := h.Meta.ListMultipartUploads(ctx, bucket, prefix, keyMarker, uploadIDMarker, maxUploads)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)

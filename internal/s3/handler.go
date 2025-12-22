@@ -72,7 +72,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
+			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
 			return
 		}
 		h.handleListV2(r.Context(), mw, r, bucket, requestID)
@@ -81,7 +81,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeError(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID)
+			writeError(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID)
 			return
 		}
 		_ = bucket
@@ -91,7 +91,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
 		bucket, ok := h.parseBucketOnly(r)
 		if !ok {
-			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket", requestID, r.URL.Path)
+			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
 			return
 		}
 		h.handleListMultipartUploads(r.Context(), mw, r, bucket, requestID)
@@ -111,7 +111,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		writeErrorWithResource(mw, http.StatusBadRequest, "InvalidArgument", "invalid bucket/key", requestID, r.URL.Path)
+		writeErrorWithResource(mw, http.StatusBadRequest, "InvalidURI", "", requestID, r.URL.Path)
 		return
 	}
 	switch r.Method {
@@ -148,7 +148,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.handleAbortMultipart(r.Context(), mw, r.URL.Query().Get("uploadId"), requestID)
 			return
 		}
-		writeErrorWithResource(mw, http.StatusMethodNotAllowed, "InvalidRequest", "unsupported method", requestID, r.URL.Path)
+		writeErrorWithResource(mw, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
 	}
 }
 
