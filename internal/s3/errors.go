@@ -14,10 +14,6 @@ type errorResponse struct {
 	HostID    string   `xml:"HostId"`
 }
 
-func writeError(w http.ResponseWriter, status int, code, message, requestID string) {
-	writeErrorWithResource(w, status, code, message, requestID, "")
-}
-
 func writeErrorWithResource(w http.ResponseWriter, status int, code, message, requestID, resource string) {
 	if code != "" {
 		if mapped, ok := statusByCode[code]; ok {
@@ -28,6 +24,12 @@ func writeErrorWithResource(w http.ResponseWriter, status int, code, message, re
 				message = def
 			}
 		}
+	}
+	if requestID != "" && w.Header().Get("x-amz-request-id") == "" {
+		w.Header().Set("x-amz-request-id", requestID)
+	}
+	if w.Header().Get("x-amz-id-2") == "" {
+		w.Header().Set("x-amz-id-2", hostID())
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
