@@ -15,6 +15,18 @@ type Store struct {
 	db *sql.DB
 }
 
+// APIKey describes stored credentials and policy metadata.
+type APIKey struct {
+	AccessKey     string
+	SecretKey     string
+	Enabled       bool
+	CreatedAt     string
+	Label         string
+	LastUsedAt    string
+	Policy        string
+	InflightLimit int64
+}
+
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
 	if path == "" {
@@ -174,6 +186,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 6 {
+		if err = applyV6(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(6, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -320,6 +340,141 @@ func applyV5(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func applyV6(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE api_keys ADD COLUMN secret_key TEXT`,
+		`ALTER TABLE api_keys ADD COLUMN policy TEXT`,
+		`ALTER TABLE api_keys ADD COLUMN inflight_limit INTEGER`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// UpsertAPIKey inserts or updates an API key entry.
+func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy string, enabled bool, inflightLimit int64) error {
+	if accessKey == "" || secretKey == "" {
+		return errors.New("meta: access key and secret required")
+	}
+	if policy == "" {
+		policy = "rw"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO api_keys(access_key, secret_hash, salt, enabled, created_at, label, last_used_at, secret_key, policy, inflight_limit)
+VALUES(?, ?, '', ?, ?, '', '', ?, ?, ?)
+ON CONFLICT(access_key) DO UPDATE SET
+	secret_hash=excluded.secret_hash,
+	salt=excluded.salt,
+	enabled=excluded.enabled,
+	secret_key=excluded.secret_key,
+	policy=excluded.policy,
+	inflight_limit=excluded.inflight_limit`,
+		accessKey, secretKey, enabledInt, now, secretKey, policy, inflightLimit)
+	return err
+}
+
+// AllowBucketForKey adds a bucket allow entry for the given access key.
+func (s *Store) AllowBucketForKey(ctx context.Context, accessKey, bucket string) error {
+	if accessKey == "" || bucket == "" {
+		return errors.New("meta: access key and bucket required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT OR IGNORE INTO api_key_bucket_allow(access_key, bucket)
+VALUES(?, ?)`, accessKey, bucket)
+	return err
+}
+
+// GetAPIKey returns stored API key metadata.
+func (s *Store) GetAPIKey(ctx context.Context, accessKey string) (*APIKey, error) {
+	if accessKey == "" {
+		return nil, errors.New("meta: access key required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT access_key, COALESCE(secret_key,''), secret_hash, enabled, created_at, COALESCE(label,''), COALESCE(last_used_at,''), COALESCE(policy,''), COALESCE(inflight_limit,0)
+FROM api_keys
+WHERE access_key=?`, accessKey)
+	var key APIKey
+	var secretKey string
+	var secretHash string
+	var enabledInt int
+	if err := row.Scan(&key.AccessKey, &secretKey, &secretHash, &enabledInt, &key.CreatedAt, &key.Label, &key.LastUsedAt, &key.Policy, &key.InflightLimit); err != nil {
+		return nil, err
+	}
+	if secretKey == "" {
+		secretKey = secretHash
+	}
+	key.SecretKey = secretKey
+	key.Enabled = enabledInt != 0
+	return &key, nil
+}
+
+// LookupAPISecret returns secret + enabled state for an access key.
+func (s *Store) LookupAPISecret(ctx context.Context, accessKey string) (string, bool, error) {
+	key, err := s.GetAPIKey(ctx, accessKey)
+	if err != nil {
+		return "", false, err
+	}
+	return key.SecretKey, key.Enabled, nil
+}
+
+// HasAPIKeys reports whether any api_keys rows exist.
+func (s *Store) HasAPIKeys(ctx context.Context) (bool, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT 1 FROM api_keys LIMIT 1")
+	var any int
+	if err := row.Scan(&any); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// IsBucketAllowed checks whether the access key can access the bucket.
+func (s *Store) IsBucketAllowed(ctx context.Context, accessKey, bucket string) (bool, error) {
+	if accessKey == "" || bucket == "" {
+		return true, nil
+	}
+	row := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM api_key_bucket_allow WHERE access_key=?", accessKey)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return true, nil
+	}
+	row = s.db.QueryRowContext(ctx, "SELECT 1 FROM api_key_bucket_allow WHERE access_key=? AND bucket=? LIMIT 1", accessKey, bucket)
+	var allowed int
+	if err := row.Scan(&allowed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// RecordAPIKeyUse updates last_used_at for a key.
+func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
+	if accessKey == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
+	return err
 }
 
 // Segment holds segment metadata.

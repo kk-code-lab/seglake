@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -123,6 +124,9 @@ func main() {
 			SecretKey: *secretKey,
 			Region:    *region,
 			MaxSkew:   5 * time.Minute,
+			SecretLookup: func(ctx context.Context, accessKey string) (string, bool, error) {
+				return store.LookupAPISecret(ctx, accessKey)
+			},
 		},
 		Metrics:         s3.NewMetrics(),
 		AuthLimiter:     s3.NewAuthLimiter(),

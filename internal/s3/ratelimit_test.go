@@ -52,3 +52,18 @@ func TestInflightLimiter(t *testing.T) {
 		t.Fatalf("expected acquire after release")
 	}
 }
+
+func TestInflightLimiterWithOverride(t *testing.T) {
+	limiter := NewInflightLimiter(2)
+	key := "test"
+	if !limiter.AcquireWithLimit(key, 1) {
+		t.Fatalf("expected acquire with override")
+	}
+	if limiter.AcquireWithLimit(key, 1) {
+		t.Fatalf("expected acquire to fail with override")
+	}
+	limiter.Release(key)
+	if !limiter.AcquireWithLimit(key, 1) {
+		t.Fatalf("expected acquire after release with override")
+	}
+}
