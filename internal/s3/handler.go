@@ -52,7 +52,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.InflightLimiter != nil && accessKey != "" {
-		if !h.InflightLimiter.Acquire(accessKey) {
+		limit := int64(0)
+		if h.Meta != nil {
+			if key, err := h.Meta.GetAPIKey(r.Context(), accessKey); err == nil && key.InflightLimit > 0 {
+				limit = key.InflightLimit
+			}
+		}
+		if !h.InflightLimiter.AcquireWithLimit(accessKey, limit) {
 			writeErrorWithResource(mw, http.StatusServiceUnavailable, "SlowDown", "too many inflight requests", requestID, r.URL.Path)
 			return
 		}
@@ -206,7 +212,67 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		}
 		return requestID, false
 	}
+	if err := h.authorizeRequest(r.Context(), r); err != nil {
+		writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
+		return requestID, false
+	}
 	return requestID, true
+}
+
+func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
+	if h == nil || h.Meta == nil || r == nil {
+		return nil
+	}
+	accessKey := extractAccessKey(r)
+	if accessKey == "" {
+		return nil
+	}
+	hasKeys, err := h.Meta.HasAPIKeys(ctx)
+	if err != nil {
+		return err
+	}
+	key, err := h.Meta.GetAPIKey(ctx, accessKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if hasKeys {
+				return errAccessDenied
+			}
+			return nil
+		}
+		return err
+	}
+	if !key.Enabled {
+		return errAccessDenied
+	}
+	policy := strings.ToLower(strings.TrimSpace(key.Policy))
+	if policy == "ro" || policy == "read-only" {
+		if isWriteRequest(r) {
+			return errAccessDenied
+		}
+	}
+	if bucket, ok := h.bucketFromRequest(r); ok {
+		allowed, err := h.Meta.IsBucketAllowed(ctx, accessKey, bucket)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errAccessDenied
+		}
+	}
+	_ = h.Meta.RecordAPIKeyUse(ctx, accessKey)
+	return nil
+}
+
+func isWriteRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch r.Method {
+	case http.MethodPut, http.MethodPost, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) isSigV2ListRequest(r *http.Request) bool {

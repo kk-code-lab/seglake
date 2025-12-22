@@ -79,12 +79,20 @@ func NewInflightLimiter(limit int64) *InflightLimiter {
 }
 
 func (l *InflightLimiter) Acquire(key string) bool {
+	return l.AcquireWithLimit(key, 0)
+}
+
+// AcquireWithLimit uses the provided limit when >0; otherwise the default limit.
+func (l *InflightLimiter) AcquireWithLimit(key string, limit int64) bool {
 	if l == nil || key == "" {
 		return true
 	}
+	if limit <= 0 {
+		limit = l.limit
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.counts[key] >= l.limit {
+	if l.counts[key] >= limit {
 		return false
 	}
 	l.counts[key]++

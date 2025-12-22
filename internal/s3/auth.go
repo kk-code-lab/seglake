@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,11 +20,12 @@ type AuthConfig struct {
 	Region               string
 	MaxSkew              time.Duration
 	AllowUnsignedPayload bool
+	SecretLookup         func(ctx context.Context, accessKey string) (string, bool, error)
 }
 
 // VerifyRequest validates AWS SigV4 Authorization headers.
 func (c *AuthConfig) VerifyRequest(r *http.Request) error {
-	if c == nil || c.AccessKey == "" || c.SecretKey == "" {
+	if c == nil || (c.AccessKey == "" && c.SecretKey == "" && c.SecretLookup == nil) {
 		return nil
 	}
 	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
@@ -61,11 +63,15 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	region := normalizeRegion(regionRaw)
 	service := credParts[3]
 	term := credParts[4]
-	if accessKey != c.AccessKey || term != "aws4_request" || service != "s3" {
+	if term != "aws4_request" || service != "s3" {
 		return errSignatureMismatch
 	}
 	if c.Region != "" && region != normalizeRegion(c.Region) {
 		return errSignatureMismatch
+	}
+	secretKey, err := c.secretFor(r.Context(), accessKey)
+	if err != nil {
+		return err
 	}
 
 	amzDate := r.Header.Get("X-Amz-Date")
@@ -115,7 +121,7 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 		hex.EncodeToString(hashed[:]),
 	}, "\n")
 
-	signingKey := deriveSigningKey(c.SecretKey, dateScope, regionRaw, "s3")
+	signingKey := deriveSigningKey(secretKey, dateScope, regionRaw, "s3")
 	expected := hmacSHA256Hex(signingKey, stringToSign)
 	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
 		return errSignatureMismatch
@@ -148,11 +154,15 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	region := normalizeRegion(regionRaw)
 	service := credParts[3]
 	term := credParts[4]
-	if accessKey != c.AccessKey || term != "aws4_request" || service != "s3" {
+	if term != "aws4_request" || service != "s3" {
 		return errSignatureMismatch
 	}
 	if c.Region != "" && region != normalizeRegion(c.Region) {
 		return errSignatureMismatch
+	}
+	secretKey, err := c.secretFor(r.Context(), accessKey)
+	if err != nil {
+		return err
 	}
 
 	reqTime, err := time.Parse("20060102T150405Z", amzDate)
@@ -194,12 +204,35 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 		hex.EncodeToString(hashed[:]),
 	}, "\n")
 
-	signingKey := deriveSigningKey(c.SecretKey, dateScope, regionRaw, "s3")
+	signingKey := deriveSigningKey(secretKey, dateScope, regionRaw, "s3")
 	expected := hmacSHA256Hex(signingKey, stringToSign)
 	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
 		return errSignatureMismatch
 	}
 	return nil
+}
+
+func (c *AuthConfig) secretFor(ctx context.Context, accessKey string) (string, error) {
+	if accessKey == "" {
+		return "", errAccessDenied
+	}
+	if c.AccessKey != "" && accessKey == c.AccessKey {
+		if c.SecretKey == "" {
+			return "", errAccessDenied
+		}
+		return c.SecretKey, nil
+	}
+	if c.SecretLookup == nil {
+		return "", errAccessDenied
+	}
+	secret, enabled, err := c.SecretLookup(ctx, accessKey)
+	if err != nil {
+		return "", errAccessDenied
+	}
+	if !enabled || secret == "" {
+		return "", errAccessDenied
+	}
+	return secret, nil
 }
 
 var (
