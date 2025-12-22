@@ -190,7 +190,7 @@ func TestMaxOplogHLC(t *testing.T) {
 	}
 }
 
-func TestApplyOplogTieBreakSite(t *testing.T) {
+func TestApplyOplogPutTieBreakSite(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "meta.db"))
@@ -229,12 +229,12 @@ func TestApplyOplogTieBreakSite(t *testing.T) {
 	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{putA, putB}); err != nil {
 		t.Fatalf("ApplyOplogEntries: %v", err)
 	}
-	meta, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
 	if err != nil {
 		t.Fatalf("GetObjectMeta: %v", err)
 	}
-	if meta.VersionID != "v2" {
-		t.Fatalf("expected site tie-break to pick v2, got %s", meta.VersionID)
+	if metaObj.VersionID != "v2" {
+		t.Fatalf("expected site tie-break to pick v2, got %s", metaObj.VersionID)
 	}
 }
 
@@ -441,6 +441,55 @@ func TestApplyOplogDeleteVsDelete(t *testing.T) {
 	}
 	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
 		t.Fatalf("expected object to remain deleted")
+	}
+}
+
+func TestApplyOplogDeleteThenPutOutOfOrder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         1,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	delPayload, err := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	del := OplogEntry{
+		SiteID:    "site-b",
+		HLCTS:     "0000000000000000060-0000000001",
+		OpType:    "delete",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(delPayload),
+	}
+	put := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000059-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{del, put}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+		t.Fatalf("expected delete to win with higher HLC even if applied first")
 	}
 }
 

@@ -1102,6 +1102,27 @@ func compareHLC(hlcA, siteA, hlcB, siteB string) int {
 	return -1
 }
 
+func latestVersionHLC(tx *sql.Tx, bucket, key string) (string, string, bool, error) {
+	if tx == nil {
+		return "", "", false, errors.New("meta: transaction required")
+	}
+	var hlc string
+	var site string
+	err := tx.QueryRow(`
+SELECT COALESCE(hlc_ts,''), COALESCE(site_id,'')
+FROM versions
+WHERE bucket=? AND key=?
+ORDER BY hlc_ts DESC, site_id DESC
+LIMIT 1`, bucket, key).Scan(&hlc, &site)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	return hlc, site, true, nil
+}
+
 // ApplyOplogEntries applies replication oplog entries using LWW + site_id tie-break.
 func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (int, error) {
 	if s == nil || s.db == nil {
@@ -1168,6 +1189,15 @@ LEFT JOIN versions v ON o.version_id=v.version_id
 WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &currentHLC, &currentSite)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return err
+				}
+				if errors.Is(err, sql.ErrNoRows) {
+					latestHLC, latestSite, ok, err := latestVersionHLC(tx, entry.Bucket, entry.Key)
+					if err != nil {
+						return err
+					}
+					if ok && compareHLC(entry.HLCTS, entry.SiteID, latestHLC, latestSite) < 0 {
+						continue
+					}
 				}
 				if errors.Is(err, sql.ErrNoRows) || compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) > 0 {
 					if _, err := tx.Exec(`
