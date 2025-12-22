@@ -98,7 +98,14 @@ Manage keys with `-mode keys`:
 ./build/seglake -mode keys -keys-action enable -key-access=test
 ./build/seglake -mode keys -keys-action disable -key-access=test
 ./build/seglake -mode keys -keys-action delete -key-access=test
-./build/seglake -mode keys -keys-action set-policy -key-access=test -key-policy='{"version":"v1","statements":[{"effect":"allow","actions":["read"],"resources":[{"bucket":"demo"}]}]}'
+./build/seglake -mode keys -keys-action set-policy -key-access=test -key-policy='{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}'
+```
+
+Bucket policies:
+```
+./build/seglake -mode bucket-policy -bucket-policy-action set -bucket-policy-bucket=demo -bucket-policy='{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}'
+./build/seglake -mode bucket-policy -bucket-policy-action get -bucket-policy-bucket=demo
+./build/seglake -mode bucket-policy -bucket-policy-action delete -bucket-policy-bucket=demo
 ```
 
 Policies:
@@ -112,7 +119,7 @@ Custom JSON policy (stored in `api_keys.policy`):
   "statements": [
     {
       "effect": "allow",
-      "actions": ["read", "list"],
+      "actions": ["GetObject", "ListBucket"],
       "resources": [
         { "bucket": "demo", "prefix": "public/" }
       ]
@@ -121,7 +128,10 @@ Custom JSON policy (stored in `api_keys.policy`):
 }
 ```
 
-Actions: `read`, `write`, `list`, `mpu`, `copy`, `meta`, `*`.
+Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetObject`, `HeadObject`, `PutObject`,
+`DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
+`CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
+`GetMetaStats`, `*`.
 
 Example with deny override:
 ```
@@ -130,14 +140,14 @@ Example with deny override:
   "statements": [
     {
       "effect": "allow",
-      "actions": ["read"],
+      "actions": ["GetObject"],
       "resources": [
         { "bucket": "demo" }
       ]
     },
     {
       "effect": "deny",
-      "actions": ["read"],
+      "actions": ["GetObject"],
       "resources": [
         { "bucket": "demo", "prefix": "secret/" }
       ]
@@ -153,7 +163,7 @@ Example read + list for a single bucket:
   "statements": [
     {
       "effect": "allow",
-      "actions": ["read", "list"],
+      "actions": ["GetObject", "ListBucket"],
       "resources": [
         { "bucket": "demo" }
       ]

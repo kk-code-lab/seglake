@@ -162,6 +162,9 @@ func printModeHelp(mode string) {
 	case "keys":
 		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
 		fmt.Println("Flags: -keys-action list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy, -key-access, -key-secret, -key-policy, -key-enabled, -key-inflight, -key-bucket, -json.")
+	case "bucket-policy":
+		fmt.Println("Mode bucket-policy: manage bucket policies.")
+		fmt.Println("Flags: -bucket-policy-action get|set|delete, -bucket-policy-bucket, -bucket-policy, -bucket-policy-file, -json.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
 	}

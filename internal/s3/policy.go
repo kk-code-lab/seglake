@@ -28,23 +28,44 @@ const (
 )
 
 const (
-	policyActionAll   = "*"
-	policyActionRead  = "read"
-	policyActionWrite = "write"
-	policyActionList  = "list"
-	policyActionMPU   = "mpu"
-	policyActionCopy  = "copy"
-	policyActionMeta  = "meta"
+	policyActionAll = "*"
+
+	policyActionListBuckets           = "listbuckets"
+	policyActionListBucket            = "listbucket"
+	policyActionGetBucketLocation     = "getbucketlocation"
+	policyActionGetObject             = "getobject"
+	policyActionHeadObject            = "headobject"
+	policyActionPutObject             = "putobject"
+	policyActionDeleteObject          = "deleteobject"
+	policyActionDeleteBucket          = "deletebucket"
+	policyActionCopyObject            = "copyobject"
+	policyActionCreateMultipartUpload = "createmultipartupload"
+	policyActionUploadPart            = "uploadpart"
+	policyActionCompleteMultipart     = "completemultipartupload"
+	policyActionAbortMultipart        = "abortmultipartupload"
+	policyActionListMultipartUploads  = "listmultipartuploads"
+	policyActionListMultipartParts    = "listmultipartparts"
+	policyActionGetMetaStats          = "getmetastats"
 )
 
 var validPolicyActions = map[string]struct{}{
-	policyActionAll:   {},
-	policyActionRead:  {},
-	policyActionWrite: {},
-	policyActionList:  {},
-	policyActionMPU:   {},
-	policyActionCopy:  {},
-	policyActionMeta:  {},
+	policyActionAll:                   {},
+	policyActionListBuckets:           {},
+	policyActionListBucket:            {},
+	policyActionGetBucketLocation:     {},
+	policyActionGetObject:             {},
+	policyActionHeadObject:            {},
+	policyActionPutObject:             {},
+	policyActionDeleteObject:          {},
+	policyActionDeleteBucket:          {},
+	policyActionCopyObject:            {},
+	policyActionCreateMultipartUpload: {},
+	policyActionUploadPart:            {},
+	policyActionCompleteMultipart:     {},
+	policyActionAbortMultipart:        {},
+	policyActionListMultipartUploads:  {},
+	policyActionListMultipartParts:    {},
+	policyActionGetMetaStats:          {},
 }
 
 // ParsePolicy parses a policy JSON string or accepts short-hands "rw" and "ro".
@@ -61,8 +82,17 @@ func ParsePolicy(raw string) (*Policy, error) {
 	}
 	if strings.EqualFold(trimmed, "ro") || strings.EqualFold(trimmed, "read-only") {
 		return &Policy{Version: "v1", Statements: []Statement{{
-			Effect:  policyEffectAllow,
-			Actions: []string{policyActionRead, policyActionList, policyActionMeta},
+			Effect: policyEffectAllow,
+			Actions: []string{
+				policyActionListBuckets,
+				policyActionListBucket,
+				policyActionGetBucketLocation,
+				policyActionGetObject,
+				policyActionHeadObject,
+				policyActionListMultipartUploads,
+				policyActionListMultipartParts,
+				policyActionGetMetaStats,
+			},
 			Resources: []Resource{{
 				Bucket: "*",
 			}},
@@ -95,7 +125,7 @@ func (p *Policy) validate() error {
 			return errors.New("policy statement requires actions")
 		}
 		for j := range stmt.Actions {
-			a := strings.ToLower(strings.TrimSpace(stmt.Actions[j]))
+			a := normalizeAction(stmt.Actions[j])
 			if _, ok := validPolicyActions[a]; !ok {
 				return errors.New("policy statement has invalid action")
 			}
@@ -121,7 +151,7 @@ func (p *Policy) Allows(action, bucket, key string) bool {
 	if p == nil {
 		return false
 	}
-	action = strings.ToLower(strings.TrimSpace(action))
+	action = normalizeAction(action)
 	bucket = strings.TrimSpace(bucket)
 	key = strings.TrimSpace(key)
 	allowed := false
@@ -135,6 +165,29 @@ func (p *Policy) Allows(action, bucket, key string) bool {
 		allowed = true
 	}
 	return allowed
+}
+
+// Decision returns (allowed, denied) for the policy.
+func (p *Policy) Decision(action, bucket, key string) (bool, bool) {
+	if p == nil {
+		return false, false
+	}
+	action = normalizeAction(action)
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimSpace(key)
+	allowed := false
+	denied := false
+	for _, stmt := range p.Statements {
+		if !stmt.matches(action, bucket, key) {
+			continue
+		}
+		if stmt.Effect == policyEffectDeny {
+			denied = true
+		} else {
+			allowed = true
+		}
+	}
+	return allowed, denied
 }
 
 func (s *Statement) matches(action, bucket, key string) bool {
@@ -174,18 +227,42 @@ func (r Resource) matches(bucket, key string) bool {
 func policyActionForRequest(op string) string {
 	switch op {
 	case "meta_stats":
-		return policyActionMeta
-	case "list_buckets", "list_v1", "list_v2", "mpu_list_uploads", "mpu_list_parts":
-		return policyActionList
-	case "get", "head":
-		return policyActionRead
-	case "put", "delete", "delete_bucket":
-		return policyActionWrite
-	case "mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort":
-		return policyActionMPU
+		return policyActionGetMetaStats
+	case "list_buckets":
+		return policyActionListBuckets
+	case "list_v1", "list_v2":
+		return policyActionListBucket
+	case "get":
+		return policyActionGetObject
+	case "head":
+		return policyActionHeadObject
+	case "put":
+		return policyActionPutObject
+	case "delete":
+		return policyActionDeleteObject
+	case "delete_bucket":
+		return policyActionDeleteBucket
 	case "copy":
-		return policyActionCopy
+		return policyActionCopyObject
+	case "mpu_initiate":
+		return policyActionCreateMultipartUpload
+	case "mpu_upload_part":
+		return policyActionUploadPart
+	case "mpu_complete":
+		return policyActionCompleteMultipart
+	case "mpu_abort":
+		return policyActionAbortMultipart
+	case "mpu_list_uploads":
+		return policyActionListMultipartUploads
+	case "mpu_list_parts":
+		return policyActionListMultipartParts
 	default:
 		return ""
 	}
+}
+
+func normalizeAction(action string) string {
+	action = strings.ToLower(strings.TrimSpace(action))
+	action = strings.TrimPrefix(action, "s3:")
+	return action
 }

@@ -272,7 +272,25 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if targetBucket == "" {
 			targetBucket = "*"
 		}
-		if !pol.Allows(action, targetBucket, keyName) {
+		identityAllowed, identityDenied := pol.Decision(action, targetBucket, keyName)
+		if identityDenied {
+			return errAccessDenied
+		}
+		bucketAllowed := false
+		bucketDenied := false
+		if bucket != "" {
+			if bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket); err == nil && bucketPolicy != "" {
+				if bpol, err := ParsePolicy(bucketPolicy); err == nil {
+					bucketAllowed, bucketDenied = bpol.Decision(action, bucket, keyName)
+				} else {
+					return errAccessDenied
+				}
+			}
+		}
+		if bucketDenied {
+			return errAccessDenied
+		}
+		if !identityAllowed && !bucketAllowed {
 			return errAccessDenied
 		}
 	}

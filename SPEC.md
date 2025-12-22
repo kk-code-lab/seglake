@@ -29,7 +29,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 2.2 Metadane
 - SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) przy flush.
 - Tabele: buckets, versions, objects_current, manifests, segments, api_keys, api_key_bucket_allow,
-  multipart_uploads, multipart_parts, rebuild_state, ops_runs.
+  bucket_policies, multipart_uploads, multipart_parts, rebuild_state, ops_runs.
 
 ### 2.3 S3 API
 - Path-style: `/<bucket>/<key>` + virtual-hosted-style (domyślnie włączony).
@@ -129,7 +129,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Region `us` normalizowany do `us-east-1`.
 - Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
 - Polityki są egzekwowane na wszystkich operacjach, w tym `list_buckets` i `meta`.
-- Format polityk: JSON z listą `statements` (effect allow/deny, actions: read/write/list/mpu/copy/meta/*, resources: bucket + prefix).
+- Format polityk: JSON z listą `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, *, resources: bucket + prefix).
 - Rate limiting błędów auth per IP i per access key.
 - Limity inflight per access key (domyślnie 32, per‑key override).
 - Logi redagują sekrety w query (np. X-Amz-Signature/Credential).
