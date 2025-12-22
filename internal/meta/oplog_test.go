@@ -529,6 +529,55 @@ func TestApplyOplogBucketPolicy(t *testing.T) {
 	}
 }
 
+func TestApplyOplogIdempotent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         1,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	entry := OplogEntry{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000300-0000000001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+	}
+	applied, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{entry, entry})
+	if err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("expected 1 applied entry, got %d", applied)
+	}
+	applied, err = store.ApplyOplogEntries(context.Background(), []OplogEntry{entry})
+	if err != nil {
+		t.Fatalf("ApplyOplogEntries again: %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("expected 0 applied entries, got %d", applied)
+	}
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.VersionID != "v1" {
+		t.Fatalf("expected v1, got %s", metaObj.VersionID)
+	}
+}
+
 func TestApplyOplogPutVsPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
