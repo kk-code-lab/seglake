@@ -169,7 +169,7 @@ func runReplPush(remote, since string, limit int, watch bool, interval, backoffM
 	}
 }
 
-func runReplPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
+func runReplPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax, retryTimeout time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
 	if eng == nil {
 		return errors.New("replication: engine required")
 	}
@@ -221,7 +221,10 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 	}
 	backoff := interval
 	missingCache := newReplMissingCache()
-	retryDeadline := time.Now().Add(5 * time.Minute)
+	if retryTimeout <= 0 {
+		retryTimeout = 5 * time.Minute
+	}
+	retryDeadline := time.Now().Add(retryTimeout)
 	for {
 		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng, missingCache, retryDeadline)
 		if err != nil {
@@ -250,7 +253,7 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 			time.Sleep(interval)
 		}
 		if watch {
-			retryDeadline = time.Now().Add(5 * time.Minute)
+			retryDeadline = time.Now().Add(retryTimeout)
 		}
 	}
 }

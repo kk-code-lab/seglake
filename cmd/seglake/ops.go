@@ -167,7 +167,7 @@ func printModeHelp(mode string) {
 		fmt.Println("Flags: -bucket-policy-action get|set|delete, -bucket-policy-bucket, -bucket-policy, -bucket-policy-file, -json.")
 	case "repl-pull":
 		fmt.Println("Mode repl-pull: pull oplog from remote and apply locally.")
-		fmt.Println("Flags: -repl-remote, -repl-since, -repl-limit, -repl-fetch-data, -repl-watch, -repl-interval, -repl-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
+		fmt.Println("Flags: -repl-remote, -repl-since, -repl-limit, -repl-fetch-data, -repl-watch, -repl-interval, -repl-backoff-max, -repl-retry-timeout, -repl-access-key, -repl-secret-key, -repl-region.")
 	case "repl-push":
 		fmt.Println("Mode repl-push: push local oplog to remote.")
 		fmt.Println("Flags: -repl-remote, -repl-push-since, -repl-push-limit, -repl-push-watch, -repl-push-interval, -repl-push-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
