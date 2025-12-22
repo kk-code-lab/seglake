@@ -46,7 +46,7 @@ type replOplogApplyResponse struct {
 	MissingChunks    []replMissingChunk `json:"missing_chunks,omitempty"`
 }
 
-func runReplPull(remote, since string, limit int, fetchData bool, accessKey, secretKey, region string, eng *engine.Engine) error {
+func runReplPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
 	if eng == nil {
 		return errors.New("replication: engine required")
 	}
@@ -83,23 +83,70 @@ func runReplPull(remote, since string, limit int, fetchData bool, accessKey, sec
 	if limit <= 0 {
 		limit = 1000
 	}
+	ctx := context.Background()
+	if since == "" && store != nil {
+		if hlc, err := store.GetReplWatermark(ctx); err == nil && hlc != "" {
+			since = hlc
+		}
+	}
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	if backoffMax <= 0 {
+		backoffMax = time.Minute
+	}
+	backoff := interval
+	for {
+		lastHLC, applied, err := runReplPullOnce(ctx, client, since, limit, fetchData, eng)
+		if err != nil {
+			if !watch {
+				return err
+			}
+			fmt.Printf("repl: error=%v backoff=%s\n", err, backoff)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > backoffMax {
+				backoff = backoffMax
+			}
+			continue
+		}
+		backoff = interval
+		if lastHLC != "" {
+			since = lastHLC
+			if store != nil {
+				_ = store.SetReplWatermark(ctx, lastHLC)
+			}
+		}
+		if !watch {
+			return nil
+		}
+		if applied == 0 {
+			time.Sleep(interval)
+		}
+	}
+}
 
+func chunkKey(ch replMissingChunk) string {
+	return fmt.Sprintf("%s:%d:%d", ch.SegmentID, ch.Offset, ch.Length)
+}
+
+func runReplPullOnce(ctx context.Context, client *replClient, since string, limit int, fetchData bool, eng *engine.Engine) (string, int, error) {
 	oplogResp, err := client.getOplog(since, limit)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	if len(oplogResp.Entries) == 0 {
 		fmt.Println("repl: no new oplog entries")
-		return nil
+		return oplogResp.LastHLC, 0, nil
 	}
 	applyResp, err := client.applyOplog(oplogResp.Entries)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	fmt.Printf("repl: applied=%d remote_last_hlc=%s\n", applyResp.Applied, oplogResp.LastHLC)
 
 	if !fetchData {
-		return nil
+		return oplogResp.LastHLC, applyResp.Applied, nil
 	}
 	missingManifests := make(map[string]struct{})
 	for _, versionID := range applyResp.MissingManifests {
@@ -112,22 +159,18 @@ func runReplPull(remote, since string, limit int, fetchData bool, accessKey, sec
 		key := chunkKey(ch)
 		missingChunks[key] = ch
 	}
-	if len(missingManifests) == 0 && len(missingChunks) == 0 {
-		return nil
-	}
-	ctx := context.Background()
 	for versionID := range missingManifests {
 		manifestBytes, err := client.getManifest(versionID)
 		if err != nil {
-			return err
+			return "", applyResp.Applied, err
 		}
 		man, err := eng.StoreManifestBytes(ctx, manifestBytes)
 		if err != nil {
-			return err
+			return "", applyResp.Applied, err
 		}
 		chunks, err := eng.MissingChunks(man)
 		if err != nil {
-			return err
+			return "", applyResp.Applied, err
 		}
 		for _, ch := range chunks {
 			key := fmt.Sprintf("%s:%d:%d", ch.SegmentID, ch.Offset, ch.Length)
@@ -143,18 +186,16 @@ func runReplPull(remote, since string, limit int, fetchData bool, accessKey, sec
 	for _, ch := range missingChunks {
 		data, err := client.getChunk(ch.SegmentID, ch.Offset, ch.Length)
 		if err != nil {
-			return err
+			return "", applyResp.Applied, err
 		}
 		if err := eng.WriteSegmentRange(ctx, ch.SegmentID, ch.Offset, data); err != nil {
-			return err
+			return "", applyResp.Applied, err
 		}
 	}
-	fmt.Printf("repl: fetched manifests=%d chunks=%d\n", len(missingManifests), len(missingChunks))
-	return nil
-}
-
-func chunkKey(ch replMissingChunk) string {
-	return fmt.Sprintf("%s:%d:%d", ch.SegmentID, ch.Offset, ch.Length)
+	if len(missingManifests) > 0 || len(missingChunks) > 0 {
+		fmt.Printf("repl: fetched manifests=%d chunks=%d\n", len(missingManifests), len(missingChunks))
+	}
+	return oplogResp.LastHLC, applyResp.Applied, nil
 }
 
 func (c *replClient) getOplog(since string, limit int) (*replOplogResponse, error) {
