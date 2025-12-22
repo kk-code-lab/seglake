@@ -80,3 +80,6 @@ bez wymogu silnej konsystencji globalnej (eventual consistency).
 - Paginacja ListMultipartUploads (key-marker/upload-id-marker).
 - ListMultipartUploads: dopracowanie pełnej zgodności (edge‑case’y marker/prefix/delimiter).
 - Lepsze błędy AWS (mapowania kodów i domyślne komunikaty).
+- Testy replikacji: reorder/duplikaty/split‑brain (konwergencja LWW).
+- Ops: repl-validate (porównanie manifestów i live wersji między węzłami).
+- Metryki replikacji w /v1/meta/stats (oplog bytes, backlog bytes, conflict count).
