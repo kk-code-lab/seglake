@@ -27,7 +27,7 @@ func main() {
 	region := flag.String("region", "us-east-1", "S3 region")
 	virtualHosted := flag.Bool("virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	logRequests := flag.Bool("log-requests", true, "Log HTTP requests")
-	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle")
+	mode := flag.String("mode", "server", "Mode: server|fsck|scrub|snapshot|status|rebuild-index|gc-plan|gc-run|gc-rewrite|gc-rewrite-plan|gc-rewrite-run|mpu-gc-plan|mpu-gc-run|support-bundle|keys")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
@@ -49,6 +49,13 @@ func main() {
 	mpuWarnReclaim := flag.Int64("mpu-warn-reclaim-bytes", 10<<30, "MPU GC warn when candidate bytes exceed this count (0 disables)")
 	mpuMaxUploads := flag.Int("mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	mpuMaxReclaim := flag.Int64("mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
+	keysAction := flag.String("keys-action", "list", "Keys action: list|create|allow-bucket")
+	keyAccess := flag.String("key-access", "", "API access key for keys-action")
+	keySecret := flag.String("key-secret", "", "API secret key for keys-action")
+	keyPolicy := flag.String("key-policy", "rw", "API key policy: rw|ro|read-only")
+	keyEnabled := flag.Bool("key-enabled", true, "API key enabled flag")
+	keyInflight := flag.Int64("key-inflight", 0, "API key inflight limit (0=default)")
+	keyBucket := flag.String("key-bucket", "", "Bucket name for keys-action allow-bucket")
 	jsonOut := flag.Bool("json", false, "Output ops report as JSON")
 	showModeHelp := flag.Bool("mode-help", false, "Show help for the selected mode")
 	flag.Parse()
@@ -95,6 +102,13 @@ func main() {
 		metaArg := metaPath
 		if *rebuildMeta != "" {
 			metaArg = *rebuildMeta
+		}
+		if *mode == "keys" {
+			if err := runKeys(*keysAction, metaArg, *keyAccess, *keySecret, *keyPolicy, *keyBucket, *keyEnabled, *keyInflight, *jsonOut); err != nil {
+				fmt.Fprintf(os.Stderr, "keys error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
 		gcGuard := ops.GCGuardrails{
 			WarnCandidates:     *gcWarnSegments,
