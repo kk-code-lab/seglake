@@ -172,7 +172,10 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - ostatnie wyniki fsck/scrub/gc (czas + błędy + reclaim/rewritten),
 - requests_total{op,status_class}, inflight{op},
 - bytes_in_total, bytes_out_total,
-- latency_ms{op}: p50/p95/p99.
+- latency_ms{op}: p50/p95/p99,
+- requests_total_by_bucket / latency_ms_by_bucket,
+- requests_total_by_key / latency_ms_by_key,
+- gc_trends: historia GC (mode, finished_at, errors, reclaimed/rewritten, reclaim_rate).
 
 ### 5.3 Crash harness
 - Test integracyjny (opcjonalny): `go test -tags crashharness ./internal/ops -run TestCrashHarness`
@@ -210,9 +213,4 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) ListMultipartUploads: dopracowanie pełnej zgodności (edge-case’y marker/prefix/delimiter).
-2) Metryki per‑bucket/per‑key (p50/p95/p99 i status classes).
-3) Dokładniejsze mapowanie AWS Errors (MethodNotAllowed vs InvalidRequest, bardziej AWS‑owe Message/Resource).
-4) S3 compat polish: konsekwentne nagłówki request‑id i region.
-5) Testy E2E SigV4/presigned dla edge‑case’ów (signed headers, UNSIGNED‑PAYLOAD, Range).
-6) Dalsze guard‑rail’e dla MPU/GC (telemetria, ostrzeżenia, limity).
+1) Dalsze guard‑rail’e dla MPU/GC (telemetria, ostrzeżenia, limity).
