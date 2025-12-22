@@ -51,6 +51,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "TLS certificate path (PEM)")
 	tlsKey := flag.String("tls-key", "", "TLS private key path (PEM)")
 	trustedProxies := flag.String("trusted-proxies", "", "Comma-separated CIDR ranges trusted for X-Forwarded-For")
+	siteID := flag.String("site-id", "local", "Site identifier for replication (HLC/oplog)")
 	snapshotDir := flag.String("snapshot-dir", "", "Snapshot output directory")
 	rebuildMeta := flag.String("rebuild-meta", "", "Path to meta.db for rebuild-index")
 	gcMinAge := flag.Duration("gc-min-age", 24*time.Hour, "GC minimum segment age")
@@ -112,6 +113,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "meta open error: %v\n", err)
 		os.Exit(1)
 	}
+	store.SetSiteID(*siteID)
 	defer func() { _ = store.Close() }()
 
 	eng, err := engine.New(engine.Options{

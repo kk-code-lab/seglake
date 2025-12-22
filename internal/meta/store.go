@@ -30,6 +30,19 @@ type APIKey struct {
 	InflightLimit int64
 }
 
+// OplogEntry describes a single replication log entry.
+type OplogEntry struct {
+	ID        int64
+	SiteID    string
+	HLCTS     string
+	OpType    string
+	Bucket    string
+	Key       string
+	VersionID string
+	Payload   string
+	CreatedAt string
+}
+
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
 	if path == "" {
@@ -57,6 +70,20 @@ func (s *Store) SetSiteID(siteID string) {
 		return
 	}
 	s.siteID = siteID
+}
+
+func (s *Store) nextHLC() (string, string) {
+	if s == nil {
+		return "", ""
+	}
+	if s.hlc == nil {
+		s.hlc = clock.New()
+	}
+	siteID := s.siteID
+	if siteID == "" {
+		siteID = "local"
+	}
+	return s.hlc.Next(), siteID
 }
 
 // Close closes the database.
@@ -771,14 +798,15 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 		}
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	hlcTS, siteID := s.nextHLC()
 
 	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
 INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, '', '', 'ACTIVE')`,
-		versionID, bucket, key, etag, size, now); err != nil {
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+		versionID, bucket, key, etag, size, now, hlcTS, siteID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -796,6 +824,9 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			return err
 		}
 	}
+	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, ""); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -805,14 +836,15 @@ func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, siz
 		return errors.New("meta: bucket and key required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	hlcTS, siteID := s.nextHLC()
 
 	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
 INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, '', '', 'ACTIVE')`,
-		versionID, bucket, key, etag, size, now); err != nil {
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+		versionID, bucket, key, etag, size, now, hlcTS, siteID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -829,6 +861,9 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			versionID, manifestPath); err != nil {
 			return err
 		}
+	}
+	if err := s.recordOplogTx(tx, hlcTS, "put", bucket, key, versionID, ""); err != nil {
+		return err
 	}
 	return nil
 }
@@ -858,6 +893,28 @@ func (s *Store) RecordManifest(ctx context.Context, versionID, manifestPath stri
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO manifests(version_id, path) VALUES(?, ?)
 ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`, versionID, manifestPath)
+	return err
+}
+
+func (s *Store) recordOplogTx(tx *sql.Tx, hlcTS, opType, bucket, key, versionID, payload string) error {
+	if tx == nil {
+		return errors.New("meta: transaction required")
+	}
+	if bucket == "" || key == "" {
+		return errors.New("meta: bucket and key required")
+	}
+	if opType == "" {
+		return errors.New("meta: op type required")
+	}
+	siteID := s.siteID
+	if siteID == "" {
+		siteID = "local"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.Exec(`
+INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, created_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		siteID, hlcTS, opType, bucket, key, versionID, payload, now)
 	return err
 }
 
@@ -1563,10 +1620,14 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 		}
 		return false, err
 	}
+	hlcTS, siteID := s.nextHLC()
 	if _, err = tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
 		return false, err
 	}
-	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED' WHERE version_id=?", versionID)
+	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID)
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, ""); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
@@ -1600,7 +1661,8 @@ WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
 		}
 		return false, err
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED' WHERE version_id=?", versionID); err != nil {
+	hlcTS, siteID := s.nextHLC()
+	if _, err = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID); err != nil {
 		return false, err
 	}
 	var currentVersion string
@@ -1629,6 +1691,9 @@ LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
 				return false, err
 			}
 		}
+	}
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, ""); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
