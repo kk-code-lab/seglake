@@ -537,50 +537,24 @@ func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMar
 		limit = 1000
 	}
 	pattern := escapeLike(prefix) + "%"
-	var rows *sql.Rows
-	if keyMarker != "" && uploadIDMarker != "" {
-		rows, err = s.db.QueryContext(ctx, `
+	rows, err := queryWithMarkers(ctx, s.db,
+		`
 SELECT upload_id, bucket, key, created_at, state
 FROM multipart_uploads
-WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
-  AND (key > ? OR (key = ? AND upload_id > ?))
-ORDER BY key, upload_id
-LIMIT ?`, bucket, pattern, keyMarker, keyMarker, uploadIDMarker, limit)
-	} else if keyMarker != "" {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT upload_id, bucket, key, created_at, state
-FROM multipart_uploads
-WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
-  AND key > ?
-ORDER BY key, upload_id
-LIMIT ?`, bucket, pattern, keyMarker, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT upload_id, bucket, key, created_at, state
-FROM multipart_uploads
-WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'
-ORDER BY key, upload_id
-LIMIT ?`, bucket, pattern, limit)
-	}
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
+		"key", "upload_id", bucket, pattern, keyMarker, uploadIDMarker, limit,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if cerr := rows.Close(); err == nil && cerr != nil {
-			err = cerr
-		}
-	}()
-	for rows.Next() {
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
 		var up MultipartUpload
-		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
-			return nil, err
+		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+			return err
 		}
 		out = append(out, up)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+		return nil
+	})
 }
 
 // GetMultipartUpload returns upload metadata.
@@ -810,51 +784,25 @@ func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, after
 		limit = 1000
 	}
 	pattern := escapeLike(prefix) + "%"
-	var rows *sql.Rows
-	if afterKey != "" && afterVersion != "" {
-		rows, err = s.db.QueryContext(ctx, `
+	rows, err := queryWithMarkers(ctx, s.db,
+		`
 SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
-WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND (o.key > ? OR (o.key = ? AND v.version_id > ?))
-ORDER BY o.key, v.version_id
-LIMIT ?`, bucket, pattern, afterKey, afterKey, afterVersion, limit)
-	} else if afterKey != "" {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
-FROM objects_current o
-JOIN versions v ON v.version_id = o.version_id
-WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND o.key > ?
-ORDER BY o.key
-LIMIT ?`, bucket, pattern, afterKey, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
-FROM objects_current o
-JOIN versions v ON v.version_id = o.version_id
-WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\'
-ORDER BY o.key
-LIMIT ?`, bucket, pattern, limit)
-	}
+WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\'`,
+		"o.key", "v.version_id", bucket, pattern, afterKey, afterVersion, limit,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if cerr := rows.Close(); err == nil && cerr != nil {
-			err = cerr
-		}
-	}()
-	for rows.Next() {
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
 		var meta ObjectMeta
-		if err := rows.Scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
-			return nil, err
+		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+			return err
 		}
 		out = append(out, meta)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+		return nil
+	})
 }
 
 func escapeLike(s string) string {
@@ -867,6 +815,42 @@ func escapeLike(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+func queryWithMarkers(ctx context.Context, db *sql.DB, baseQuery, primary, secondary string, bucket, pattern, keyMarker, secondaryMarker string, limit int) (*sql.Rows, error) {
+	if db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	if keyMarker != "" && secondaryMarker != "" {
+		query := baseQuery + " AND (" + primary + " > ? OR (" + primary + " = ? AND " + secondary + " > ?)) ORDER BY " + primary + ", " + secondary + " LIMIT ?"
+		return db.QueryContext(ctx, query, bucket, pattern, keyMarker, keyMarker, secondaryMarker, limit)
+	}
+	if keyMarker != "" {
+		query := baseQuery + " AND " + primary + " > ? ORDER BY " + primary + ", " + secondary + " LIMIT ?"
+		return db.QueryContext(ctx, query, bucket, pattern, keyMarker, limit)
+	}
+	query := baseQuery + " ORDER BY " + primary + ", " + secondary + " LIMIT ?"
+	return db.QueryContext(ctx, query, bucket, pattern, limit)
+}
+
+func scanRows(rows *sql.Rows, scanFn func(scan func(dest ...any) error) error) (err error) {
+	if rows == nil {
+		return nil
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		if err := scanFn(rows.Scan); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GetSegment returns segment metadata.
