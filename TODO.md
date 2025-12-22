@@ -1,10 +1,6 @@
 # TODO / Backlog (na bazie aktualnego stanu)
 
 ## 1) S3 API — luki kompatybilności
-- DELETE obiektu i bucketu.
-- CopyObject.
-- If-Match / If-None-Match / inne warunkowe nagłówki.
-- Virtual-hosted-style.
 - Lepsze błędy AWS (pełniejsze pola, mapowania kodów).
 
 ## 2) Multipart — bezpieczeństwo danych
@@ -31,3 +27,8 @@
 - TLS przez reverse-proxy: checklist i example config.
 - Dokumentacja integracji z awscli/s3cmd.
 
+## Done (2025-12-22)
+- DELETE obiektu i bucketu.
+- CopyObject.
+- If-Match / If-None-Match.
+- Virtual-hosted-style (za flagą).

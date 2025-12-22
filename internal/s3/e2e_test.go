@@ -1402,6 +1402,407 @@ func TestS3E2EListMultipartUploads(t *testing.T) {
 		t.Fatalf("expected xml response")
 	}
 }
+
+func TestS3E2EDeleteObject(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/delete", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, server.URL+"/bucket/delete", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delReq, "test", "testsecret", "us-east-1")
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE error: %v", err)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status: %d", delResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/delete", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+}
+
+func TestS3E2EDeleteBucket(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/obj", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	// Bucket not empty -> 409
+	delBucketReq, err := http.NewRequest(http.MethodDelete, server.URL+"/bucket", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delBucketReq, "test", "testsecret", "us-east-1")
+	delBucketResp, err := http.DefaultClient.Do(delBucketReq)
+	if err != nil {
+		t.Fatalf("DELETE bucket error: %v", err)
+	}
+	delBucketResp.Body.Close()
+	if delBucketResp.StatusCode != http.StatusConflict {
+		t.Fatalf("DELETE bucket status: %d", delBucketResp.StatusCode)
+	}
+
+	// Delete object then bucket
+	delObjReq, err := http.NewRequest(http.MethodDelete, server.URL+"/bucket/obj", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delObjReq, "test", "testsecret", "us-east-1")
+	delObjResp, err := http.DefaultClient.Do(delObjReq)
+	if err != nil {
+		t.Fatalf("DELETE object error: %v", err)
+	}
+	delObjResp.Body.Close()
+	if delObjResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE object status: %d", delObjResp.StatusCode)
+	}
+
+	delBucketReq, err = http.NewRequest(http.MethodDelete, server.URL+"/bucket", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delBucketReq, "test", "testsecret", "us-east-1")
+	delBucketResp, err = http.DefaultClient.Do(delBucketReq)
+	if err != nil {
+		t.Fatalf("DELETE bucket error: %v", err)
+	}
+	delBucketResp.Body.Close()
+	if delBucketResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE bucket status: %d", delBucketResp.StatusCode)
+	}
+}
+
+func TestS3E2EConditionalGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/cond", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+	etag := putResp.Header.Get("ETag")
+
+	matchReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/cond", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	matchReq.Header.Set("If-Match", etag)
+	signRequest(matchReq, "test", "testsecret", "us-east-1")
+	matchResp, err := http.DefaultClient.Do(matchReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	matchResp.Body.Close()
+	if matchResp.StatusCode != http.StatusOK {
+		t.Fatalf("If-Match status: %d", matchResp.StatusCode)
+	}
+
+	badMatchReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/cond", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	badMatchReq.Header.Set("If-Match", "\"deadbeef\"")
+	signRequest(badMatchReq, "test", "testsecret", "us-east-1")
+	badMatchResp, err := http.DefaultClient.Do(badMatchReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	badMatchResp.Body.Close()
+	if badMatchResp.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("If-Match status: %d", badMatchResp.StatusCode)
+	}
+
+	noneReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/cond", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	noneReq.Header.Set("If-None-Match", etag)
+	signRequest(noneReq, "test", "testsecret", "us-east-1")
+	noneResp, err := http.DefaultClient.Do(noneReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	noneResp.Body.Close()
+	if noneResp.StatusCode != http.StatusNotModified {
+		t.Fatalf("If-None-Match status: %d", noneResp.StatusCode)
+	}
+}
+
+func TestS3E2ECopyObject(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/src", strings.NewReader("copy-data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	copyReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/dst", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	copyReq.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	signRequest(copyReq, "test", "testsecret", "us-east-1")
+	copyResp, err := http.DefaultClient.Do(copyReq)
+	if err != nil {
+		t.Fatalf("COPY error: %v", err)
+	}
+	copyResp.Body.Close()
+	if copyResp.StatusCode != http.StatusOK {
+		t.Fatalf("COPY status: %d", copyResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/dst", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "copy-data" {
+		t.Fatalf("copy body mismatch: %q", string(body))
+	}
+}
+
+func TestS3E2EVirtualHosted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine:        eng,
+		Meta:          store,
+		VirtualHosted: true,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/vhost-key", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	putReq.Host = "bucket.localhost"
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/vhost-key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	getReq.Host = "bucket.localhost"
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "data" {
+		t.Fatalf("GET body mismatch")
+	}
+}
+
 func signRequest(r *http.Request, accessKey, secretKey, region string) {
 	signRequestWithTime(r, accessKey, secretKey, region, time.Now().UTC())
 }

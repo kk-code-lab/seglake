@@ -881,6 +881,80 @@ func (s *Store) ListBuckets(ctx context.Context) (out []string, err error) {
 	return out, nil
 }
 
+// BucketExists checks whether a bucket exists.
+func (s *Store) BucketExists(ctx context.Context, bucket string) (bool, error) {
+	if bucket == "" {
+		return false, errors.New("meta: bucket required")
+	}
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT bucket FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// BucketHasObjects checks whether a bucket has any current objects.
+func (s *Store) BucketHasObjects(ctx context.Context, bucket string) (bool, error) {
+	if bucket == "" {
+		return false, errors.New("meta: bucket required")
+	}
+	var any int
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM objects_current WHERE bucket=? LIMIT 1", bucket).Scan(&any)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteBucket removes a bucket entry.
+func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM buckets WHERE bucket=?", bucket)
+	return err
+}
+
+// DeleteObject removes the current object pointer and marks the version as deleted.
+func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, error) {
+	if bucket == "" || key == "" {
+		return false, errors.New("meta: bucket and key required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var versionID string
+	err = tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&versionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
+		return false, err
+	}
+	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED' WHERE version_id=?", versionID)
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // DeleteSegment removes a segment row.
 func (s *Store) DeleteSegment(ctx context.Context, segmentID string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM segments WHERE segment_id=?", segmentID)
