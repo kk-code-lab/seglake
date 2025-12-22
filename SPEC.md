@@ -1,429 +1,198 @@
-# Plan projektu: S3-compatible object store (MVP → multi-site async)
+# SPEC: Seglake — stan aktualny implementacji
 
-Wersja: v0.1 (specyfikacja robocza)  
-Założenia: single-node MVP, docelowo multi-site async (faza C), prosty deploy/operacje, niski RAM/CPU, correctness > performance.
-
----
-
-## 1) Streszczenie
-
-Budujesz system S3‑kompatybilny, którego rdzeń stanowią:
-
-- **append-only segmenty danych** (log‑structured) dzielone na **chunki 4 MiB**
-- **metadane w SQLite (WAL, fsync)** + **manifesty jako pliki** (content‑addressed)
-- **twardy kontrakt trwałości**: ACK dopiero po fsync danych + commit WAL
-- **narzędzia operacyjne**: `status`, `scrub`, `fsck/rebuild-index`, `gc`, `snapshot`, support bundle
-- **S3 API**: PUT/GET/HEAD, LIST (ListObjectsV2), delimiter/common prefixes, range GET, SigV4, presigned GET/PUT
-- **Multipart** jako osobny milestone (MVP+1), z AWS‑style ETag i zasadą 5 MiB per part (poza ostatnim)
-- **multi-site** w przyszłości: oplog (HLC+LWW), pull chunks po hash, HMAC→mTLS, watermarks, bootstrap przez snapshot
-
-Kluczowe kompromisy:
-- brak CAS (If‑Match/If‑None‑Match) – spójne z multi‑site bez consensus
-- brak auto‑naprawy bitrot bez replik (jest wykrywanie + alarm + restore)
-- GC i scrub manual (na start), z silnym “plan” i bezpiecznym domyślnym zachowaniem
+Wersja: v0.2 (spec odzwierciedla aktualny kod)  
+Zakres: single-node, path-style S3, correctness > performance, minimalny narzut zasobów.
 
 ---
 
-## 2) Cele i nie‑cele
+## 1) Podsumowanie
 
-### 2.1 Cele MVP
-- S3‑kompatybilność wystarczająca dla typowych SDK/toolingu:
-  - SigV4 (zgodnie z AWS), path‑style, ListObjectsV2 XML, AWS Error XML
-  - presigned GET/PUT
-  - range GET
-- “Correctness first”:
-  - crash‑consistency: po kill -9 system wraca do spójnego stanu, bez ręcznego dłubania w DB
-  - ACK = durable (fsync danych + metadanych)
-- Prosty deploy:
-  - jeden binarek + plik konfiguracyjny + katalog danych
-  - TLS poza usługą (reverse proxy), w MVP dopuszczalny “http tylko na zaufanej sieci”
-- Niski koszt zasobów:
-  - brak dużych cache’y na start
-  - ograniczenia concurrency i backpressure
-
-### 2.2 Nie‑cele MVP
-- pełna implementacja całego S3 (policy/IAM, ACLs, Object Lock, replication rules, lifecycle, inventory itp.)
-- strong consistency LIST / globalny consensus
-- erasure coding
-- globalna deduplikacja chunków między obiektami (świadomie odłożone)
+Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object store oparty o:
+- **append-only segmenty** z chunkami **4 MiB**,
+- **manifesty obiektów** jako osobne pliki (binary codec),
+- **metadane w SQLite (WAL, synchronous=FULL)**,
+- **twardy kontrakt trwałości**: fsync segmentów + commit WAL zanim obiekt jest widoczny,
+- **narzędzia ops**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite plan/run,
+- **S3 API**: PUT/GET/HEAD, LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
 
 ---
 
-## 3) Założenia produktowe i ograniczenia
+## 2) Status implementacji (faktycznie zrobione)
 
-- skala: ≤ 1 TB, < 1e6 obiektów, typowo 32–512 MiB
-- max obiekt: **1 GiB** (MVP)
-- key:
-  - percent‑decode → **wymagany poprawny UTF‑8**
-  - brak normalizacji (NFC/NFD) – przechowujesz dokładnie po decode
-- bucket: tworzony implicit przy pierwszym PUT (konfigowalny “strict mode” później)
+### 2.1 Storage core
+- Chunking 4 MiB + BLAKE3 per chunk.
+- Segmenty append-only z nagłówkiem i stopką (stopka z checksum, pola bloom/index na razie puste).
+- Rotacja segmentów: **~1 GiB** lub **~10 min bezczynności** (co pierwsze).
+- Reuse open segmentów; odzysk po crash (doszczelnianie open segmentów przy starcie).
+- Manifesty: pliki binarne, ścieżka zwykle `data/objects/manifests/<versionID>` lub nazwa `<bucket>__<key>__<version>`.
 
----
+### 2.2 Metadane
+- SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) przy flush.
+- Tabele: buckets, versions, objects_current, manifests, segments, api_keys, api_key_bucket_allow,
+  multipart_uploads, multipart_parts, rebuild_state, ops_runs.
 
-## 4) Architektura wysokopoziomowa
+### 2.3 S3 API
+- Path-style: `/<bucket>/<key>`.
+- PUT/GET/HEAD obiektu, ListObjectsV2, ListObjectsV1, ListBuckets, GetBucketLocation.
+- Range GET: pojedynczy i multi-range (multipart/byteranges).
+- SigV4 (Authorization oraz presigned) + fallback SigV2 **tylko** dla listowania.
+- Presigned GET/PUT (TTL do 7 dni).
+- Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 
-### 4.1 Komponenty
-1) **S3 Frontend (HTTP)**
-   - SigV4, presigned, error XML, list XML
-2) **Write path**
-   - chunking 4 MiB, streaming, zapis do segmentów, bariera fsync
-3) **Metadata store**
-   - SQLite WAL (synchronous=FULL), indeks `objects_current`, rejestr segmentów, uploady multipart
-4) **Manifest store**
-   - pliki `data/manifests/<id>` (content-addressed), wykorzystywane do recovery i przyszłej replikacji
-5) **Maintenance**
-   - scrub (manual), GC (manual; v0 bez rewrite, v1 z rewrite)
-6) **Recovery tooling**
-   - fsck (online, read-only), rebuild-index (sqlite.new + atomic swap)
-7) **Observability (minimalne)**
-   - structured logs + request-id
-   - minimalne metryki (bez Prometheus na start)
-8) **(Faza C) Replikacja**
-   - `/v1/repl/*` JSON, HMAC, pull chunks, handshake capabilities
-
-### 4.2 API wersjonowanie
-- S3 API: na `/` (żeby SDK działały bez kombinowania)
-- Endpointy wewnętrzne: `/v1/*`
-  - `/v1/meta/*`, `/v1/repl/*`, `/v1/admin/*`
+### 2.4 Ops i observability
+- Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
+  gc-rewrite-plan/gc-rewrite-run (throttle + pause file).
+- `/v1/meta/stats` z podstawowymi licznikami (objects, segments, bytes_live, ostatnie fsck/scrub/gc).
+- Request-id w logach i odpowiedziach.
 
 ---
 
-## 5) Model danych: segmenty, chunki, manifesty
+## 3) Architektura i dane
 
-### 5.1 Chunking
-- rozmiar chunka: **4 MiB**
-- hash chunka: **BLAKE3**
-- deduplikacja: **brak** (ani globalnie, ani w obrębie obiektu)
-  - hash służy do integralności, scrub i przyszłego “pull” w replikacji
+### 3.1 Układ na dysku
+- Root danych: `<data-dir>/objects/`
+  - `segments/` — pliki segmentów
+  - `manifests/` — pliki manifestów
+- Metadane: `<data-dir>/meta.db` (+ WAL/SHM)
 
-### 5.2 Segmenty (log‑structured)
-- segment jest plikiem append‑only:
-  - `OPEN` → dopisujesz rekordy
-  - `SEALED` → zamrożony, ma footer z indeksem
-- rotacja: **1 GiB lub 10 min** (cokolwiek pierwsze)
+### 3.2 Chunking
+- Stały rozmiar: **4 MiB** (ostatni chunk może być mniejszy).
+- Hash chunku: **BLAKE3**.
 
-**Rekord chunka** (w segmencie):
-- `chunk_hash` (32B BLAKE3)
-- `len` (u32)
-- `data` (len)
-- (opcjonalnie w przyszłości: CRC32, ale nie w MVP)
+### 3.3 Segmenty
+- Format:
+  - Header: magic + version.
+  - Rekordy: `chunk_hash(32B) + len(u32) + data`.
+  - Footer: magic + version + offsety bloom/index (na razie puste) + checksum (BLAKE3 po stopce).
+- Stan: OPEN → SEALED.
+- Rotacja: 1 GiB lub 10 min bezczynności.
 
-**Footer (SEALED)**:
-- `bloom filter` (target FP ~1%)
-- `sparse index` (stride ~4 MiB danych)
-- `footer checksum` + `format_version`
+### 3.4 Manifest obiektu
+- Manifest zawiera: bucket, key, versionID, size, listę chunków (hash, segment_id, offset, len).
+- Przechowywanie:
+  - plik manifestu na dysku (binary codec),
+  - ścieżka manifestu w SQLite (tabela `manifests`).
 
-### 5.3 Manifest obiektu (content-addressed)
-Manifest finalnej wersji obiektu to lista chunków w kolejności:
-- `idx`
-- `chunk_hash`
-- `segment_id`, `offset`, `len`
+### 3.5 Metadane (SQLite)
+- `objects_current` wskazuje aktualną wersję obiektu.
+- `versions` przechowuje etag (MD5), size, last_modified_utc, state.
+- `segments` przechowuje stan, size, checksum stopki.
+- Multipart: `multipart_uploads`, `multipart_parts`.
 
-Przechowywanie:
-- w SQLite: szybki lookup (opcjonalnie pełna tabela manifestów lub referencja)
-- na dysku: `data/manifests/<version_id>` (zalecane zawsze)
+### 3.6 Durability / barrier
+- **Write barrier**:
+  - `sync_interval` ~100ms
+  - `sync_bytes` ~128MiB
+- Kolejność: zapis segmentów → fsync segmentów → zapis manifestu + update metadanych w transakcji → WAL flush.
+- ACK klienta po zakończeniu bariery.
 
----
+### 3.7 Read path
+- GET/HEAD: rozwiązywanie `objects_current` → manifest → strumień z segmentów.
+- Range GET: pojedynczy range lub `multipart/byteranges` dla wielu zakresów.
 
-## 6) Metadane (SQLite WAL)
-
-### 6.1 Tabele (minimum)
-- `buckets(bucket, created_at)`
-- `objects_current(bucket, key, version_id)` + indeks `(bucket, key)`
-- `versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)`
-  - `state`: ACTIVE / DAMAGED / (opcjonalnie EXPIRED)
-- `manifests(version_id, idx, chunk_hash, segment_id, offset, len)`  
-  (albo: trzymasz tylko referencję do pliku manifestu + lazy load)
-- `segments(segment_id, path, state, created_at, sealed_at, size, footer_checksum)`
-- `api_keys(access_key, secret_hash, salt, enabled, created_at, label, last_used_at)`
-- `api_key_bucket_allow(access_key, bucket)` (allowlist)
-
-### 6.2 LastModified i czas
-- `last_modified_utc` = wall‑clock UTC w momencie commit (dla kompatybilności S3)
-- HLC służy do deterministycznego porządku i LWW (pod multi-site)
+### 3.8 Recovery
+- Przy starcie: open segmenty są domykane (dopisywana stopka) lub oznaczane jako SEALED,
+  jeśli footer już był poprawny.
 
 ---
 
-## 7) Durability i spójność (kontrakt)
+## 4) S3 API — zakres
 
-### 7.1 ACK = durable (twarda reguła)
-Żaden obiekt nie może być “widoczny” w metadanych, jeśli jego dane nie są trwałe.
+### 4.1 Endpoints
+- `GET /` — ListBuckets.
+- `GET /<bucket>?list-type=2` — ListObjectsV2.
+- `GET /<bucket>?prefix=...` — ListObjectsV1 (marker).
+- `GET /<bucket>?location` — GetBucketLocation.
+- `PUT /<bucket>/<key>` — PUT object.
+- `GET /<bucket>/<key>` — GET object.
+- `HEAD /<bucket>/<key>` — HEAD object.
+- Multipart:
+  - `POST /<bucket>/<key>?uploads` — Initiate.
+  - `PUT /<bucket>/<key>?partNumber=N&uploadId=...` — UploadPart.
+  - `GET /<bucket>/<key>?uploadId=...` — ListParts.
+  - `POST /<bucket>/<key>?uploadId=...` — Complete.
+  - `DELETE /<bucket>/<key>?uploadId=...` — Abort.
+- `GET /<bucket>?uploads` — ListMultipartUploads (bez paginacji markerami).
 
-**Write barrier (group commit)**:
-- `sync_interval = 100ms`
-- `sync_bytes = 128MiB`
-- podczas bariery:
-  1) `fdatasync()` dla dotkniętych segmentów
-  2) transakcja SQLite (WAL): wpis wersji + manifest + update `objects_current` (+ wpis do oplog w przyszłości)
-  3) commit WAL (synchronous=FULL)
-  4) zapis `hlc_state`
+### 4.2 Auth
+- SigV4: Authorization header lub presigned query.
+- Presigned TTL: 1..7 dni.
+- Dopuszczony SigV2 **tylko** dla listowania (`GET /` lub `GET /<bucket>`).
+- `X-Amz-Content-Sha256` obsługiwany; `STREAMING-*` odrzucone.
+- Request time skew: domyślnie ±5 min (konfigurowalne).
+- Region `us` normalizowany do `us-east-1`.
+- Referencje testów: `internal/s3/e2e_test.go`.
 
-### 7.2 Read-after-write
-- GET/HEAD po ACK zawsze widzi nową wersję
+### 4.3 ETag
+- Single PUT: `MD5` całego payloadu.
+- Multipart: `md5(concat(md5(part_i))) + "-<partCount>"`.
+- Referencje testów: `internal/s3/e2e_test.go`.
 
-### 7.3 LIST
-- lokalnie: query po `(bucket, key)` z prefixem, tokeny kontynuacji
-- w multi-site eventual wynika z asynchronicznej replikacji
+### 4.4 Range GET (zachowanie)
+- `Range: bytes=a-b`, `bytes=a-`, `bytes=-n` wspierane.
+- Multi-range → `multipart/byteranges` z boundary opartym o request-id.
+- Nieobsługiwane/niepoprawne zakresy → `416 InvalidRange` + `Content-Range: bytes */<size>`.
+- Referencje testów: `internal/s3/range_test.go`, `internal/s3/e2e_test.go`.
 
----
-
-## 8) API: S3 kompatybilność
-
-### 8.1 Auth: AWS SigV4
-- canonical request zgodnie z AWS
-- region konfigurowalny
-- skew czasu ±5 min
-- wspierasz `x-amz-content-sha256: UNSIGNED-PAYLOAD` oraz pełny hash payloadu (weryfikowany streamingowo)
-- path‑style: `/<bucket>/<key>` (tylko)
- - wspierasz `?location` (GetBucketLocation) dla kompatybilności tooling/SDK
-- kompatybilność: dla starych narzędzi akceptujesz SigV2 **tylko** dla listowania (GET `/` lub list bucketu) i tylko gdy SigV4 się nie powiedzie
-
-### 8.2 Presigned URLs
-- GET i PUT obiektów
-- max TTL 7 dni (konfig)
-- signed headers: minimalnie `host`, opcjonalnie `range` dla GET
-
-### 8.3 LIST (ListObjectsV2)
-- XML jak AWS:
-  - `IsTruncated`, `NextContinuationToken`, `CommonPrefixes`, `Contents` (`Key`, `ETag`, `Size`, `LastModified`, `StorageClass=STANDARD`)
-- parametry:
-  - `prefix`, `delimiter=/`, `max-keys` (domyślnie 1000, max 1000), `continuation-token`
-- token: stateless, base64(last_key[, last_version_id])
-- kompatybilność z ListObjectsV1 (`marker`, `max-keys`, `prefix`, `delimiter`)
-
-### 8.4 Range GET
-- `Range: bytes=...` mapowany na zakres chunków + offsety
-
-### 8.5 Błędy (AWS Error XML)
-- `NoSuchKey`, `NoSuchBucket`, `AccessDenied`, `SignatureDoesNotMatch`, `RequestTimeTooSkewed`, `InvalidArgument`, `InternalError`
-- `RequestId` = request-id
-- `HostId` = stały hash instancji (placeholder)
-
-### 8.6 Request ID
-- generujesz krótki losowy `x-request-id` oraz (opcjonalnie) `x-amz-request-id`
-- logujesz go zawsze (INFO) i dołączasz do Error XML
+### 4.5 Błędy
+- XML zgodny z AWS (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
+- Przykłady walidowane w testach (m.in. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
+  `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.
 
 ---
 
-## 9) ETag (maksymalna interoperacyjność)
+## 5) Ops / maintenance
 
-### 9.1 Single PUT ETag = MD5
-- podczas PUT liczysz MD5 strumienia (streaming)
-- ETag w odpowiedziach i LIST = `"<md5hex>"`
+### 5.1 Tryby
+- `status` — liczba manifestów i segmentów.
+- `fsck` — spójność manifestów i granic segmentów.
+- `scrub` — weryfikacja hashy chunków; uszkodzone → `DAMAGED`.
+- `rebuild-index` — odbudowa meta z manifestów.
+- `snapshot` — kopia meta.db(+wal/shm) + raport.
+- `support-bundle` — snapshot + fsck + scrub.
+- `gc-plan`/`gc-run` — usuwa segmenty w 100% martwe.
+- `gc-rewrite-plan`/`gc-rewrite-run` — rewrite segmentów częściowo martwych (throttle + pause file).
 
-### 9.2 Integrity nadal oparta o BLAKE3 per chunk
-- BLAKE3 jest źródłem prawdy dla scrub/bitrot i przyszłego pull‑po‑hash
-- MD5 służy jako kompatybilny ETag
+### 5.2 Stats API
+`GET /v1/meta/stats` (JSON):
+- objects, segments, bytes_live,
+- ostatnie wyniki fsck/scrub/gc (czas + błędy + reclaim/rewritten).
 
----
-
-## 10) Multipart Upload (MVP+1)
-
-### 10.1 API
-- Initiate: `POST ?uploads`
-- UploadPart: `PUT ?partNumber=N&uploadId=...`
-- Complete: `POST ?uploadId=...` (XML list parts)
-- Abort: `DELETE ?uploadId=...`
-- ListParts: tak (zalecane); ListMultipartUploads później
-
-### 10.2 Trwałość UploadPart
-- identycznie jak PUT: ACK po fsync danych + commit WAL
-
-### 10.3 ETag multipart = AWS-style
-- `ETag = md5(concat(md5(part_i))) + "-" + partCount`
-
-### 10.4 Min part size
-- 5 MiB poza ostatnim
-
-### 10.5 Idempotencja i nadpisy
-- nadpisywanie partNumber dozwolone
-- Complete idempotentne
-
-### 10.6 Cleanup
-- TTL uploadów (np. 7 dni)
-- CLI: `mpu gc plan/run`
-
-### 10.7 Oplog
-- do oplogu trafia tylko finalny PUT po Complete
+### 5.3 Crash harness
+- `scripts/crash_harness.sh <iterations>`
 
 ---
 
-## 11) Maintenance: scrub, fsck, rebuild-index, snapshot
+## 6) Limity i parametry
 
-### 11.1 Scrub (manual)
-- domyślnie SEALED; OPEN tylko z flagą
-- obiekty z brakami: `DAMAGED` (GET/HEAD 500 + `X-Error: DamagedObject`)
-
-### 11.2 FSCK (online, read-only)
-Raport:
-- corrupted segments
-- missing chunks for live versions
-- oplog gaps/anomalies
-
-### 11.3 Rebuild-index
-- tworzy `sqlite.new` i atomowo podmienia
-- odbudowa oparta o segmenty+manifesty; oplog do wyboru latest i kontroli gapów
-
-### 11.4 Snapshot
-- CLI `snapshot`: meta (sqlite+wal+hlc_state) + manifests + lista segmentów + checksums
+- Chunk: 4 MiB (stałe).
+- Segment: ~1 GiB max, seal po ~10 min bezczynności.
+- Barrier: 100ms / 128MiB.
+- ListObjects max-keys: 1000.
+- ListMultipartUploads max-uploads: 1000.
+- Multipart min part size: 5 MiB poza ostatnim.
+- Brak wymuszonego limitu rozmiaru obiektu w kodzie (praktycznie ogranicza storage).
 
 ---
 
-## 12) GC i compaction (etapowanie)
+## 7) Znane braki / ograniczenia (stan obecny)
 
-### 12.1 GC v0 (MVP)
-- `gc plan`: liczy live_bytes per segment iterując po manifestach żywych wersji
-- usuwa tylko segmenty 100% martwe
-- min_age 24h od seala
-- “refuse unless --force”
-
-### 12.2 GC v1 (po MVP)
-- rewrite dla segmentów >50% martwe
-- 2-phase, throttling, pause-if-load
-- `gc plan` + `gc run`
-- rewrite plan/run: `gc-rewrite-plan` (JSON) + `gc-rewrite-run` (`-gc-force`)
-- throttling: `-gc-rewrite-bps`, pauza przez `-gc-pause-file`
+- Brak DELETE obiektów i bucketów.
+- Brak CopyObject i wersjonowania po API.
+- Brak ACL/IAM/polityk, brak per-key limitów i rate-limitów.
+- Brak TLS w aplikacji (zakładany reverse proxy).
+- Brak virtual-hosted-style.
+- Brak If-Match/If-None-Match i pozostałych warunkowych operacji.
+- Brak multipart cleanup TTL; ListMultipartUploads bez markerów/paginacji.
+- GC nie uwzględnia aktywnych multipartów — **nie uruchamiać GC podczas aktywnych uploadów**.
+- Stopka segmentu nie zawiera jeszcze realnego bloom/index (pola są placeholderami).
+- Brak replikacji / multi-site / oplogu / HLC.
 
 ---
 
-## 13) Observability (minimalne metryki bez Prometheus)
+## 8) Kolejne sensowne kroki (propozycje)
 
-### 13.1 Logi
-- structured logs + request-id
-- SigV4 debug tylko na DEBUG, z redakcją `Authorization` i `X-Amz-*`
-
-### 13.2 Minimalne metryki
-Endpoint: `GET /v1/meta/stats` (JSON):
-- `requests_total{op,status_class}`
-- `inflight_put`, `inflight_get`
-- `bytes_in_total`, `bytes_out_total`
-- latencje (rolling p50/p95/p99) per op
-- segmenty (open/sealed), bytes total
-- barrier stats (count, last_duration)
-- auth failures, signature mismatches
-- status ostatniego scrub/gc/fsck
-- gdy auth włączony, `/v1/meta/stats` wymaga SigV4
-
----
-
-## 14) Bezpieczeństwo
-
-### 14.1 TLS
-- MVP: HTTP na zaufanej sieci
-- produkcyjnie: TLS w reverse proxy
-- `trust_proxy_headers` tylko z allowlistą proxy IP/CIDR
-
-### 14.2 API keys
-- Argon2id/scrypt + salt
-- allowlist bucketów per api_key
-- rate limiting auth failures per IP i per key
-- limity per key (inflight)
-
----
-
-## 15) Multi-site async (faza C) – plan
-
-- LWW tie-break `(hlc_ts, site_id)`
-- per-site `op_seq`, sync “since seq”
-- JSON batches + `protocol_version` + capabilities
-- pull chunks po hash
-- HMAC raw-body + timestamp TTL 30s → docelowo mTLS
-- watermarks per peer blokują GC
-- bootstrap przez snapshot; offline > TTL → re-seed
-
----
-
-## 16) Roadmapa
-
-### Milestone 0: storage core
-- segmenty + manifesty + SQLite schema
-
-### Milestone 1: S3 core
-- SigV4, errors XML, list v2, range GET, ETag single PUT = MD5
-
-### Milestone 2: ops/recovery
-- fsck, rebuild-index, snapshot, support bundle, GC v0, scrub
-
-### Milestone 3: multipart
-- initiate/parts/complete/abort + ListParts + cleanup
-
-### Milestone 4+: GC rewrite
-
-### Faza C: multi-site
-
----
-
-## 16.1) Backlog po MVP (priorytety)
-
-### P0 (stabilność i correctness)
-- testy crash-consistency (kill -9 + invariants)
-- obsługa niezamkniętych segmentów po crash (recovery + audit)
-- weryfikacja end-to-end durability (fsync/flush)
-
-### P1 (GC i storage efficiency)
-- GC v1: rewrite segmentów >50% martwe (2-phase)
-- throttling GC i pause-if-load
-- metryki GC (time/bytes reclaimed) + raporty trendów
-
-### P2 (S3 compat & API polish)
-- bucket listing + region headers
-- lepsza obsługa Range (multipart ranges)
-- pełniejsze błędy AWS (Message/Code/Resource/RequestId)
-
-### P3 (observability & operability)
-- bardziej szczegółowe metryki (p95/p99, bytes in/out)
-- structured logs: obcinanie payloadów, pełna redakcja sekretów
-- support bundle: automatyczna redakcja kluczy i tokenów
-
-### P4 (multi-site)
-- HLC state persistence + clock skew handling
-- replika op/manifest sync + watermarks
-- snapshot bootstrap + peer recovery
-
----
-
-## 17) Alternatywy
-
-- metadane: SQLite (MVP) → ewentualnie RocksDB (później)
-- global dedup: odłożone
-- consensus/strong consistency: nie
-- erasure coding: odłożone
-
-### 17.1 Minimalny stack (MVP, deps minimalne)
-- wymagane zewnętrzne: `modernc.org/sqlite` (pure Go) + `github.com/zeebo/blake3`
-- reszta: stdlib + własna implementacja (router/CLI/config/logi)
-
----
-
-## 18) Ryzyka i mitigacje
-
-- SigV4 canonicalization → test vectors + redacted debug
-- crash-consistency → kill -9 tests + invariants
-- GC rewrite correctness → etapowanie + 2-phase + fsck
-- clock skew → HLC persist + wall-clock tylko dla LastModified
-- fsync koszt → group commit + limity concurrency
-
----
-
-## 19) Pozostałe elementy MVP (checklista)
-
-### 19.1 Core durability i storage
-- [x] Doprecyzowany group commit: sync_interval/sync_bytes z realnym batchingiem
-- [x] Reuse open segmentów (nie zawsze “segment per PUT”)
-- [x] Footer: bloom + sparse index (na razie stub)
-
-### 19.2 Metadata / recovery
-- [x] FSCK: pełna spójność manifest↔segment↔DB (raporty + naprawy)
-- [x] Rebuild-index: weryfikacja wersji vs. stan w DB (DAMAGED/ACTIVE)
-
-### 19.3 S3 polish
-- [x] SigV4 edge cases (canonicalization test vectors)
-- [x] ListObjectsV2: marker compatibility (AWS-style)
-
-### 19.4 Observability
-- [x] `/v1/meta/stats` JSON endpoint
-- [x] Structured request logs z request-id
-
-### 19.5 Ops polish
-- [x] GC plan file + `gc run --from-plan`
-- [x] Support bundle z redakcją sekretów
+1) Dokończyć API obiektowe (DELETE, CopyObject) i usunąć największe kompatybilnościowe luki.
+2) Bezpieczny GC względem multipartów (np. traktować parts jako live albo blokować GC).
+3) Dodać realny bloom/index w stopce segmentu.
+4) Rozszerzyć metryki `/v1/meta/stats` o latencje i ruch.
