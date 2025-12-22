@@ -12,7 +12,6 @@
 - Raporty trendów GC (historyka, reclaim rate).
 
 ## 5) Security / auth
-- Pełna redakcja sekretów w logach.
 
 ## 6) Produkcyjność
 - TLS przez reverse-proxy: checklist i example config.
@@ -32,3 +31,4 @@
 - Uspójnione raporty ops JSON (schema_version).
 - Rate-limiting błędów auth (per IP/per key).
 - Per-key limity inflight.
+- Redakcja sekretów w logach (query z presigned).
