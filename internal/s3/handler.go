@@ -146,7 +146,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodHead:
 		h.handleGet(r.Context(), mw, r, bucket, key, requestID, true)
 	case http.MethodDelete:
-		h.handleDeleteObject(r.Context(), mw, bucket, key, requestID, r.URL.Path)
+		h.handleDeleteObject(r.Context(), mw, r, bucket, key, requestID, r.URL.Path)
 	default:
 		if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
 			h.handleInitiateMultipart(r.Context(), mw, bucket, key, requestID, r.URL.Path)
@@ -254,12 +254,24 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if result.ETag != "" {
 		w.Header().Set("ETag", `"`+result.ETag+`"`)
 	}
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
+	}
 	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string, headOnly bool) {
-	meta, err := h.Meta.GetObjectMeta(ctx, bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	var (
+		meta *meta.ObjectMeta
+		err  error
+	)
+	if versionID != "" {
+		meta, err = h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+	} else {
+		meta, err = h.Meta.GetObjectMeta(ctx, bucket, key)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID, r.URL.Path)
@@ -275,6 +287,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if meta.ETag != "" {
 		w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	}
+	if meta.VersionID != "" {
+		w.Header().Set("x-amz-version-id", meta.VersionID)
 	}
 	if meta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
@@ -412,6 +427,9 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	if result != nil && result.ETag != "" {
 		w.Header().Set("ETag", `"`+result.ETag+`"`)
 	}
+	if result != nil && result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
+	}
 	resp := copyObjectResult{
 		ETag:         `"` + result.ETag + `"`,
 		LastModified: result.CommittedAt.UTC().Format(time.RFC3339),
@@ -421,7 +439,7 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
-func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter, bucket, key, requestID, resource string) {
+func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	if h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
 		return
@@ -435,10 +453,23 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, resource)
 		return
 	}
-	_, err = h.Meta.DeleteObject(ctx, bucket, key)
-	if err != nil {
-		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
-		return
+	versionID := r.URL.Query().Get("versionId")
+	if versionID != "" {
+		deleted, err := h.Meta.DeleteObjectVersion(ctx, bucket, key, versionID)
+		if err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+			return
+		}
+		if !deleted {
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
+			return
+		}
+		w.Header().Set("x-amz-version-id", versionID)
+	} else {
+		if _, err := h.Meta.DeleteObject(ctx, bucket, key); err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

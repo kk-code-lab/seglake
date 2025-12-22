@@ -101,13 +101,13 @@ func TestStatsIncludesOpsRuns(t *testing.T) {
 		t.Fatalf("RecordOpsRun fsck: %v", err)
 	}
 	if err := store.RecordOpsRun(context.Background(), "gc-rewrite", &ReportOps{
-		FinishedAt:       time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
-		Errors:           0,
-		Deleted:          2,
-		ReclaimedBytes:   1024,
+		FinishedAt:        time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
+		Errors:            0,
+		Deleted:           2,
+		ReclaimedBytes:    1024,
 		RewrittenSegments: 1,
-		RewrittenBytes:   2048,
-		NewSegments:      1,
+		RewrittenBytes:    2048,
+		NewSegments:       1,
 	}); err != nil {
 		t.Fatalf("RecordOpsRun gc: %v", err)
 	}
@@ -229,5 +229,54 @@ func TestListGCTrendsFiltersPlansAndLimit(t *testing.T) {
 	}
 	if len(limited) != 1 {
 		t.Fatalf("expected 1 trend, got %d", len(limited))
+	}
+}
+
+func TestDeleteObjectVersionPromotesPrevious(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	bucket := "b"
+	key := "k"
+	if err := store.RecordPut(ctx, bucket, key, "v1", "etag1", 1, ""); err != nil {
+		t.Fatalf("RecordPut v1: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := store.RecordPut(ctx, bucket, key, "v2", "etag2", 2, ""); err != nil {
+		t.Fatalf("RecordPut v2: %v", err)
+	}
+	meta, err := store.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.VersionID != "v2" {
+		t.Fatalf("expected current v2, got %s", meta.VersionID)
+	}
+	deleted, err := store.DeleteObjectVersion(ctx, bucket, key, "v2")
+	if err != nil {
+		t.Fatalf("DeleteObjectVersion: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("expected delete to succeed")
+	}
+	meta, err = store.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		t.Fatalf("GetObjectMeta after delete: %v", err)
+	}
+	if meta.VersionID != "v1" {
+		t.Fatalf("expected current v1 after delete, got %s", meta.VersionID)
+	}
+	v2, err := store.GetObjectVersion(ctx, bucket, key, "v2")
+	if err != nil {
+		t.Fatalf("GetObjectVersion v2: %v", err)
+	}
+	if v2.State != "DELETED" {
+		t.Fatalf("expected v2 state DELETED, got %s", v2.State)
 	}
 }
