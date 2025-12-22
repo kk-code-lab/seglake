@@ -245,11 +245,6 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		return errAccessDenied
 	}
 	policy := strings.ToLower(strings.TrimSpace(key.Policy))
-	if policy == "ro" || policy == "read-only" {
-		if isWriteRequest(r) {
-			return errAccessDenied
-		}
-	}
 	if bucket, ok := h.bucketFromRequest(r); ok {
 		allowed, err := h.Meta.IsBucketAllowed(ctx, accessKey, bucket)
 		if err != nil {
@@ -258,21 +253,22 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if !allowed {
 			return errAccessDenied
 		}
+		if action := policyActionForRequest(h.opForRequest(r)); action != "" {
+			pol, err := ParsePolicy(policy)
+			if err != nil {
+				return errAccessDenied
+			}
+			keyName := ""
+			if _, keyParsed, ok := h.parseBucketKey(r); ok {
+				keyName = keyParsed
+			}
+			if !pol.Allows(action, bucket, keyName) {
+				return errAccessDenied
+			}
+		}
 	}
 	_ = h.Meta.RecordAPIKeyUse(ctx, accessKey)
 	return nil
-}
-
-func isWriteRequest(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	switch r.Method {
-	case http.MethodPut, http.MethodPost, http.MethodDelete:
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *Handler) isSigV2ListRequest(r *http.Request) bool {
