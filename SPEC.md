@@ -209,12 +209,12 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ## 7) Znane braki / ograniczenia (stan obecny)
 
- - Brak pełnych ACL/IAM/polityk (jest tylko prosta polityka `rw`/`ro` + allow‑lista bucketów).
-- Brak TLS w aplikacji (zakładany reverse proxy).
+- Brak pełnych ACL/IAM/polityk (jest tylko prosta polityka `rw`/`ro` + allow‑lista bucketów + JSON policy v1).
 - Brak replikacji / multi-site / oplogu / HLC.
 
 ---
 
 ## 8) Kolejne sensowne kroki (propozycje)
 
-1) Dalsze guard‑rail’e dla MPU/GC (telemetria, ostrzeżenia, limity).
+1) Rozbudowa ACL/IAM: reguły per‑prefix/per‑action, warunki i lepsze narzędzia zarządzania.
+2) Replikacja / multi-site: projekt oplogu + HLC + mechanizm synchronizacji.
