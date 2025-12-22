@@ -727,6 +727,76 @@ func TestS3E2EListV2RawContinuationToken(t *testing.T) {
 	}
 }
 
+func TestS3E2ESignedHeadersCustomHeader(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/signed-header", strings.NewReader("signed"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	putReq.Header.Set("X-Amz-Date", time.Now().UTC().Format("20060102T150405Z"))
+	putReq.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	putReq.Header.Set("X-Custom", "alpha")
+	putReq.Header.Set("Host", putReq.URL.Host)
+	putReq.Header.Set("Authorization", signWithCustomHeader(putReq, "test", "testsecret", "us-east-1", "x-custom"))
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/signed-header", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	data, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(data) != "signed" {
+		t.Fatalf("GET body mismatch")
+	}
+}
+
 func TestS3E2ERangeGet(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
@@ -796,6 +866,76 @@ func TestS3E2ERangeGet(t *testing.T) {
 	}
 	if getResp.Header.Get("Content-Range") == "" {
 		t.Fatalf("missing Content-Range")
+	}
+}
+
+func TestS3E2ESignedHeadersRange(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/range-signed", strings.NewReader("0123456789"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	rangeReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/range-signed", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	rangeReq.Header.Set("Range", "bytes=3-5")
+	rangeReq.Header.Set("X-Amz-Date", time.Now().UTC().Format("20060102T150405Z"))
+	rangeReq.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	rangeReq.Header.Set("Host", rangeReq.URL.Host)
+	rangeReq.Header.Set("Authorization", signWithCustomHeader(rangeReq, "test", "testsecret", "us-east-1", "range"))
+	rangeResp, err := http.DefaultClient.Do(rangeReq)
+	if err != nil {
+		t.Fatalf("range error: %v", err)
+	}
+	defer rangeResp.Body.Close()
+	if rangeResp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("range status: %d", rangeResp.StatusCode)
+	}
+	body, err := io.ReadAll(rangeResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "345" {
+		t.Fatalf("range body mismatch")
 	}
 }
 
@@ -1161,6 +1301,76 @@ func TestS3E2EPresignedExpiry(t *testing.T) {
 	body, _ := io.ReadAll(getResp.Body)
 	if !bytes.Contains(body, []byte("SignatureDoesNotMatch")) {
 		t.Fatalf("expected signature mismatch")
+	}
+}
+
+func TestS3E2EPresignedRange(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey: "test",
+			SecretKey: "testsecret",
+			Region:    "us-east-1",
+			MaxSkew:   5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/presigned-range", strings.NewReader("abcdef"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getURL, err := handler.Auth.Presign(http.MethodGet, server.URL+"/bucket/presigned-range", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Presign: %v", err)
+	}
+	rangeReq, err := http.NewRequest(http.MethodGet, getURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	rangeReq.Header.Set("Range", "bytes=1-3")
+	rangeResp, err := http.DefaultClient.Do(rangeReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer rangeResp.Body.Close()
+	if rangeResp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("range status: %d", rangeResp.StatusCode)
+	}
+	body, err := io.ReadAll(rangeResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "bcd" {
+		t.Fatalf("range body mismatch")
 	}
 }
 
