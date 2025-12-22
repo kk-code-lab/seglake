@@ -322,6 +322,14 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 	_ = writeJSON(filepath.Join(outDir, "fsck.json"), fsck)
 	scrub, _ := Scrub(layout, metaPath)
 	_ = writeJSON(filepath.Join(outDir, "scrub.json"), scrub)
+	if metaPath != "" {
+		if store, err := meta.Open(metaPath); err == nil {
+			if repl, err := store.GetReplStats(context.Background()); err == nil {
+				_ = writeJSON(filepath.Join(outDir, "repl.json"), repl)
+			}
+			_ = store.Close()
+		}
+	}
 	report.FinishedAt = time.Now().UTC()
 	return report, nil
 }

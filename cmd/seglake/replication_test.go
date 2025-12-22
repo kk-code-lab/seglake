@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
@@ -72,7 +73,7 @@ func TestReplPullRetriesChunk(t *testing.T) {
 
 	client := &replClient{base: mustParseURL(t, server.URL), client: server.Client()}
 	cache := newReplMissingCache()
-	if _, _, err := runReplPullOnce(context.Background(), client, "", 100, true, eng, cache); err != nil {
+	if _, _, err := runReplPullOnce(context.Background(), client, "", 100, true, eng, cache, time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("runReplPullOnce: %v", err)
 	}
 	data, err := eng.ReadSegmentRange("seg-test", 0, 4)
@@ -97,6 +98,64 @@ func TestReplMissingCache(t *testing.T) {
 	cache.clear()
 	if len(cache.snapshot()) != 0 {
 		t.Fatalf("expected cache empty")
+	}
+}
+
+func TestReplPullRetryDeadline(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/oplog":
+			resp := replOplogResponse{
+				Entries: []meta.OplogEntry{{
+					SiteID:    "site-a",
+					HLCTS:     "0000000000000000002-0000000001",
+					OpType:    "put",
+					Bucket:    "bucket",
+					Key:       "key",
+					VersionID: "v1",
+				}},
+				LastHLC: "0000000000000000002-0000000001",
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/replication/oplog":
+			resp := replOplogApplyResponse{
+				Applied: 1,
+				MissingChunks: []replMissingChunk{{
+					SegmentID: "seg-test",
+					Offset:    0,
+					Length:    4,
+				}},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/chunk":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("fail"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := &replClient{base: mustParseURL(t, server.URL), client: server.Client()}
+	cache := newReplMissingCache()
+	_, _, err = runReplPullOnce(context.Background(), client, "", 100, true, eng, cache, time.Now())
+	if err == nil {
+		t.Fatalf("expected deadline error")
 	}
 }
 
