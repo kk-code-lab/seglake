@@ -17,6 +17,12 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - **S3 API**: PUT/GET/HEAD (z `versionId`), LIST (V1/V2), range GET (single i multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per‑action JSON policy v1 + bucket policies + warunki (wystarczające na obecny etap rozwoju).
 
+### 1.1 Kluczowe decyzje
+- **Replikacja**: multi‑site P2P, multi‑writer, LWW + tombstone, JSON/HTTP, HLC jako porządek zdarzeń.
+- **Konsystencja**: brak globalnych transakcji; lokalny zapis widoczny natychmiast, spójność eventual.
+- **Walidacja spójności**: repl‑validate porównuje manifesty i metadane wersji (bez porównywania treści chunków).
+- **ACL/IAM**: MVP z policy v1 + bucket policies + warunki; bez pełnych ACL/STS.
+
 ---
 
 ## 2) Status implementacji (faktycznie zrobione)
