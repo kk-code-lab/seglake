@@ -3,7 +3,10 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -187,75 +190,6 @@ func TestMaxOplogHLC(t *testing.T) {
 	}
 }
 
-func TestApplyOplogPutDeleteConflict(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	store, err := Open(filepath.Join(dir, "meta.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	putPayload, err := json.Marshal(oplogPutPayload{
-		ETag:         "etag",
-		Size:         123,
-		LastModified: "2025-12-22T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("payload: %v", err)
-	}
-	delPayload, err := json.Marshal(oplogDeletePayload{
-		LastModified: "2025-12-22T12:01:00Z",
-	})
-	if err != nil {
-		t.Fatalf("payload: %v", err)
-	}
-	put := OplogEntry{
-		SiteID:    "site-a",
-		HLCTS:     "0000000000000000005-0000000001",
-		OpType:    "put",
-		Bucket:    "bucket",
-		Key:       "key",
-		VersionID: "v1",
-		Payload:   string(putPayload),
-	}
-	del := OplogEntry{
-		SiteID:    "site-b",
-		HLCTS:     "0000000000000000006-0000000001",
-		OpType:    "delete",
-		Bucket:    "bucket",
-		Key:       "key",
-		VersionID: "v1",
-		Payload:   string(delPayload),
-	}
-	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put, del}); err != nil {
-		t.Fatalf("ApplyOplogEntries: %v", err)
-	}
-	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected object to be deleted by higher HLC delete")
-	}
-
-	put2 := OplogEntry{
-		SiteID:    "site-c",
-		HLCTS:     "0000000000000000007-0000000001",
-		OpType:    "put",
-		Bucket:    "bucket",
-		Key:       "key",
-		VersionID: "v2",
-		Payload:   string(putPayload),
-	}
-	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put2}); err != nil {
-		t.Fatalf("ApplyOplogEntries put2: %v", err)
-	}
-	meta, err := store.GetObjectMeta(context.Background(), "bucket", "key")
-	if err != nil {
-		t.Fatalf("GetObjectMeta: %v", err)
-	}
-	if meta.VersionID != "v2" {
-		t.Fatalf("expected v2 to win after higher HLC put, got %s", meta.VersionID)
-	}
-}
-
 func TestApplyOplogTieBreakSite(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -302,4 +236,110 @@ func TestApplyOplogTieBreakSite(t *testing.T) {
 	if meta.VersionID != "v2" {
 		t.Fatalf("expected site tie-break to pick v2, got %s", meta.VersionID)
 	}
+}
+
+func TestApplyOplogDeleteConflicts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:         "etag",
+		Size:         123,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	mpuPayload, err := json.Marshal(oplogMPUCompletePayload{
+		ETag:         "etag-mpu",
+		Size:         10,
+		LastModified: "2025-12-22T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	delPayload, err := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		firstOp   string
+		firstHLC  string
+		firstV    string
+		firstBody string
+		secondHLC string
+		secondV   string
+	}{
+		{"put_vs_delete", "put", "0000000000000000005-0000000001", "v1", string(putPayload), "0000000000000000006-0000000001", "v2"},
+		{"mpu_vs_delete", "mpu_complete", "0000000000000000100-0000000001", "v1", string(mpuPayload), "0000000000000000101-0000000001", "v2"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			put := OplogEntry{
+				SiteID:    "site-a",
+				HLCTS:     tc.firstHLC,
+				OpType:    tc.firstOp,
+				Bucket:    "bucket",
+				Key:       "key",
+				VersionID: "v1",
+				Payload:   tc.firstBody,
+			}
+			del := OplogEntry{
+				SiteID:    "site-b",
+				HLCTS:     tc.secondHLC,
+				OpType:    "delete",
+				Bucket:    "bucket",
+				Key:       "key",
+				VersionID: "v1",
+				Payload:   string(delPayload),
+			}
+			if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put, del}); err != nil {
+				t.Fatalf("ApplyOplogEntries: %v", err)
+			}
+			if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
+				t.Fatalf("expected delete to win")
+			}
+			next := OplogEntry{
+				SiteID:    "site-c",
+				HLCTS:     addHLC(tc.secondHLC, 1),
+				OpType:    tc.firstOp,
+				Bucket:    "bucket",
+				Key:       "key",
+				VersionID: tc.secondV,
+				Payload:   tc.firstBody,
+			}
+			if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{next}); err != nil {
+				t.Fatalf("ApplyOplogEntries: %v", err)
+			}
+			metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+			if err != nil {
+				t.Fatalf("GetObjectMeta: %v", err)
+			}
+			if metaObj.VersionID != tc.secondV {
+				t.Fatalf("expected %s to win, got %s", tc.secondV, metaObj.VersionID)
+			}
+		})
+	}
+}
+
+func addHLC(hlc string, delta int64) string {
+	parts := strings.SplitN(hlc, "-", 2)
+	if len(parts) != 2 {
+		return hlc
+	}
+	physical, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return hlc
+	}
+	return fmt.Sprintf("%019d-%s", physical+delta, parts[1])
 }

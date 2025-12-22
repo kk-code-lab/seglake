@@ -63,6 +63,12 @@ type ReplRemoteState struct {
 	LastPushHLC string `json:"last_push_hlc,omitempty"`
 }
 
+type oplogMPUCompletePayload struct {
+	ETag         string `json:"etag"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"last_modified_utc"`
+}
+
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
 	if path == "" {
@@ -1092,14 +1098,25 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				return err
 			}
 			switch entry.OpType {
-			case "put":
+			case "put", "mpu_complete":
 				if entry.VersionID == "" {
+					if entry.OpType == "mpu_complete" {
+						return errors.New("meta: mpu_complete entry requires version id")
+					}
 					return errors.New("meta: put entry requires version id")
 				}
 				var payload oplogPutPayload
 				if entry.Payload != "" {
-					if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
-						return err
+					if entry.OpType == "mpu_complete" {
+						var mpuPayload oplogMPUCompletePayload
+						if err := json.Unmarshal([]byte(entry.Payload), &mpuPayload); err != nil {
+							return err
+						}
+						payload = oplogPutPayload(mpuPayload)
+					} else {
+						if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+							return err
+						}
 					}
 				}
 				lastModified := payload.LastModified
