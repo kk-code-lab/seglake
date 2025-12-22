@@ -33,19 +33,26 @@ type missingChunk struct {
 	Length    int64  `json:"len"`
 }
 
+const (
+	replDefaultLimit    = 1000
+	replMaxLimit        = 10000
+	replMaxManifestSize = 4 << 20
+	replMaxChunkSize    = 8 << 20
+)
+
 func (h *Handler) handleOplog(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
 	if h == nil || h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, r.URL.Path)
 		return
 	}
-	limit := 1000
+	limit := replDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			limit = parsed
 		}
 	}
-	if limit > 10000 {
-		limit = 10000
+	if limit > replMaxLimit {
+		limit = replMaxLimit
 	}
 	since := r.URL.Query().Get("since")
 	entries, err := h.Meta.ListOplogSince(ctx, since, limit)
@@ -69,6 +76,10 @@ func (h *Handler) handleOplogApply(ctx context.Context, w http.ResponseWriter, r
 	var req oplogApplyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid json body", requestID, r.URL.Path)
+		return
+	}
+	if len(req.Entries) > replMaxLimit {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "too many oplog entries", requestID, r.URL.Path)
 		return
 	}
 	applied, err := h.Meta.ApplyOplogEntries(ctx, req.Entries)
@@ -139,6 +150,10 @@ func (h *Handler) handleReplicationManifest(ctx context.Context, w http.Response
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "manifest not found", requestID, r.URL.Path)
 		return
 	}
+	if len(data) > replMaxManifestSize {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "manifest too large", requestID, r.URL.Path)
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("x-amz-version-id", versionID)
 	_, _ = w.Write(data)
@@ -164,6 +179,10 @@ func (h *Handler) handleReplicationChunk(ctx context.Context, w http.ResponseWri
 	length, err := strconv.ParseInt(rawLen, 10, 64)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid len", requestID, r.URL.Path)
+		return
+	}
+	if length > replMaxChunkSize {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "chunk too large", requestID, r.URL.Path)
 		return
 	}
 	data, err := h.Engine.ReadSegmentRange(segmentID, offset, length)
