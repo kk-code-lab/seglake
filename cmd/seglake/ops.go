@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -130,11 +132,10 @@ func writeJSONReport(report *ops.Report) error {
 	return nil
 }
 
-func printModeHelp(mode string) {
+func printModeHelp(mode string, fs *flag.FlagSet) {
 	switch mode {
 	case "server":
 		fmt.Println("Mode server: run HTTP API server.")
-		fmt.Println("Flags: -addr, -data-dir, -access-key, -secret-key, -region, -sync-interval, -sync-bytes")
 	case "status":
 		fmt.Println("Mode status: counts manifests and segments.")
 	case "fsck":
@@ -143,53 +144,44 @@ func printModeHelp(mode string) {
 		fmt.Println("Mode scrub: verifies chunk hashes against stored data.")
 	case "snapshot":
 		fmt.Println("Mode snapshot: copies meta.db (+wal/shm) and writes snapshot.json.")
-		fmt.Println("Flags: -snapshot-dir (optional, default under data/snapshots).")
 	case "rebuild-index":
 		fmt.Println("Mode rebuild-index: rebuilds metadata DB from manifests.")
-		fmt.Println("Flags: -rebuild-meta (optional path to target meta.db).")
 	case "gc-plan":
 		fmt.Println("Mode gc-plan: prints segments eligible for removal.")
-		fmt.Println("Flags: -gc-min-age (default 24h), -gc-warn-segments, -gc-warn-reclaim-bytes, -gc-max-segments, -gc-max-reclaim-bytes.")
 	case "gc-run":
 		fmt.Println("Mode gc-run: deletes 100% dead segments.")
-		fmt.Println("Flags: -gc-min-age, -gc-force (required), -gc-warn-segments, -gc-warn-reclaim-bytes, -gc-max-segments, -gc-max-reclaim-bytes.")
 	case "gc-rewrite":
 		fmt.Println("Mode gc-rewrite: rewrites partially-dead sealed segments.")
-		fmt.Println("Flags: -gc-min-age, -gc-live-threshold (default 0.5), -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
 	case "gc-rewrite-plan":
 		fmt.Println("Mode gc-rewrite-plan: writes rewrite plan for partially-dead segments.")
-		fmt.Println("Flags: -gc-min-age, -gc-live-threshold, -gc-rewrite-plan (output file).")
 	case "gc-rewrite-run":
 		fmt.Println("Mode gc-rewrite-run: executes rewrite from plan.")
-		fmt.Println("Flags: -gc-rewrite-from-plan, -gc-force (required), -gc-rewrite-bps, -gc-pause-file.")
 	case "mpu-gc-plan":
 		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
-		fmt.Println("Flags: -mpu-ttl (default 7d), -mpu-warn-uploads, -mpu-warn-reclaim-bytes, -mpu-max-uploads, -mpu-max-reclaim-bytes.")
 	case "mpu-gc-run":
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
-		fmt.Println("Flags: -mpu-ttl, -mpu-force (required), -mpu-warn-uploads, -mpu-warn-reclaim-bytes, -mpu-max-uploads, -mpu-max-reclaim-bytes.")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
-		fmt.Println("Flags: -snapshot-dir (output directory).")
 	case "keys":
 		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
-		fmt.Println("Flags: -keys-action list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy, -key-access, -key-secret, -key-policy, -key-enabled, -key-inflight, -key-bucket, -json.")
 	case "bucket-policy":
 		fmt.Println("Mode bucket-policy: manage bucket policies.")
-		fmt.Println("Flags: -bucket-policy-action get|set|delete, -bucket-policy-bucket, -bucket-policy, -bucket-policy-file, -json.")
 	case "repl-pull":
 		fmt.Println("Mode repl-pull: pull oplog from remote and apply locally.")
-		fmt.Println("Flags: -repl-remote, -repl-since, -repl-limit, -repl-fetch-data, -repl-watch, -repl-interval, -repl-backoff-max, -repl-retry-timeout, -repl-access-key, -repl-secret-key, -repl-region.")
 	case "repl-push":
 		fmt.Println("Mode repl-push: push local oplog to remote.")
-		fmt.Println("Flags: -repl-remote, -repl-push-since, -repl-push-limit, -repl-push-watch, -repl-push-interval, -repl-push-backoff-max, -repl-access-key, -repl-secret-key, -repl-region.")
 	case "repl-validate":
 		fmt.Println("Mode repl-validate: compare manifests and live versions between data dirs.")
-		fmt.Println("Flags: -repl-compare-dir (remote data dir).")
 	case "repl-bootstrap":
 		fmt.Println("Mode repl-bootstrap: download snapshot and catch up oplog.")
-		fmt.Println("Flags: -repl-remote, -repl-bootstrap-force, -repl-access-key, -repl-secret-key, -repl-region.")
 	default:
 		fmt.Printf("Unknown mode %q\n", mode)
+		return
 	}
+	if fs == nil {
+		return
+	}
+	fmt.Println("Flags:")
+	fs.SetOutput(os.Stdout)
+	fs.PrintDefaults()
 }
