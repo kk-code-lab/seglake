@@ -81,3 +81,25 @@ func TestWriteSegmentRange(t *testing.T) {
 		t.Fatalf("expected size >= %d got %d", 10+len(data), seg.Size)
 	}
 }
+
+func TestWriteSegmentRangeMetaFailure(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	eng, err := New(Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("New: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := eng.WriteSegmentRange(context.Background(), "seg-test", 0, []byte("data")); err == nil {
+		t.Fatalf("expected error from RecordSegment failure")
+	}
+}

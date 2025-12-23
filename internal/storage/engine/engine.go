@@ -108,7 +108,10 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
-	versionID := newID()
+	versionID, err := newID()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	man := &manifest.Manifest{
 		Bucket:    bucket,
@@ -236,11 +239,31 @@ func (e *Engine) openManifestByVersion(ctx context.Context, versionID string) (*
 		seen[path] = struct{}{}
 		paths = append(paths, path)
 	}
+	tryFrom := func(start int) (*os.File, *manifest.Manifest, bool) {
+		for i := start; i < len(paths); i++ {
+			path := paths[i]
+			file, err := os.Open(path)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			man, err := e.manifestCodec.Decode(file)
+			if err != nil {
+				_ = file.Close()
+				lastErr = err
+				continue
+			}
+			return file, man, true
+		}
+		return nil, nil, false
+	}
 
+	foundMetaPath := false
 	if e.metaStore != nil {
 		path, err := e.metaStore.ManifestPath(ctx, versionID)
 		if err == nil && path != "" {
 			addPath(path)
+			foundMetaPath = true
 		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			lastErr = err
 		}
@@ -248,34 +271,29 @@ func (e *Engine) openManifestByVersion(ctx context.Context, versionID string) (*
 
 	addPath(e.layout.ManifestPath(versionID))
 
-	if err := filepath.WalkDir(e.layout.ManifestsDir, func(path string, d iofs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(d.Name(), "__"+versionID) {
-			addPath(path)
-		}
-		return nil
-	}); err != nil && lastErr == nil {
-		lastErr = err
-	}
-
-	for _, path := range paths {
-		file, err := os.Open(path)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		man, err := e.manifestCodec.Decode(file)
-		if err != nil {
-			_ = file.Close()
-			lastErr = err
-			continue
-		}
+	start := 0
+	if file, man, ok := tryFrom(start); ok {
 		return file, man, nil
+	}
+	start = len(paths)
+	if !foundMetaPath || lastErr != nil {
+		if err := filepath.WalkDir(e.layout.ManifestsDir, func(path string, d iofs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), "__"+versionID) {
+				addPath(path)
+			}
+			return nil
+		}); err != nil && lastErr == nil {
+			lastErr = err
+		}
+		if file, man, ok := tryFrom(start); ok {
+			return file, man, nil
+		}
 	}
 	if lastErr == nil {
 		lastErr = os.ErrNotExist
@@ -431,7 +449,9 @@ func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset
 		return err
 	}
 	if e.metaStore != nil {
-		_ = e.metaStore.RecordSegment(ctx, segmentID, path, "SEALED", info.Size(), nil)
+		if err := e.metaStore.RecordSegment(ctx, segmentID, path, "SEALED", info.Size(), nil); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -470,12 +490,12 @@ func writeManifestFile(path string, codec manifest.Codec, man *manifest.Manifest
 	return codec.Encode(file, man)
 }
 
-func newID() string {
+func newID() (string, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		panic(fmt.Sprintf("engine: rand failure: %v", err))
+		return "", fmt.Errorf("engine: rand failure: %w", err)
 	}
-	return hex.EncodeToString(buf[:])
+	return hex.EncodeToString(buf[:]), nil
 }
 
 func formatManifestName(bucket, key, versionID string) string {

@@ -152,6 +152,13 @@ type replBootstrapOptions struct {
 	force     bool
 }
 
+const (
+	defaultReadHeaderTimeout = 10 * time.Second
+	defaultReadTimeout       = 30 * time.Second
+	defaultWriteTimeout      = 30 * time.Second
+	defaultIdleTimeout       = 2 * time.Minute
+)
+
 func main() {
 	global, remaining, err := parseGlobalArgs(os.Args[1:])
 	if err != nil {
@@ -586,16 +593,13 @@ func runServer(opts *serverOptions) error {
 	if opts.logRequests {
 		handler = s3.LoggingMiddleware(handler)
 	}
+	server := newHTTPServer(opts.addr, handler)
 	if opts.tlsEnable || (opts.tlsCert != "" || opts.tlsKey != "") {
 		cfg, err := newTLSConfig(opts.tlsCert, opts.tlsKey)
 		if err != nil {
 			return err
 		}
-		server := &http.Server{
-			Addr:      opts.addr,
-			Handler:   handler,
-			TLSConfig: cfg,
-		}
+		server.TLSConfig = cfg
 		ln, err := net.Listen("tcp", opts.addr)
 		if err != nil {
 			return err
@@ -606,7 +610,21 @@ func runServer(opts *serverOptions) error {
 		}
 		return nil
 	}
-	return http.ListenAndServe(opts.addr, handler)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+	}
 }
 
 func runReplPullMode(opts *replPullOptions) error {

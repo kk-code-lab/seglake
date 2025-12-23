@@ -103,7 +103,11 @@ func (m *segmentManager) ensureSegment(ctx context.Context, nextBytes int64) err
 }
 
 func (m *segmentManager) openNewSegment(ctx context.Context) error {
-	segmentID := "seg-" + newID()
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	segmentID := "seg-" + id
 	segmentPath := m.layout.SegmentPath(segmentID)
 	writer, err := segment.NewWriter(segmentPath, m.segmentVersion)
 	if err != nil {

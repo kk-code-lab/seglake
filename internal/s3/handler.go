@@ -38,13 +38,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = &countingReadCloser{reader: r.Body, counter: &bytesIn}
 	}
+	bucket, key, hasBucketKey := h.parseBucketKey(r)
+	bucketOnly, hasBucketOnly := h.parseBucketOnly(r)
 	bucketName := ""
 	keyName := ""
-	if bucket, key, ok := h.parseBucketKey(r); ok {
+	if hasBucketKey {
 		bucketName = bucket
 		keyName = key
-	} else if bucket, ok := h.parseBucketOnly(r); ok {
-		bucketName = bucket
+	} else if hasBucketOnly {
+		bucketName = bucketOnly
 	}
 	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
 	start := time.Now()
@@ -77,119 +79,271 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Metrics.Record(op, mw.status, time.Since(start), bucketName, keyName)
 		}
 	}()
-	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
-		h.handleStats(r.Context(), mw, requestID, r.URL.Path)
+	if h.handleMetaAndReplication(r.Context(), mw, r, requestID) {
 		return
 	}
-	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
-		h.handleOplog(r.Context(), mw, r, requestID)
+	hostBucket := h.hostBucket(r)
+	if h.handleBucketLevelRequests(r.Context(), mw, r, requestID, bucketOnly, hasBucketOnly, hostBucket) {
 		return
 	}
-	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/snapshot") {
-		h.handleReplicationSnapshot(r.Context(), mw, r, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/manifest") {
-		h.handleReplicationManifest(r.Context(), mw, r, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/chunk") {
-		h.handleReplicationChunk(r.Context(), mw, r, requestID)
-		return
-	}
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
-		h.handleOplogApply(r.Context(), mw, r, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
-		h.handleListBuckets(r.Context(), mw, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
-		bucket, ok := h.parseBucketOnly(r)
-		if !ok {
-			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
-			return
-		}
-		h.handleListV2(r.Context(), mw, r, bucket, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && r.URL.Query().Has("location") {
-		bucket, ok := h.parseBucketOnly(r)
-		if !ok {
-			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
-			return
-		}
-		_ = bucket
-		h.handleLocation(mw, requestID)
-		return
-	}
-	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
-		bucket, ok := h.parseBucketOnly(r)
-		if !ok {
-			writeErrorWithResource(mw, http.StatusBadRequest, "InvalidBucketName", "", requestID, r.URL.Path)
-			return
-		}
-		h.handleListMultipartUploads(r.Context(), mw, r, bucket, requestID)
-		return
-	}
-	bucket, key, ok := h.parseBucketKey(r)
-	if !ok {
+	if !hasBucketKey {
 		if r.Method == http.MethodGet {
-			if bucketOnly, ok := h.parseBucketOnly(r); ok {
+			if isListV1Request(r, hasBucketOnly) {
 				h.handleListV1(r.Context(), mw, r, bucketOnly, requestID)
 				return
 			}
 		}
 		if r.Method == http.MethodDelete {
-			if bucketOnly, ok := h.parseBucketOnly(r); ok {
+			if hasBucketOnly {
 				h.handleDeleteBucket(r.Context(), mw, bucketOnly, requestID, r.URL.Path)
 				return
 			}
 		}
-		if _, ok := h.parseBucketOnly(r); ok {
+		if hasBucketOnly {
 			writeErrorWithResource(mw, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
 			return
 		}
 		writeErrorWithResource(mw, http.StatusBadRequest, "InvalidURI", "", requestID, r.URL.Path)
 		return
 	}
-	switch r.Method {
-	case http.MethodPut:
-		if copySource := r.Header.Get("X-Amz-Copy-Source"); copySource != "" {
-			h.handleCopyObject(r.Context(), mw, r, bucket, key, copySource, requestID)
-			return
-		}
-		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
-			h.handleUploadPart(r.Context(), mw, r, bucket, key, uploadID, requestID)
-			return
-		}
-		h.handlePut(r.Context(), mw, r, bucket, key, requestID)
-	case http.MethodGet:
-		if uploadID := r.URL.Query().Get("uploadId"); uploadID != "" {
-			h.handleListParts(r.Context(), mw, r, bucket, key, uploadID, requestID)
-			return
-		}
-		h.handleGet(r.Context(), mw, r, bucket, key, requestID, false)
-	case http.MethodHead:
-		h.handleGet(r.Context(), mw, r, bucket, key, requestID, true)
-	case http.MethodDelete:
-		h.handleDeleteObject(r.Context(), mw, r, bucket, key, requestID, r.URL.Path)
-	default:
-		if r.Method == http.MethodPost && r.URL.Query().Has("uploads") {
-			h.handleInitiateMultipart(r.Context(), mw, bucket, key, requestID, r.URL.Path)
-			return
-		}
-		if r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" {
-			h.handleCompleteMultipart(r.Context(), mw, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
-			return
-		}
-		if r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != "" {
-			h.handleAbortMultipart(r.Context(), mw, r.URL.Query().Get("uploadId"), requestID, r.URL.Path)
-			return
-		}
-		writeErrorWithResource(mw, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
+	h.handleObjectRequests(r.Context(), mw, r, requestID, bucket, key)
+}
+
+func (h *Handler) handleMetaAndReplication(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) bool {
+	type route struct {
+		method  string
+		prefix  string
+		handler func(context.Context, http.ResponseWriter, *http.Request, string)
 	}
+	routes := []route{
+		{
+			method: http.MethodGet,
+			prefix: "/v1/meta/stats",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleStats(ctx, w, requestID, r.URL.Path)
+			},
+		},
+		{
+			method: http.MethodGet,
+			prefix: "/v1/replication/oplog",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleOplog(ctx, w, r, requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			prefix: "/v1/replication/snapshot",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleReplicationSnapshot(ctx, w, r, requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			prefix: "/v1/replication/manifest",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleReplicationManifest(ctx, w, r, requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			prefix: "/v1/replication/chunk",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleReplicationChunk(ctx, w, r, requestID)
+			},
+		},
+		{
+			method: http.MethodPost,
+			prefix: "/v1/replication/oplog",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleOplogApply(ctx, w, r, requestID)
+			},
+		},
+	}
+	for _, route := range routes {
+		if r.Method != route.method {
+			continue
+		}
+		if strings.HasPrefix(r.URL.Path, route.prefix) {
+			route.handler(ctx, w, r, requestID)
+			return true
+		}
+	}
+	return false
+}
+
+type bucketListKind int
+
+const (
+	bucketListNone bucketListKind = iota
+	bucketListBuckets
+	bucketListV2
+	bucketListLocation
+	bucketListUploads
+)
+
+func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly bool) bucketListKind {
+	if r.Method != http.MethodGet {
+		return bucketListNone
+	}
+	if r.URL.Path == "/" && hostBucket == "" && r.URL.Query().Get("list-type") == "" {
+		return bucketListBuckets
+	}
+	if r.URL.Query().Get("list-type") == "2" {
+		if !hasBucketOnly {
+			return bucketListNone
+		}
+		return bucketListV2
+	}
+	if r.URL.Query().Has("location") {
+		if !hasBucketOnly {
+			return bucketListNone
+		}
+		return bucketListLocation
+	}
+	if r.URL.Query().Has("uploads") {
+		if !hasBucketOnly {
+			return bucketListNone
+		}
+		return bucketListUploads
+	}
+	return bucketListNone
+}
+
+func isListV1Request(r *http.Request, hasBucketOnly bool) bool {
+	if r.Method != http.MethodGet || !hasBucketOnly {
+		return false
+	}
+	if r.URL.Query().Get("list-type") == "2" {
+		return false
+	}
+	if r.URL.Query().Has("location") {
+		return false
+	}
+	if r.URL.Query().Has("uploads") {
+		return false
+	}
+	return true
+}
+
+func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID, bucketOnly string, hasBucketOnly bool, hostBucket string) bool {
+	switch bucketListKindForRequest(r, hostBucket, hasBucketOnly) {
+	case bucketListBuckets:
+		h.handleListBuckets(ctx, w, requestID)
+		return true
+	case bucketListV2:
+		h.handleListV2(ctx, w, r, bucketOnly, requestID)
+		return true
+	case bucketListLocation:
+		_ = bucketOnly
+		h.handleLocation(w, requestID)
+		return true
+	case bucketListUploads:
+		h.handleListMultipartUploads(ctx, w, r, bucketOnly, requestID)
+		return true
+	}
+	return false
+}
+
+func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID, bucket, key string) {
+	type objectRoute struct {
+		method  string
+		match   func(*http.Request) bool
+		handler func()
+	}
+	routes := []objectRoute{
+		{
+			method: http.MethodPut,
+			match: func(r *http.Request) bool {
+				return r.Header.Get("X-Amz-Copy-Source") != ""
+			},
+			handler: func() {
+				h.handleCopyObject(ctx, w, r, bucket, key, r.Header.Get("X-Amz-Copy-Source"), requestID)
+			},
+		},
+		{
+			method: http.MethodPut,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Get("uploadId") != ""
+			},
+			handler: func() {
+				h.handleUploadPart(ctx, w, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
+			},
+		},
+		{
+			method: http.MethodPut,
+			match:  func(*http.Request) bool { return true },
+			handler: func() {
+				h.handlePut(ctx, w, r, bucket, key, requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Get("uploadId") != ""
+			},
+			handler: func() {
+				h.handleListParts(ctx, w, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			match:  func(*http.Request) bool { return true },
+			handler: func() {
+				h.handleGet(ctx, w, r, bucket, key, requestID, false)
+			},
+		},
+		{
+			method: http.MethodHead,
+			match:  func(*http.Request) bool { return true },
+			handler: func() {
+				h.handleGet(ctx, w, r, bucket, key, requestID, true)
+			},
+		},
+		{
+			method: http.MethodDelete,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Get("uploadId") != ""
+			},
+			handler: func() {
+				h.handleAbortMultipart(ctx, w, r.URL.Query().Get("uploadId"), requestID, r.URL.Path)
+			},
+		},
+		{
+			method: http.MethodDelete,
+			match:  func(*http.Request) bool { return true },
+			handler: func() {
+				h.handleDeleteObject(ctx, w, r, bucket, key, requestID, r.URL.Path)
+			},
+		},
+		{
+			method: http.MethodPost,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Has("uploads")
+			},
+			handler: func() {
+				h.handleInitiateMultipart(ctx, w, bucket, key, requestID, r.URL.Path)
+			},
+		},
+		{
+			method: http.MethodPost,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Get("uploadId") != ""
+			},
+			handler: func() {
+				h.handleCompleteMultipart(ctx, w, r, bucket, key, r.URL.Query().Get("uploadId"), requestID)
+			},
+		},
+	}
+	for _, route := range routes {
+		if r.Method != route.method {
+			continue
+		}
+		if route.match(r) {
+			route.handler()
+			return
+		}
+	}
+	writeErrorWithResource(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
 }
 
 func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

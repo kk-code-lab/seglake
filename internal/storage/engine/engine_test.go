@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
+	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
 
 func TestEnginePutGetRoundTrip(t *testing.T) {
@@ -119,5 +121,77 @@ func TestEngineGetRange(t *testing.T) {
 	}
 	if string(got) != string(input[3:10]) {
 		t.Fatalf("range mismatch: %q", string(got))
+	}
+}
+
+func TestEngineGetManifestFallbackToWalk(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	engine, err := New(Options{
+		Layout:    layout,
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	man := &manifest.Manifest{
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+	}
+	manifestPath := layout.ManifestPath(formatManifestName(man.Bucket, man.Key, man.VersionID))
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := writeManifestFile(manifestPath, &manifest.BinaryCodec{}, man); err != nil {
+		t.Fatalf("writeManifestFile: %v", err)
+	}
+	stalePath := layout.ManifestPath("missing-" + man.VersionID)
+	if err := store.RecordManifest(context.Background(), man.VersionID, stalePath); err != nil {
+		t.Fatalf("RecordManifest: %v", err)
+	}
+
+	got, err := engine.GetManifest(context.Background(), man.VersionID)
+	if err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	if got.Bucket != man.Bucket || got.Key != man.Key || got.VersionID != man.VersionID {
+		t.Fatalf("manifest mismatch: %+v", got)
+	}
+}
+
+func TestEngineGetManifestMissingReturnsNotExist(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	engine, err := New(Options{
+		Layout:    layout,
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	versionID := "missing-v1"
+	stalePath := layout.ManifestPath(versionID)
+	if err := store.RecordManifest(context.Background(), versionID, stalePath); err != nil {
+		t.Fatalf("RecordManifest: %v", err)
+	}
+
+	_, err = engine.GetManifest(context.Background(), versionID)
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected not exist error, got %v", err)
 	}
 }

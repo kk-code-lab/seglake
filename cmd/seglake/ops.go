@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -124,12 +123,7 @@ func writeJSONReport(report *ops.Report) error {
 	if report == nil {
 		return nil
 	}
-	data, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
-	return nil
+	return writeJSON(report)
 }
 
 func printModeHelp(mode string, fs *flag.FlagSet) {

@@ -34,18 +34,32 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 	buf = appendU32(buf, magic)
 	if m.Bucket != "" || m.Key != "" {
 		buf = appendU32(buf, versionV2)
-		buf = appendString(buf, m.Bucket)
-		buf = appendString(buf, m.Key)
+		var err error
+		buf, err = appendString(buf, m.Bucket)
+		if err != nil {
+			return err
+		}
+		buf, err = appendString(buf, m.Key)
+		if err != nil {
+			return err
+		}
 	} else {
 		buf = appendU32(buf, versionV1)
 	}
-	buf = appendString(buf, m.VersionID)
+	var err error
+	buf, err = appendString(buf, m.VersionID)
+	if err != nil {
+		return err
+	}
 	buf = appendU64(buf, uint64(m.Size))
 	buf = appendU32(buf, uint32(len(m.Chunks)))
 	for _, ch := range m.Chunks {
 		buf = appendU32(buf, uint32(ch.Index))
 		buf = append(buf, ch.Hash[:]...)
-		buf = appendString(buf, ch.SegmentID)
+		buf, err = appendString(buf, ch.SegmentID)
+		if err != nil {
+			return err
+		}
 		buf = appendU64(buf, uint64(ch.Offset))
 		buf = appendU32(buf, ch.Len)
 	}
@@ -53,7 +67,7 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 	if _, err := w.Write(buf); err != nil {
 		return err
 	}
-	_, err := w.Write(checksum[:])
+	_, err = w.Write(checksum[:])
 	return err
 }
 
@@ -162,12 +176,12 @@ func appendU64(buf []byte, v uint64) []byte {
 	return append(buf, tmp[:]...)
 }
 
-func appendString(buf []byte, v string) []byte {
+func appendString(buf []byte, v string) ([]byte, error) {
 	if len(v) > int(^uint32(0)) {
-		panic("manifest: string too large")
+		return nil, errors.New("manifest: string too large")
 	}
 	buf = appendU32(buf, uint32(len(v)))
-	return append(buf, v...)
+	return append(buf, v...), nil
 }
 
 func readString(data []byte) (string, int, error) {
