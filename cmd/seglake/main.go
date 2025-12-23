@@ -54,6 +54,7 @@ type serverOptions struct {
 	region         string
 	virtualHosted  bool
 	logRequests    bool
+	allowUnsigned  bool
 	tlsEnable      bool
 	tlsCert        string
 	tlsKey         string
@@ -418,6 +419,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.region, "region", "us-east-1", "S3 region")
 	fs.BoolVar(&opts.virtualHosted, "virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	fs.BoolVar(&opts.logRequests, "log-requests", true, "Log HTTP requests")
+	fs.BoolVar(&opts.allowUnsigned, "allow-unsigned-payload", true, "Allow SigV4 UNSIGNED-PAYLOAD")
 	fs.BoolVar(&opts.tlsEnable, "tls", false, "Enable HTTPS listener with TLS")
 	fs.StringVar(&opts.tlsCert, "tls-cert", "", "TLS certificate path (PEM)")
 	fs.StringVar(&opts.tlsKey, "tls-key", "", "TLS private key path (PEM)")
@@ -574,10 +576,11 @@ func runServer(opts *serverOptions) error {
 		Engine: eng,
 		Meta:   store,
 		Auth: &s3.AuthConfig{
-			AccessKey: opts.accessKey,
-			SecretKey: opts.secretKey,
-			Region:    opts.region,
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            opts.accessKey,
+			SecretKey:            opts.secretKey,
+			Region:               opts.region,
+			MaxSkew:              5 * time.Minute,
+			AllowUnsignedPayload: opts.allowUnsigned,
 			SecretLookup: func(ctx context.Context, accessKey string) (string, bool, error) {
 				return store.LookupAPISecret(ctx, accessKey)
 			},

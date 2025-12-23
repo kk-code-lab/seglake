@@ -19,9 +19,10 @@ func TestSigV4AcceptsDateHeader(t *testing.T) {
 	signRequestTest(req, "test", "testsecret", "us-east-1")
 
 	auth := &AuthConfig{
-		AccessKey: "test",
-		SecretKey: "testsecret",
-		Region:    "us-east-1",
+		AccessKey:            "test",
+		SecretKey:            "testsecret",
+		Region:               "us-east-1",
+		AllowUnsignedPayload: true,
 	}
 	if err := auth.VerifyRequest(req); err != nil {
 		t.Fatalf("VerifyRequest: %v", err)
@@ -42,9 +43,10 @@ func TestSigV4CanonicalizesHeaderSpacing(t *testing.T) {
 	req.Header.Set("Authorization", signWithCustomHeader(req, "test", "testsecret", "us-east-1", "x-custom"))
 
 	auth := &AuthConfig{
-		AccessKey: "test",
-		SecretKey: "testsecret",
-		Region:    "us-east-1",
+		AccessKey:            "test",
+		SecretKey:            "testsecret",
+		Region:               "us-east-1",
+		AllowUnsignedPayload: true,
 	}
 	if err := auth.VerifyRequest(req); err != nil {
 		t.Fatalf("VerifyRequest: %v", err)

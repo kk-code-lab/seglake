@@ -93,11 +93,15 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 		return errSignatureMismatch
 	}
 
-	payloadHash := r.Header.Get("X-Amz-Content-Sha256")
+	payloadHashHeader := r.Header.Get("X-Amz-Content-Sha256")
+	payloadHash := payloadHashHeader
 	if payloadHash == "" {
 		payloadHash = "UNSIGNED-PAYLOAD"
 	}
 	// We do not stream-hash payloads yet; accept provided hash values for now.
+	if !c.AllowUnsignedPayload && strings.EqualFold(payloadHash, "UNSIGNED-PAYLOAD") && payloadHashHeader != "" {
+		return errSignatureMismatch
+	}
 
 	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(r, signedHeaders)
 	if err != nil {
@@ -169,12 +173,20 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	if err != nil {
 		return errSignatureMismatch
 	}
+	maxSkew := c.MaxSkew
+	if maxSkew == 0 {
+		maxSkew = 5 * time.Minute
+	}
 	expSeconds, err := parseInt(expires)
 	if err != nil || expSeconds < 1 || expSeconds > 604800 {
 		return errSignatureMismatch
 	}
-	if time.Since(reqTime) > time.Duration(expSeconds)*time.Second {
+	delta := time.Since(reqTime)
+	if delta > time.Duration(expSeconds)*time.Second {
 		return errSignatureMismatch
+	}
+	if delta < -maxSkew {
+		return errTimeSkew
 	}
 	if !strings.HasPrefix(amzDate, dateScope) {
 		return errSignatureMismatch

@@ -39,8 +39,9 @@ func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, f
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			Region:       "us-east-1",
-			SecretLookup: store.LookupAPISecret,
+			Region:               "us-east-1",
+			SecretLookup:         store.LookupAPISecret,
+			AllowUnsignedPayload: true,
 		},
 	}
 
