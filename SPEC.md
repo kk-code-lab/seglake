@@ -43,8 +43,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Path-style: `/<bucket>/<key>` + virtual-hosted-style (domyślnie włączony).
 - PUT/GET/HEAD obiektu, ListObjectsV2, ListObjectsV1, ListBuckets, GetBucketLocation.
 - Range GET: pojedynczy i multi-range (multipart/byteranges).
-- SigV4 (Authorization oraz presigned) + fallback SigV2 **tylko** dla listowania.
-- Uwaga: SigV2 fallback jest celowym kompromisem dla legacy klientów; nie jest objęty politykami/allowlistami i może być wyłączony w przyszłości.
+- SigV4 (Authorization oraz presigned).
+- SigV2 **nie jest wspierany**.
 - Presigned GET/PUT (TTL do 7 dni).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 
@@ -108,10 +108,12 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ## 4) S3 API — zakres
 
 ### 4.1 Endpoints
+- Bucket-level ścieżki akceptują opcjonalny trailing slash (`/<bucket>/`).
 - `GET /` — ListBuckets.
 - `GET /<bucket>?list-type=2` — ListObjectsV2.
 - `GET /<bucket>?prefix=...` — ListObjectsV1 (marker).
 - `GET /<bucket>?location` — GetBucketLocation.
+- `PUT /<bucket>` — CreateBucket (idempotentny).
 - `PUT /<bucket>/<key>` — PUT object.
 - `GET /<bucket>/<key>` — GET object.
 - `HEAD /<bucket>/<key>` — HEAD object.
@@ -131,8 +133,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 4.2 Auth
 - SigV4: Authorization header lub presigned query.
 - Presigned TTL: 1..7 dni.
-- Dopuszczony SigV2 **tylko** dla listowania (`GET /` lub `GET /<bucket>`).
 - `X-Amz-Content-Sha256` obsługiwany; `STREAMING-*` odrzucone.
+- `UNSIGNED-PAYLOAD` dozwolony domyślnie; można wyłączyć flagą `-allow-unsigned-payload=false`.
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
 - Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
