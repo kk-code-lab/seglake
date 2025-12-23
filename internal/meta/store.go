@@ -2793,6 +2793,16 @@ func (s *Store) BucketExists(ctx context.Context, bucket string) (bool, error) {
 	return true, nil
 }
 
+// CreateBucket inserts a bucket entry if it does not already exist.
+func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
+	return err
+}
+
 // BucketHasObjects checks whether a bucket has any current objects.
 func (s *Store) BucketHasObjects(ctx context.Context, bucket string) (bool, error) {
 	if bucket == "" {

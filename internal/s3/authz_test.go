@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,8 +47,9 @@ func TestAuthzPolicyAndBucketAllow(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			Region:       "us-east-1",
-			SecretLookup: store.LookupAPISecret,
+			Region:               "us-east-1",
+			SecretLookup:         store.LookupAPISecret,
+			AllowUnsignedPayload: true,
 		},
 		InflightLimiter: NewInflightLimiter(4),
 	}
@@ -102,5 +104,58 @@ func TestAuthzPolicyAndBucketAllow(t *testing.T) {
 	_ = denyResp.Body.Close()
 	if denyResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET denied status: %d", denyResp.StatusCode)
+	}
+}
+
+func TestSigV2ListRequestRejected(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			SecretLookup:         store.LookupAPISecret,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "AWS ak:deadbeef")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		_ = resp.Body.Close()
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+	var errResp errorResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		_ = resp.Body.Close()
+		t.Fatalf("decode error response: %v", err)
+	}
+	_ = resp.Body.Close()
+	if errResp.Code != "SignatureDoesNotMatch" {
+		t.Fatalf("expected SignatureDoesNotMatch, got %q", errResp.Code)
 	}
 }

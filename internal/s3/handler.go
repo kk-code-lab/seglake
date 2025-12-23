@@ -87,6 +87,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !hasBucketKey {
+		if r.Method == http.MethodPut {
+			if hasBucketOnly {
+				h.handleCreateBucket(r.Context(), mw, bucketOnly, requestID, r.URL.Path)
+				return
+			}
+		}
 		if r.Method == http.MethodGet {
 			if isListV1Request(r, hasBucketOnly) {
 				h.handleListV1(r.Context(), mw, r, bucketOnly, requestID)
@@ -366,9 +372,6 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		return requestID, true
 	}
 	if err := h.Auth.VerifyRequest(r); err != nil {
-		if h.isSigV2ListRequest(r) {
-			return requestID, true
-		}
 		if h.AuthLimiter != nil {
 			ip := clientIP(r.RemoteAddr)
 			key := extractAccessKey(r)
@@ -519,27 +522,6 @@ func (h *Handler) isTrustedProxy(remoteAddr string) bool {
 		if network.Contains(ip) {
 			return true
 		}
-	}
-	return false
-}
-
-func (h *Handler) isSigV2ListRequest(r *http.Request) bool {
-	// Legacy compatibility: SigV2 is accepted only for list operations and bypasses policy checks.
-	if r.Method != http.MethodGet {
-		return false
-	}
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "AWS ") {
-		return false
-	}
-	if r.URL.Path == "/" {
-		return h.hostBucket(r) == ""
-	}
-	if _, _, ok := h.parseBucketKey(r); ok {
-		return false
-	}
-	if _, ok := h.parseBucketOnly(r); ok {
-		return true
 	}
 	return false
 }
@@ -819,6 +801,18 @@ func (h *Handler) handleDeleteBucket(ctx context.Context, w http.ResponseWriter,
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter, bucket, requestID, resource string) {
+	if h.Meta == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
+		return
+	}
+	if err := h.Meta.CreateBucket(ctx, bucket); err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *Handler) hostBucket(r *http.Request) string {
 	if h == nil || !h.VirtualHosted {
 		return ""
@@ -871,7 +865,7 @@ func (h *Handler) parseBucketKey(r *http.Request) (bucket string, key string, ok
 }
 
 func (h *Handler) parseBucketOnly(r *http.Request) (string, bool) {
-	path := strings.TrimPrefix(r.URL.Path, "/")
+	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	hostBucket := h.hostBucket(r)
 	if path == "" {
 		if hostBucket != "" {

@@ -77,9 +77,10 @@ func runReplBootstrap(remote, accessKey, secretKey, region, dataDir string, forc
 			region = "us-east-1"
 		}
 		client.signer = &s3.AuthConfig{
-			AccessKey: accessKey,
-			SecretKey: secretKey,
-			Region:    region,
+			AccessKey:            accessKey,
+			SecretKey:            secretKey,
+			Region:               region,
+			AllowUnsignedPayload: true,
 		}
 	}
 	if dataDir == "" {
@@ -212,9 +213,10 @@ func runReplPush(remote, since string, limit int, watch bool, interval, backoffM
 			region = "us-east-1"
 		}
 		client.signer = &s3.AuthConfig{
-			AccessKey: accessKey,
-			SecretKey: secretKey,
-			Region:    region,
+			AccessKey:            accessKey,
+			SecretKey:            secretKey,
+			Region:               region,
+			AllowUnsignedPayload: true,
 		}
 	}
 	if limit <= 0 {
@@ -290,9 +292,10 @@ func runReplPull(remote, since string, limit int, fetchData bool, watch bool, in
 			region = "us-east-1"
 		}
 		client.signer = &s3.AuthConfig{
-			AccessKey: accessKey,
-			SecretKey: secretKey,
-			Region:    region,
+			AccessKey:            accessKey,
+			SecretKey:            secretKey,
+			Region:               region,
+			AllowUnsignedPayload: true,
 		}
 	}
 	if limit <= 0 {

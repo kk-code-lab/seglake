@@ -58,3 +58,69 @@ func TestListV2DelimiterUnit(t *testing.T) {
 		t.Fatalf("expected keys grouped by delimiter")
 	}
 }
+
+func TestListV2AcceptsTrailingSlashBucketPath(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(dir + "/meta.db")
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(dir + "/objects"),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest("GET", "/bucket/?list-type=2", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST status: %d", w.Code)
+	}
+}
+
+func TestCreateBucket(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(dir + "/meta.db")
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(dir + "/objects"),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	req := httptest.NewRequest("PUT", "/demo/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("PUT status: %d", w.Code)
+	}
+
+	exists, err := store.BucketExists(req.Context(), "demo")
+	if err != nil {
+		t.Fatalf("BucketExists: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected bucket to exist")
+	}
+}
