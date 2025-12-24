@@ -90,6 +90,19 @@ aws s3 ls s3://demo --endpoint-url http://localhost:9000
 aws s3 ls s3://demo --endpoint-url http://demo.localhost:9000
 ```
 
+## Smoke scripts (curl)
+
+The repo includes two smoke scripts for quick checks against a running server:
+- `scripts/curl_s3_smoke.sh` (basic S3 PUT/GET/HEAD/Range/conditions/CORS)
+- `scripts/curl_security_smoke.sh` (auth/validation error responses)
+
+Example:
+```
+./build/seglake -data-dir ./data -access-key test -secret-key testsecret
+S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_s3_smoke.sh
+S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_security_smoke.sh
+```
+
 ## GC/MPU guardrails
 
 GC warnings and hard limits can be tuned:
