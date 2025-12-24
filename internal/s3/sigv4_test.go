@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,8 @@ func signRequestTest(r *http.Request, accessKey, secretKey, region string) {
 }
 
 func canonicalHeadersForRequestWith(r *http.Request, headers []string) (string, []string) {
+	headers = append([]string(nil), headers...)
+	sort.Strings(headers)
 	var b strings.Builder
 	for _, h := range headers {
 		value := r.Header.Get(h)
