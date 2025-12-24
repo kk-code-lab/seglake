@@ -191,7 +191,7 @@ Custom JSON policy (stored in `api_keys.policy`):
 Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
 `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
-`GetMetaStats`, `ReplicationRead`, `ReplicationWrite`, `*`.
+`GetMetaStats`, `GetMetaConflicts`, `ReplicationRead`, `ReplicationWrite`, `*`.
 
 Conditions (optional) in statements:
 - `source_ip`: list of CIDR blocks (e.g. `"10.0.0.0/8"`).
@@ -266,6 +266,15 @@ Example (large objects, slower clients):
 Replay protection uses an in-memory cache bounded by a max entries cap (default).
 Use `-replay-ttl` to enable replay detection, `-replay-block` to enforce blocking on replays,
 and `-replay-cache-max` to override the default cache size cap.
+
+## Conflict visibility (MVP)
+
+Endpoint:
+- `GET /v1/meta/conflicts?bucket=...&prefix=...&limit=...&after_bucket=...&after_key=...&after_version=...`
+
+Notes:
+- Returns a JSON list of conflicting versions.
+- GET/HEAD on an object with conflict returns `x-seglake-conflict: true`.
 - `-replay-ttl` (default 0 = disabled)
 - `-replay-block` (default false; block requests on replay detection)
 - `-cors-origins` (default `*`, comma-separated list)

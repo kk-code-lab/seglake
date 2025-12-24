@@ -62,6 +62,7 @@ const (
 	policyActionListMultipartUploads  = "listmultipartuploads"
 	policyActionListMultipartParts    = "listmultipartparts"
 	policyActionGetMetaStats          = "getmetastats"
+	policyActionGetMetaConflicts      = "getmetaconflicts"
 	policyActionReplicationRead       = "replicationread"
 	policyActionReplicationWrite      = "replicationwrite"
 )
@@ -84,6 +85,7 @@ var validPolicyActions = map[string]struct{}{
 	policyActionListMultipartUploads:  {},
 	policyActionListMultipartParts:    {},
 	policyActionGetMetaStats:          {},
+	policyActionGetMetaConflicts:      {},
 	policyActionReplicationRead:       {},
 	policyActionReplicationWrite:      {},
 }
@@ -357,6 +359,8 @@ func policyActionForRequest(op string) string {
 	switch op {
 	case "meta_stats":
 		return policyActionGetMetaStats
+	case "meta_conflicts":
+		return policyActionGetMetaConflicts
 	case "repl_oplog":
 		return policyActionReplicationRead
 	case "repl_snapshot":

@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -202,6 +203,55 @@ func TestStatsIncludesReplBytes(t *testing.T) {
 	}
 	if stats.ReplBytesInTotal != 128 {
 		t.Fatalf("expected repl bytes 128, got %d", stats.ReplBytesInTotal)
+	}
+}
+
+func TestListConflicts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	if err := store.RecordPut(ctx, "b1", "a/1", "v1", "etag1", 1, "/tmp/m1", ""); err != nil {
+		t.Fatalf("RecordPut v1: %v", err)
+	}
+	if err := store.RecordPut(ctx, "b1", "b/2", "v2", "etag2", 2, "/tmp/m2", ""); err != nil {
+		t.Fatalf("RecordPut v2: %v", err)
+	}
+	if err := store.RecordPut(ctx, "b2", "a/3", "v3", "etag3", 3, "/tmp/m3", ""); err != nil {
+		t.Fatalf("RecordPut v3: %v", err)
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return ExecTx(tx, "UPDATE versions SET state='CONFLICT' WHERE version_id IN (?, ?)", "v1", "v3")
+	}); err != nil {
+		t.Fatalf("mark conflicts: %v", err)
+	}
+
+	items, err := store.ListConflicts(ctx, "b1", "", "", "", "", 100)
+	if err != nil {
+		t.Fatalf("ListConflicts bucket: %v", err)
+	}
+	if len(items) != 1 || items[0].Bucket != "b1" || items[0].Key != "a/1" {
+		t.Fatalf("unexpected bucket conflicts: %+v", items)
+	}
+
+	page1, err := store.ListConflicts(ctx, "", "a/", "", "", "", 1)
+	if err != nil {
+		t.Fatalf("ListConflicts page1: %v", err)
+	}
+	if len(page1) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(page1))
+	}
+	page2, err := store.ListConflicts(ctx, "", "a/", page1[0].Bucket, page1[0].Key, page1[0].VersionID, 10)
+	if err != nil {
+		t.Fatalf("ListConflicts page2: %v", err)
+	}
+	if len(page2) != 1 || page2[0].Bucket != "b2" || page2[0].Key != "a/3" {
+		t.Fatalf("unexpected page2: %+v", page2)
 	}
 }
 

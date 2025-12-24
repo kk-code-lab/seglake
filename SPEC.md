@@ -77,6 +77,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
   gc-rewrite/gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL), repl-validate.
 - `/v1/meta/stats` with basic counters + traffic and latency.
+- `/v1/meta/conflicts` lists conflicting versions (JSON).
 - Request-id in logs and responses.
 
 ---
@@ -168,7 +169,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
-- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
+- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).
 - `X-Forwarded-For` is used only for trusted proxies (`-trusted-proxies`).
 - Auth failure rate limiting per IP and per access key.
@@ -199,7 +200,10 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `If-Modified-Since` → 304 `NotModified` when unchanged since the given time.
 - `If-Unmodified-Since` → 412 `PreconditionFailed` when modified after the given time.
 
-### 4.6 Errors
+### 4.6 Conflict visibility (MVP)
+- If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.
+
+### 4.7 Errors
 - AWS-compatible XML (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
 - Examples validated in tests (e.g. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
   `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.

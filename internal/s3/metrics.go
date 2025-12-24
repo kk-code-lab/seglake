@@ -24,8 +24,8 @@ type Metrics struct {
 	keyRequests map[string]map[string]int64
 	keyLatency  map[string]*latencyWindow
 
-	bytesIn  atomic.Int64
-	bytesOut atomic.Int64
+	bytesIn        atomic.Int64
+	bytesOut       atomic.Int64
 	replayDetected atomic.Int64
 }
 
