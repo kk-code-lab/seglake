@@ -23,6 +23,28 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - **Consistency validation**: repl-validate compares manifests and version metadata (without comparing chunk contents).
 - **ACL/IAM**: MVP with policy v1 + bucket policies + conditions; no full ACL/STS.
 
+### 1.2 Glossary with examples
+- **Bucket / key**: Bucket is a top-level namespace; key is the object path inside it.  
+  Example: `s3://photos/2025/12/city.jpg` has bucket `photos` and key `2025/12/city.jpg`.
+- **Chunk (4 MiB)**: Fixed-size piece of object data; the last chunk can be smaller.  
+  Example: 10 MiB object -> 3 chunks (4 MiB, 4 MiB, 2 MiB).
+- **Segment (append-only file)**: Storage file that holds many chunks; it grows until rotation.  
+  Example: chunks from many objects are appended into one segment until ~1 GiB.
+- **Manifest (object layout)**: Binary file listing which chunks make up an object and where they live.  
+  Example: manifest for `photos/2025/12/city.jpg` lists 3 chunks with segment IDs and offsets.
+- **Version ID**: Unique ID for a specific object version.  
+  Example: `GET /photos/2025/12/city.jpg?versionId=...` fetches an older version.
+- **ETag**: Content signature returned by S3 API.  
+  Example: single PUT -> `MD5(object)`; multipart -> `MD5(concat(part MD5s)) + "-<partCount>"`.
+- **Write barrier (durability)**: Sequence that guarantees data is durable before ACK.  
+  Example: fsync segments -> write manifest + metadata in transaction -> WAL flush -> ACK.
+- **LWW + tombstone**: Replication resolves conflicts by last-write-wins; deletes are recorded as tombstones.  
+  Example: delete on node A wins over older write on node B and is replicated as a tombstone.
+- **Range GET**: Read partial bytes, single or multi-range.  
+  Example: `Range: bytes=0-1023` returns first 1 KiB.
+- **Presigned URL**: Time-limited signed URL for GET/PUT without permanent credentials.  
+  Example: client uploads via `PUT` using a URL valid for 15 minutes.
+
 ---
 
 ## 2) Implementation status (actually done)
