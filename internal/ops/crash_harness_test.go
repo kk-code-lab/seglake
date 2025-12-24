@@ -5,6 +5,9 @@ package ops
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -12,14 +15,23 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
+)
+
+const (
+	crashAccessKey = "test"
+	crashSecretKey = "testsecret"
+	crashRegion    = "us-east-1"
 )
 
 type mpuInitResult struct {
@@ -77,14 +89,28 @@ func TestCrashHarness(t *testing.T) {
 		putObject(t, client, host, keyBase+"/large.bin", bytes.Repeat([]byte("a"), 5<<20))
 		multipartUpload(t, client, host, keyBase+"/mpu.bin", bytes.Repeat([]byte("a"), 5<<20), []byte("tail"))
 
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		stopServerGracefully(cmd, 2*time.Second)
 
 		if parseCorrupt(t) {
 			if err := corruptFirstSegment(filepath.Join(dataDir, "objects", "segments")); err != nil {
 				t.Fatalf("corrupt segment: %v", err)
 			}
 		}
+
+		// Restart once to seal open segments before fsck/rebuild.
+		cmd = startServerWithBarrier(t, bin, dataDir, addr)
+		t.Cleanup(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			}
+		})
+		if err := waitForStats(client, host, 2*time.Second); err != nil {
+			_ = cmd.Process.Kill()
+			t.Fatalf("server did not restart for seal: %v", err)
+		}
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
 
 		fsck := runOpsJSON(t, bin, dataDir, "fsck")
 		assertReportOK(t, "fsck", fsck)
@@ -125,6 +151,8 @@ func startServerWithBarrier(t *testing.T, bin, dataDir, addr string) *exec.Cmd {
 		"-data-dir", dataDir,
 		"-sync-interval", "5ms",
 		"-sync-bytes", "1048576",
+		"-access-key", crashAccessKey,
+		"-secret-key", crashSecretKey,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -140,6 +168,7 @@ func putObject(t *testing.T, client *http.Client, host, key string, data []byte)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
+	signRequest(req, crashAccessKey, crashSecretKey, crashRegion)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT error: %v", err)
@@ -152,7 +181,12 @@ func putObject(t *testing.T, client *http.Client, host, key string, data []byte)
 
 func getObjectWithBody(t *testing.T, client *http.Client, host, key, want string) {
 	t.Helper()
-	resp, err := client.Get(host + "/" + key)
+	req, err := http.NewRequest(http.MethodGet, host+"/"+key, nil)
+	if err != nil {
+		t.Fatalf("GET request: %v", err)
+	}
+	signRequest(req, crashAccessKey, crashSecretKey, crashRegion)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
@@ -171,7 +205,12 @@ func getObjectWithBody(t *testing.T, client *http.Client, host, key, want string
 
 func getObjectExpectStatus(t *testing.T, client *http.Client, host, key string, status int) {
 	t.Helper()
-	resp, err := client.Get(host + "/" + key)
+	req, err := http.NewRequest(http.MethodGet, host+"/"+key, nil)
+	if err != nil {
+		t.Fatalf("GET request: %v", err)
+	}
+	signRequest(req, crashAccessKey, crashSecretKey, crashRegion)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
@@ -187,6 +226,7 @@ func multipartUpload(t *testing.T, client *http.Client, host, key string, part1,
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
+	signRequest(initReq, crashAccessKey, crashSecretKey, crashRegion)
 	initResp, err := client.Do(initReq)
 	if err != nil {
 		t.Fatalf("init error: %v", err)
@@ -221,6 +261,7 @@ func multipartUpload(t *testing.T, client *http.Client, host, key string, part1,
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
+	signRequest(completeReq, crashAccessKey, crashSecretKey, crashRegion)
 	completeResp, err := client.Do(completeReq)
 	if err != nil {
 		t.Fatalf("complete error: %v", err)
@@ -237,6 +278,7 @@ func uploadPart(t *testing.T, client *http.Client, host, key, uploadID string, p
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
+	signRequest(req, crashAccessKey, crashSecretKey, crashRegion)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT part error: %v", err)
@@ -294,6 +336,7 @@ func waitForStats(client *http.Client, host string, timeout time.Duration) error
 	url := host + "/v1/meta/stats"
 	for {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		signRequest(req, crashAccessKey, crashSecretKey, crashRegion)
 		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
@@ -380,4 +423,139 @@ func pickFreePort() (string, error) {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr, nil
+}
+
+func stopServerGracefully(cmd *exec.Cmd, timeout time.Duration) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Signal(os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		_, _ = cmd.Process.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}
+}
+
+func signRequest(r *http.Request, accessKey, secretKey, region string) {
+	if r == nil || r.URL == nil {
+		return
+	}
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	r.Header.Set("Host", r.URL.Host)
+
+	canonicalHeaders, signedHeaders := canonicalHeadersForRequest(r)
+	canonicalRequest := strings.Join([]string{
+		r.Method,
+		canonicalURI(r),
+		canonicalQueryFromURL(r.URL),
+		canonicalHeaders,
+		strings.Join(signedHeaders, ";"),
+		"UNSIGNED-PAYLOAD",
+	}, "\n")
+
+	hash := sha256.Sum256([]byte(canonicalRequest))
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hash[:]),
+	}, "\n")
+
+	signingKey := deriveSigningKey(secretKey, dateScope, region, "s3")
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=" + accessKey + "/" + scope + "," +
+		"SignedHeaders=" + strings.Join(signedHeaders, ";") + "," +
+		"Signature=" + signature
+	r.Header.Set("Authorization", auth)
+}
+
+func canonicalHeadersForRequest(r *http.Request) (string, []string) {
+	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	var b strings.Builder
+	for _, h := range headers {
+		var value string
+		if h == "host" {
+			value = r.Host
+		} else {
+			value = r.Header.Get(h)
+		}
+		b.WriteString(h)
+		b.WriteByte(':')
+		b.WriteString(value)
+		b.WriteByte('\n')
+	}
+	return b.String(), headers
+}
+
+func canonicalQueryFromURL(u *url.URL) string {
+	if u.RawQuery == "" {
+		return ""
+	}
+	values := u.Query()
+	var pairs []string
+	for k, vs := range values {
+		for _, v := range vs {
+			pairs = append(pairs, encodeRfc3986(k)+"="+encodeRfc3986(v))
+		}
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, "&")
+}
+
+func canonicalURI(r *http.Request) string {
+	if r.URL == nil {
+		return "/"
+	}
+	path := r.URL.EscapedPath()
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+
+func encodeRfc3986(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'):
+			b.WriteByte(c)
+		case c == '-' || c == '_' || c == '.' || c == '~':
+			b.WriteByte(c)
+		default:
+			b.WriteString(fmt.Sprintf("%%%02X", c))
+		}
+	}
+	return b.String()
+}
+
+func deriveSigningKey(secret, date, region, service string) []byte {
+	kDate := hmacSHA256([]byte("AWS4"+secret), date)
+	kRegion := hmacSHA256(kDate, region)
+	kService := hmacSHA256(kRegion, service)
+	return hmacSHA256(kService, "aws4_request")
+}
+
+func hmacSHA256(key []byte, data string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return h.Sum(nil)
+}
+
+func hmacSHA256Hex(key []byte, data string) string {
+	return hex.EncodeToString(hmacSHA256(key, data))
 }

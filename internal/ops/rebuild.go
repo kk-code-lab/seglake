@@ -63,11 +63,14 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 				if err != nil {
 					return err
 				}
-				// Derive bucket/key from manifest filename: expects "<bucket>__<key>__<version>".
-				bucket, key, ok := parseManifestName(filepath.Base(path))
-				if !ok || bucket == "" || key == "" {
-					bucket = man.Bucket
-					key = man.Key
+				// Prefer bucket/key from manifest; fallback to filename "<bucket>__<key>__<version>".
+				bucket, key := man.Bucket, man.Key
+				if bucket == "" || key == "" {
+					parsedBucket, parsedKey, ok := parseManifestName(filepath.Base(path))
+					if ok {
+						bucket = parsedBucket
+						key = parsedKey
+					}
 				}
 				if bucket == "" || key == "" {
 					report.SkippedManifests++
