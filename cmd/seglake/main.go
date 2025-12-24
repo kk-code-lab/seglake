@@ -618,19 +618,20 @@ func runServer(opts *serverOptions) error {
 	}
 
 	fmt.Printf("seglake %s (commit %s)\n", app.Version, app.BuildCommit)
+	authCfg := &s3.AuthConfig{
+		AccessKey:            opts.accessKey,
+		SecretKey:            opts.secretKey,
+		Region:               opts.region,
+		MaxSkew:              5 * time.Minute,
+		AllowUnsignedPayload: opts.allowUnsigned,
+		SecretLookup: func(ctx context.Context, accessKey string) (string, bool, error) {
+			return store.LookupAPISecret(ctx, accessKey)
+		},
+	}
 	var handler http.Handler = &s3.Handler{
 		Engine: eng,
 		Meta:   store,
-		Auth: &s3.AuthConfig{
-			AccessKey:            opts.accessKey,
-			SecretKey:            opts.secretKey,
-			Region:               opts.region,
-			MaxSkew:              5 * time.Minute,
-			AllowUnsignedPayload: opts.allowUnsigned,
-			SecretLookup: func(ctx context.Context, accessKey string) (string, bool, error) {
-				return store.LookupAPISecret(ctx, accessKey)
-			},
-		},
+		Auth:   authCfg,
 		Metrics:               s3.NewMetrics(),
 		AuthLimiter:           s3.NewAuthLimiter(),
 		InflightLimiter:       s3.NewInflightLimiter(32),

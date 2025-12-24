@@ -115,6 +115,11 @@ func TestSigV2ListRequestRejected(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
+	ctx := context.Background()
+	if err := store.UpsertAPIKey(ctx, "ak", "sk", "rw", true, 0); err != nil {
+		t.Fatalf("UpsertAPIKey: %v", err)
+	}
+
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
 		MetaStore: store,
