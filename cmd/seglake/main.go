@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/app"
@@ -61,30 +63,35 @@ type globalArgs struct {
 }
 
 type serverOptions struct {
-	addr           string
-	dataDir        string
-	accessKey      string
-	secretKey      string
-	region         string
-	virtualHosted  bool
-	logRequests    bool
-	allowUnsigned  bool
-	tlsEnable      bool
-	tlsCert        string
-	tlsKey         string
-	trustedProxies string
-	siteID         string
-	syncInterval   time.Duration
-	syncBytes      int64
-	maxObjectSize  int64
-	corsOrigins    string
-	corsMethods    string
-	corsHeaders    string
-	corsMaxAge     int
-	replayTTL      time.Duration
-	replayBlock    bool
-	requireIfMatch string
-	requireMD5     bool
+	addr              string
+	dataDir           string
+	accessKey         string
+	secretKey         string
+	region            string
+	virtualHosted     bool
+	logRequests       bool
+	allowUnsigned     bool
+	tlsEnable         bool
+	tlsCert           string
+	tlsKey            string
+	trustedProxies    string
+	siteID            string
+	syncInterval      time.Duration
+	syncBytes         int64
+	maxObjectSize     int64
+	corsOrigins       string
+	corsMethods       string
+	corsHeaders       string
+	corsMaxAge        int
+	replayTTL         time.Duration
+	replayBlock       bool
+	requireIfMatch    string
+	requireMD5        bool
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
+	shutdownTimeout   time.Duration
 }
 
 type opsOptions struct {
@@ -459,6 +466,11 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.BoolVar(&opts.replayBlock, "replay-block", false, "Block requests on replay detection (default logs only)")
 	fs.StringVar(&opts.requireIfMatch, "require-if-match-buckets", "", "Comma-separated buckets requiring If-Match on overwrite (* for all)")
 	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
+	fs.DurationVar(&opts.readHeaderTimeout, "read-header-timeout", defaultReadHeaderTimeout, "HTTP read header timeout")
+	fs.DurationVar(&opts.readTimeout, "read-timeout", defaultReadTimeout, "HTTP read timeout")
+	fs.DurationVar(&opts.writeTimeout, "write-timeout", defaultWriteTimeout, "HTTP write timeout")
+	fs.DurationVar(&opts.idleTimeout, "idle-timeout", defaultIdleTimeout, "HTTP idle timeout")
+	fs.DurationVar(&opts.shutdownTimeout, "shutdown-timeout", 10*time.Second, "Graceful shutdown timeout")
 	return fs, opts
 }
 
@@ -617,19 +629,19 @@ func runServer(opts *serverOptions) error {
 				return store.LookupAPISecret(ctx, accessKey)
 			},
 		},
-		Metrics:           s3.NewMetrics(),
-		AuthLimiter:       s3.NewAuthLimiter(),
-		InflightLimiter:   s3.NewInflightLimiter(32),
-		VirtualHosted:     opts.virtualHosted,
-		MaxObjectSize:     opts.maxObjectSize,
-		CORSAllowOrigins:  splitComma(opts.corsOrigins),
-		CORSAllowMethods:  splitComma(opts.corsMethods),
-		CORSAllowHeaders:  splitComma(opts.corsHeaders),
-		CORSMaxAge:        opts.corsMaxAge,
-		ReplayCacheTTL:    opts.replayTTL,
-		ReplayBlock:       opts.replayBlock,
+		Metrics:               s3.NewMetrics(),
+		AuthLimiter:           s3.NewAuthLimiter(),
+		InflightLimiter:       s3.NewInflightLimiter(32),
+		VirtualHosted:         opts.virtualHosted,
+		MaxObjectSize:         opts.maxObjectSize,
+		CORSAllowOrigins:      splitComma(opts.corsOrigins),
+		CORSAllowMethods:      splitComma(opts.corsMethods),
+		CORSAllowHeaders:      splitComma(opts.corsHeaders),
+		CORSMaxAge:            opts.corsMaxAge,
+		ReplayCacheTTL:        opts.replayTTL,
+		ReplayBlock:           opts.replayBlock,
 		RequireIfMatchBuckets: bucketSet(splitComma(opts.requireIfMatch)),
-		RequireContentMD5: opts.requireMD5,
+		RequireContentMD5:     opts.requireMD5,
 	}
 	if opts.trustedProxies != "" {
 		handler.(*s3.Handler).TrustedProxies = splitComma(opts.trustedProxies)
@@ -637,7 +649,8 @@ func runServer(opts *serverOptions) error {
 	if opts.logRequests {
 		handler = s3.LoggingMiddleware(handler)
 	}
-	server := newHTTPServer(opts.addr, handler)
+	server := newHTTPServer(opts, handler)
+	srvErr := make(chan error, 1)
 	if opts.tlsEnable || (opts.tlsCert != "" || opts.tlsKey != "") {
 		cfg, err := newTLSConfig(opts.tlsCert, opts.tlsKey)
 		if err != nil {
@@ -649,25 +662,68 @@ func runServer(opts *serverOptions) error {
 			return err
 		}
 		tlsLn := tls.NewListener(ln, cfg)
-		if err := server.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
+		go func() {
+			srvErr <- server.Serve(tlsLn)
+		}()
+	} else {
+		go func() {
+			srvErr <- server.ListenAndServe()
+		}()
+	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err := <-srvErr:
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	case sig := <-stop:
+		fmt.Printf("seglake: received %s, shutting down\n", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), opts.shutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		err := <-srvErr
+		if err != nil && err != http.ErrServerClosed {
 			return err
 		}
 		return nil
 	}
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
 }
 
-func newHTTPServer(addr string, handler http.Handler) *http.Server {
+func newHTTPServer(opts *serverOptions, handler http.Handler) *http.Server {
+	addr := ":9000"
+	readHeaderTimeout := defaultReadHeaderTimeout
+	readTimeout := defaultReadTimeout
+	writeTimeout := defaultWriteTimeout
+	idleTimeout := defaultIdleTimeout
+	if opts != nil {
+		if opts.addr != "" {
+			addr = opts.addr
+		}
+		if opts.readHeaderTimeout > 0 {
+			readHeaderTimeout = opts.readHeaderTimeout
+		}
+		if opts.readTimeout > 0 {
+			readTimeout = opts.readTimeout
+		}
+		if opts.writeTimeout > 0 {
+			writeTimeout = opts.writeTimeout
+		}
+		if opts.idleTimeout > 0 {
+			idleTimeout = opts.idleTimeout
+		}
+	}
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
-		ReadHeaderTimeout: defaultReadHeaderTimeout,
-		ReadTimeout:       defaultReadTimeout,
-		WriteTimeout:      defaultWriteTimeout,
-		IdleTimeout:       defaultIdleTimeout,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 }
 
