@@ -251,7 +251,8 @@ Example (large objects, slower clients):
 ## Replay cache sizing
 
 Replay protection uses an in-memory cache bounded by a max entries cap (default).
-Use `-replay-ttl` to enable replay detection and `-replay-block` to enforce blocking on replays.
+Use `-replay-ttl` to enable replay detection, `-replay-block` to enforce blocking on replays,
+and `-replay-cache-max` to override the default cache size cap.
 - `-replay-ttl` (default 0 = disabled)
 - `-replay-block` (default false; block requests on replay detection)
 - `-cors-origins` (default `*`, comma-separated list)
