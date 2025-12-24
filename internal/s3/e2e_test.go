@@ -43,10 +43,11 @@ func TestS3E2EUnsignedPayload(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -187,10 +188,11 @@ func TestS3E2EBadSignature(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -233,10 +235,11 @@ func TestS3E2ETimeSkew(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   1 * time.Second,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              1 * time.Second,
 		},
 	}
 
@@ -279,10 +282,11 @@ func TestS3E2EPresignedGet(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -345,10 +349,11 @@ func TestS3E2EPresignedPut(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -416,10 +421,11 @@ func TestS3E2EListV2(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -493,10 +499,11 @@ func TestS3E2EListV2Continuation(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -596,10 +603,11 @@ func TestS3E2EListV2StartAfter(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -670,10 +678,11 @@ func TestS3E2EListV2RawContinuationToken(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -747,10 +756,11 @@ func TestS3E2ESignedHeadersCustomHeader(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -817,10 +827,11 @@ func TestS3E2ERangeGet(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -889,10 +900,11 @@ func TestS3E2ESignedHeadersRange(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -959,10 +971,11 @@ func TestS3E2ERangeGetNestedKey(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1052,10 +1065,11 @@ func TestS3E2EMultiRangeGet(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1128,10 +1142,11 @@ func TestS3E2EListBuckets(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1195,10 +1210,11 @@ func TestS3E2EPayloadHashMismatch(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1324,10 +1340,11 @@ func TestS3E2EPresignedRange(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1394,10 +1411,11 @@ func TestS3E2ERequestTimeSkewed(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   2 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              2 * time.Minute,
 		},
 	}
 
@@ -1443,10 +1461,11 @@ func TestS3E2EMultipart(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1570,10 +1589,11 @@ func TestS3E2EListMultipartUploads(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1633,10 +1653,11 @@ func TestS3E2EListMultipartUploadsPagination(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1727,10 +1748,11 @@ func TestS3E2EListMultipartUploadsDelimiterPrefix(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1815,10 +1837,11 @@ func TestS3E2EListMultipartUploadsDelimiterMarkers(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1921,10 +1944,11 @@ func TestS3E2EDeleteObject(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -1994,10 +2018,11 @@ func TestS3E2EDeleteBucket(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -2083,10 +2108,11 @@ func TestS3E2EConditionalGet(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -2174,10 +2200,11 @@ func TestS3E2ECopyObject(t *testing.T) {
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
@@ -2253,10 +2280,11 @@ func TestS3E2EVirtualHosted(t *testing.T) {
 		Meta:          store,
 		VirtualHosted: true,
 		Auth: &AuthConfig{
-			AccessKey: "test",
-			SecretKey: "testsecret",
-			Region:    "us-east-1",
-			MaxSkew:   5 * time.Minute,
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
 		},
 	}
 
