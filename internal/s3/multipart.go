@@ -293,7 +293,12 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 }
 
 func (h *Handler) handleAbortMultipart(ctx context.Context, w http.ResponseWriter, uploadID string, requestID, resource string) {
-	if err := h.Meta.AbortMultipartUpload(ctx, uploadID); err != nil {
+	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		return h.Meta.AbortMultipartUploadTx(ctx, tx, uploadID)
+	}); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
