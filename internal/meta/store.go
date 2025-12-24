@@ -1057,6 +1057,19 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
 	return err
 }
 
+// RecordAPIKeyUseTx updates last_used_at within the provided transaction.
+func (s *Store) RecordAPIKeyUseTx(ctx context.Context, tx *sql.Tx, accessKey string) error {
+	if accessKey == "" {
+		return nil
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
+	return err
+}
+
 // SetAPIKeyEnabled enables or disables an API key.
 func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled bool) (err error) {
 	if accessKey == "" {
@@ -2312,6 +2325,23 @@ func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error
 	return tx.Commit()
 }
 
+// AbortMultipartUploadTx marks an upload as aborted within the provided transaction.
+func (s *Store) AbortMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID string) error {
+	if uploadID == "" {
+		return errors.New("meta: upload id required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_uploads WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // CompleteMultipartUpload marks an upload as completed and clears its parts.
 func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string) error {
 	if uploadID == "" {
@@ -3164,6 +3194,19 @@ func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
+// CreateBucketTx inserts a bucket entry within the provided transaction.
+func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
+	return err
+}
+
 // BucketHasObjects checks whether a bucket has any current objects.
 func (s *Store) BucketHasObjects(ctx context.Context, bucket string) (bool, error) {
 	if bucket == "" {
@@ -3186,6 +3229,18 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 		return errors.New("meta: bucket required")
 	}
 	_, err := s.db.ExecContext(ctx, "DELETE FROM buckets WHERE bucket=?", bucket)
+	return err
+}
+
+// DeleteBucketTx removes a bucket entry within the provided transaction.
+func (s *Store) DeleteBucketTx(ctx context.Context, tx *sql.Tx, bucket string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM buckets WHERE bucket=?", bucket)
 	return err
 }
 

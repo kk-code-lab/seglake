@@ -527,7 +527,11 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 			return errAccessDenied
 		}
 	}
-	_ = h.Meta.RecordAPIKeyUse(ctx, accessKey)
+	if h.Engine != nil && h.Meta != nil {
+		_ = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+			return h.Meta.RecordAPIKeyUseTx(ctx, tx, accessKey)
+		})
+	}
 	return nil
 }
 
@@ -952,7 +956,12 @@ func (h *Handler) handleDeleteBucket(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusConflict, "BucketNotEmpty", "bucket not empty", requestID, resource)
 		return
 	}
-	if err := h.Meta.DeleteBucket(ctx, bucket); err != nil {
+	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		return h.Meta.DeleteBucketTx(ctx, tx, bucket)
+	}); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
@@ -1037,7 +1046,12 @@ func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
 		return
 	}
-	if err := h.Meta.CreateBucket(ctx, bucket); err != nil {
+	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		return h.Meta.CreateBucketTx(ctx, tx, bucket)
+	}); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
