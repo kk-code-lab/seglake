@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/chunk"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/segment"
 )
 
 // PutResult captures metadata for a successful write.
@@ -395,6 +397,24 @@ func (e *Engine) MissingChunks(man *manifest.Manifest) ([]MissingChunk, error) {
 				Offset:    ch.Offset,
 				Length:    int64(ch.Len),
 			})
+			continue
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, ch.Len)
+		n, err := file.ReadAt(buf, ch.Offset)
+		_ = file.Close()
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		if n != int(ch.Len) || segment.HashChunk(buf) != ch.Hash {
+			missing = append(missing, MissingChunk{
+				SegmentID: ch.SegmentID,
+				Offset:    ch.Offset,
+				Length:    int64(ch.Len),
+			})
 		}
 	}
 	return missing, nil
@@ -487,7 +507,10 @@ func writeManifestFile(path string, codec manifest.Codec, man *manifest.Manifest
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	return codec.Encode(file, man)
+	if err := codec.Encode(file, man); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func newID() (string, error) {
@@ -502,5 +525,7 @@ func formatManifestName(bucket, key, versionID string) string {
 	if bucket == "" || key == "" {
 		return versionID
 	}
-	return bucket + "__" + key + "__" + versionID
+	b := base64.RawURLEncoding.EncodeToString([]byte(bucket))
+	k := base64.RawURLEncoding.EncodeToString([]byte(key))
+	return b + "__" + k + "__" + versionID
 }

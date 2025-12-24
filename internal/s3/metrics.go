@@ -26,6 +26,7 @@ type Metrics struct {
 
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
+	replayDetected atomic.Int64
 }
 
 type latencyWindow struct {
@@ -90,6 +91,13 @@ func (m *Metrics) AddBytesOut(n int64) {
 	m.bytesOut.Add(n)
 }
 
+func (m *Metrics) IncReplayDetected() {
+	if m == nil {
+		return
+	}
+	m.replayDetected.Add(1)
+}
+
 func (m *Metrics) Record(op string, status int, dur time.Duration, bucketName, key string) {
 	if m == nil {
 		return
@@ -140,9 +148,9 @@ func (m *Metrics) Record(op string, status int, dur time.Duration, bucketName, k
 	}
 }
 
-func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, latency map[string]LatencyStats, bucketReqs map[string]map[string]int64, bucketLatency map[string]LatencyStats, keyReqs map[string]map[string]int64, keyLatency map[string]LatencyStats) {
+func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, replayDetected int64, latency map[string]LatencyStats, bucketReqs map[string]map[string]int64, bucketLatency map[string]LatencyStats, keyReqs map[string]map[string]int64, keyLatency map[string]LatencyStats) {
 	if m == nil {
-		return nil, nil, 0, 0, nil, nil, nil, nil, nil
+		return nil, nil, 0, 0, 0, nil, nil, nil, nil, nil
 	}
 	requests = make(map[string]map[string]int64)
 	m.requestsMu.Lock()
@@ -164,6 +172,7 @@ func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map
 
 	bytesIn = m.bytesIn.Load()
 	bytesOut = m.bytesOut.Load()
+	replayDetected = m.replayDetected.Load()
 
 	latency = make(map[string]LatencyStats)
 	m.latencyMu.Lock()
@@ -202,7 +211,7 @@ func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map
 	}
 	m.keyMu.Unlock()
 
-	return requests, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency
+	return requests, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency
 }
 
 func updateClassMap(target map[string]map[string]int64, key, class string, limit int) {

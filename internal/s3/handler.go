@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -44,6 +45,10 @@ type Handler struct {
 	RequireContentMD5 bool
 	// ReplayCacheTTL enables replay protection within the TTL window (0 disables).
 	ReplayCacheTTL time.Duration
+	// ReplayBlock determines whether replay detection blocks requests.
+	ReplayBlock bool
+	// RequireIfMatchBuckets enforces If-Match on overwrites for selected buckets.
+	RequireIfMatchBuckets map[string]struct{}
 	replayCache    *replayCache
 }
 
@@ -414,14 +419,20 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		}
 		return requestID, false
 	}
-	if h.ReplayCacheTTL > 0 {
+	if h.ReplayCacheTTL > 0 && r.URL.Query().Get("X-Amz-Signature") != "" {
 		if h.replayCache == nil {
 			h.replayCache = newReplayCache(h.ReplayCacheTTL)
 		}
 		key := replayKey(r)
 		if !h.replayCache.allow(key, time.Now().UTC()) {
-			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "replay detected", requestID, r.URL.Path)
-			return requestID, false
+			if h.Metrics != nil {
+				h.Metrics.IncReplayDetected()
+			}
+			log.Printf("replay_detected method=%s path=%s req_id=%s", r.Method, redactURL(r.URL), requestID)
+			if h.ReplayBlock {
+				writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "replay detected", requestID, r.URL.Path)
+				return requestID, false
+			}
 		}
 	}
 	if err := h.authorizeRequest(r.Context(), r); err != nil {
@@ -561,6 +572,9 @@ func (h *Handler) isTrustedProxy(remoteAddr string) bool {
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
 	defer func() { _ = r.Body.Close() }()
+	if !h.enforceIfMatch(ctx, w, r, bucket, key, requestID) {
+		return
+	}
 	contentLength, hasLength, err := contentLengthFromRequest(r)
 	if err != nil {
 		switch err {
@@ -747,6 +761,9 @@ type copyObjectResult struct {
 }
 
 func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, copySource, requestID string) {
+	if !h.enforceIfMatch(ctx, w, r, bucket, key, requestID) {
+		return
+	}
 	srcBucket, srcKey, ok := parseCopySource(copySource)
 	if !ok {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "invalid copy source", requestID, r.URL.Path)
@@ -809,6 +826,48 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) enforceIfMatch(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) bool {
+	if h == nil || h.Meta == nil {
+		return true
+	}
+	if !h.requiresIfMatch(bucket) {
+		return true
+	}
+	ifMatch := r.Header.Get("If-Match")
+	metaObj, err := h.Meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if ifMatch != "" {
+				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match failed", requestID, r.URL.Path)
+				return false
+			}
+			return true
+		}
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return false
+	}
+	if ifMatch == "" {
+		writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match required", requestID, r.URL.Path)
+		return false
+	}
+	if !etagMatch(ifMatch, metaObj.ETag) {
+		writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match failed", requestID, r.URL.Path)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) requiresIfMatch(bucket string) bool {
+	if h == nil || bucket == "" || len(h.RequireIfMatchBuckets) == 0 {
+		return false
+	}
+	if _, ok := h.RequireIfMatchBuckets["*"]; ok {
+		return true
+	}
+	_, ok := h.RequireIfMatchBuckets[bucket]
+	return ok
 }
 
 func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {

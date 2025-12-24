@@ -87,6 +87,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 3.5 Metadata (SQLite)
 - `objects_current` points to the current object version.
 - `versions` stores etag (MD5), size, content_type, last_modified_utc, state.
+  - state can be `ACTIVE`, `DELETED`, `DAMAGED`, or `CONFLICT` (kept when replication loses LWW).
 - `segments` stores state, size, footer checksum.
 - Multipart: `multipart_uploads`, `multipart_parts`.
 
@@ -139,7 +140,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Request time skew: default ±5 min (fixed; no flag).
 - Region `us` normalized to `us-east-1`.
 - Required signed headers: `host` and `x-amz-date`.
-- Replay protection: signature cache within TTL window (default 5 min, can be disabled).
+- Replay protection: signature cache within TTL window (default disabled; enable via `-replay-ttl`; logs by default, blocks only with `-replay-block`).
+- Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
 - Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
@@ -203,6 +205,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - last fsck/scrub/gc results (time + errors + reclaim/rewritten),
 - requests_total{op,status_class}, inflight{op},
 - bytes_in_total, bytes_out_total,
+- replay_detected,
 - latency_ms{op}: p50/p95/p99,
 - requests_total_by_bucket / latency_ms_by_bucket,
 - requests_total_by_key / latency_ms_by_key,

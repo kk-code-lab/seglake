@@ -39,6 +39,20 @@ func splitComma(value string) []string {
 	return out
 }
 
+func bucketSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
 type globalArgs struct {
 	mode        string
 	modeHelp    bool
@@ -68,6 +82,8 @@ type serverOptions struct {
 	corsHeaders    string
 	corsMaxAge     int
 	replayTTL      time.Duration
+	replayBlock    bool
+	requireIfMatch string
 	requireMD5     bool
 }
 
@@ -439,7 +455,9 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.corsMethods, "cors-methods", "GET,PUT,HEAD,DELETE", "Comma-separated CORS allowed methods")
 	fs.StringVar(&opts.corsHeaders, "cors-headers", "authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256", "Comma-separated CORS allowed headers")
 	fs.IntVar(&opts.corsMaxAge, "cors-max-age", 86400, "CORS preflight max age in seconds")
-	fs.DurationVar(&opts.replayTTL, "replay-ttl", 5*time.Minute, "Replay protection TTL (0 disables)")
+	fs.DurationVar(&opts.replayTTL, "replay-ttl", 0, "Replay protection TTL (0 disables)")
+	fs.BoolVar(&opts.replayBlock, "replay-block", false, "Block requests on replay detection (default logs only)")
+	fs.StringVar(&opts.requireIfMatch, "require-if-match-buckets", "", "Comma-separated buckets requiring If-Match on overwrite (* for all)")
 	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
 	return fs, opts
 }
@@ -609,6 +627,8 @@ func runServer(opts *serverOptions) error {
 		CORSAllowHeaders:  splitComma(opts.corsHeaders),
 		CORSMaxAge:        opts.corsMaxAge,
 		ReplayCacheTTL:    opts.replayTTL,
+		ReplayBlock:       opts.replayBlock,
+		RequireIfMatchBuckets: bucketSet(splitComma(opts.requireIfMatch)),
 		RequireContentMD5: opts.requireMD5,
 	}
 	if opts.trustedProxies != "" {
