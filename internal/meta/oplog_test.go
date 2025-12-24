@@ -673,6 +673,13 @@ func TestApplyOplogTracksConflicts(t *testing.T) {
 	if stats.ReplConflicts != 1 {
 		t.Fatalf("expected repl conflicts=1 got %d", stats.ReplConflicts)
 	}
+	metaObj, err := store.GetObjectVersion(context.Background(), "bucket", "key", "v1")
+	if err != nil {
+		t.Fatalf("GetObjectVersion: %v", err)
+	}
+	if metaObj.State != "CONFLICT" {
+		t.Fatalf("expected conflict state, got %s", metaObj.State)
+	}
 }
 
 func TestApplyOplogPutVsPut(t *testing.T) {

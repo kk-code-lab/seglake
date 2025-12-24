@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -82,6 +83,65 @@ func TestMarkDamaged(t *testing.T) {
 	}
 	if state != "DAMAGED" {
 		t.Fatalf("expected DAMAGED, got %s", state)
+	}
+}
+
+func TestRecordMPUCompleteUpdatesETag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag-single", 12, "/tmp/manifest", ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.RecordMPUComplete(ctx, "b1", "k1", "v1", "etag-mpu", 12); err != nil {
+		t.Fatalf("RecordMPUComplete: %v", err)
+	}
+	meta, err := store.GetObjectMeta(ctx, "b1", "k1")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.ETag != "etag-mpu" {
+		t.Fatalf("expected mpu etag, got %q", meta.ETag)
+	}
+}
+
+func TestHLCStateMonotonicAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	future := fmt.Sprintf("%019d-%010d", time.Now().UTC().Add(time.Hour).UnixNano(), 0)
+	if err := store.setHLCState(ctx, future); err != nil {
+		_ = store.Close()
+		t.Fatalf("setHLCState: %v", err)
+	}
+	_ = store.Close()
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open reopen: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 1, "/tmp/manifest", ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	maxHLC, err := store.MaxOplogHLC(ctx)
+	if err != nil {
+		t.Fatalf("MaxOplogHLC: %v", err)
+	}
+	if maxHLC <= future {
+		t.Fatalf("expected hlc > %q, got %q", future, maxHLC)
 	}
 }
 

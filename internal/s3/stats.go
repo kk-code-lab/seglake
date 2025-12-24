@@ -31,6 +31,7 @@ type statsResponse struct {
 	Inflight                map[string]int64            `json:"inflight,omitempty"`
 	BytesInTotal            int64                       `json:"bytes_in_total,omitempty"`
 	BytesOutTotal           int64                       `json:"bytes_out_total,omitempty"`
+	ReplayDetected          int64                       `json:"replay_detected,omitempty"`
 	LatencyMs               map[string]LatencyStats     `json:"latency_ms,omitempty"`
 	RequestsByBucket        map[string]map[string]int64 `json:"requests_total_by_bucket,omitempty"`
 	LatencyByBucketMs       map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
@@ -83,11 +84,12 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		Replication:             replStats,
 	}
 	if h.Metrics != nil {
-		reqs, inflight, bytesIn, bytesOut, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
+		reqs, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
 		resp.RequestsTotal = reqs
 		resp.Inflight = inflight
 		resp.BytesInTotal = bytesIn
 		resp.BytesOutTotal = bytesOut
+		resp.ReplayDetected = replayDetected
 		resp.LatencyMs = latency
 		resp.RequestsByBucket = bucketReqs
 		resp.LatencyByBucketMs = bucketLatency

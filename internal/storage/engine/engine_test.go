@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
@@ -193,5 +194,59 @@ func TestEngineGetManifestMissingReturnsNotExist(t *testing.T) {
 	_, err = engine.GetManifest(context.Background(), versionID)
 	if err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected not exist error, got %v", err)
+	}
+}
+
+func TestEngineManifestNameEscapesKey(t *testing.T) {
+	layout := fs.NewLayout(t.TempDir())
+	name := formatManifestName("bucket", "../escape", "v1")
+	if strings.ContainsRune(name, os.PathSeparator) {
+		t.Fatalf("manifest name should not include path separators: %q", name)
+	}
+	path := layout.ManifestPath(name)
+	if filepath.Dir(path) != layout.ManifestsDir {
+		t.Fatalf("manifest path escaped manifests dir: %q", path)
+	}
+}
+
+func TestMissingChunksDetectsHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	engine, err := New(Options{Layout: layout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	payload := bytes.Repeat([]byte("abcd"), 512)
+	man, _, err := engine.Put(context.Background(), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if len(man.Chunks) == 0 {
+		t.Fatalf("expected chunks")
+	}
+	ch := man.Chunks[0]
+	path := layout.SegmentPath(ch.SegmentID)
+	file, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("open segment: %v", err)
+	}
+	buf := []byte{0}
+	if _, err := file.ReadAt(buf, ch.Offset); err != nil && err != io.EOF {
+		_ = file.Close()
+		t.Fatalf("read segment: %v", err)
+	}
+	buf[0] ^= 0xff
+	if _, err := file.WriteAt(buf, ch.Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("write segment: %v", err)
+	}
+	_ = file.Close()
+
+	missing, err := engine.MissingChunks(man)
+	if err != nil {
+		t.Fatalf("MissingChunks: %v", err)
+	}
+	if len(missing) == 0 {
+		t.Fatalf("expected missing chunk after corruption")
 	}
 }

@@ -68,6 +68,85 @@ func TestPutEnforcesMaxObjectSize(t *testing.T) {
 	}
 }
 
+func TestPutRequiresIfMatchOnOverwrite(t *testing.T) {
+	h := newTestHandler(t)
+	h.RequireIfMatchBuckets = map[string]struct{}{"bucket": {}}
+
+	req := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("first"))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial PUT status: %d", w.Code)
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatalf("expected ETag")
+	}
+
+	overwrite := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("second"))
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, overwrite)
+	if w2.Code != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %d", w2.Code)
+	}
+
+	bad := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("third"))
+	bad.Header.Set("If-Match", "\"deadbeef\"")
+	w3 := httptest.NewRecorder()
+	h.ServeHTTP(w3, bad)
+	if w3.Code != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %d", w3.Code)
+	}
+
+	ok := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("fourth"))
+	ok.Header.Set("If-Match", etag)
+	w4 := httptest.NewRecorder()
+	h.ServeHTTP(w4, ok)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w4.Code)
+	}
+}
+
+func TestCopyRequiresIfMatchOnOverwrite(t *testing.T) {
+	h := newTestHandler(t)
+	h.RequireIfMatchBuckets = map[string]struct{}{"bucket": {}}
+
+	putSrc := httptest.NewRequest(http.MethodPut, "/bucket/src", strings.NewReader("src"))
+	putSrcW := httptest.NewRecorder()
+	h.ServeHTTP(putSrcW, putSrc)
+	if putSrcW.Code != http.StatusOK {
+		t.Fatalf("source PUT status: %d", putSrcW.Code)
+	}
+
+	putDst := httptest.NewRequest(http.MethodPut, "/bucket/dst", strings.NewReader("dst"))
+	putDstW := httptest.NewRecorder()
+	h.ServeHTTP(putDstW, putDst)
+	if putDstW.Code != http.StatusOK {
+		t.Fatalf("dest PUT status: %d", putDstW.Code)
+	}
+	dstETag := putDstW.Header().Get("ETag")
+	if dstETag == "" {
+		t.Fatalf("expected dest ETag")
+	}
+
+	copyReq := httptest.NewRequest(http.MethodPut, "/bucket/dst", nil)
+	copyReq.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	copyW := httptest.NewRecorder()
+	h.ServeHTTP(copyW, copyReq)
+	if copyW.Code != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %d", copyW.Code)
+	}
+
+	copyReqOK := httptest.NewRequest(http.MethodPut, "/bucket/dst", nil)
+	copyReqOK.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	copyReqOK.Header.Set("If-Match", dstETag)
+	copyWOK := httptest.NewRecorder()
+	h.ServeHTTP(copyWOK, copyReqOK)
+	if copyWOK.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", copyWOK.Code)
+	}
+}
+
 func TestGetSetsContentTypeAndConditionals(t *testing.T) {
 	h := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("data"))

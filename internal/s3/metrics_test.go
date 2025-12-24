@@ -11,7 +11,7 @@ func TestMetricsBucketKeyStats(t *testing.T) {
 	m.Record("get", 200, 10*time.Millisecond, "bucket", "key")
 	m.Record("get", 404, 5*time.Millisecond, "bucket", "key")
 
-	reqs, _, _, _, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := m.Snapshot()
+	reqs, _, _, _, _, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := m.Snapshot()
 	if reqs["get"]["2xx"] != 1 || reqs["get"]["4xx"] != 1 {
 		t.Fatalf("unexpected op class counts: %#v", reqs["get"])
 	}
@@ -40,7 +40,7 @@ func TestMetricsBucketKeyLimits(t *testing.T) {
 	for i := 0; i < 1001; i++ {
 		m.Record("get", 200, time.Millisecond, "bucket", "key-"+strconv.Itoa(i))
 	}
-	_, _, _, _, _, bucketReqs, _, keyReqs, _ := m.Snapshot()
+	_, _, _, _, _, _, bucketReqs, _, keyReqs, _ := m.Snapshot()
 	if len(bucketReqs) != 100 {
 		t.Fatalf("expected 100 buckets, got %d", len(bucketReqs))
 	}
@@ -49,7 +49,7 @@ func TestMetricsBucketKeyLimits(t *testing.T) {
 	}
 	m.Record("get", 500, time.Millisecond, "bucket-0", "key")
 	m.Record("get", 500, time.Millisecond, "bucket", "key-0")
-	_, _, _, _, _, bucketReqs, _, keyReqs, _ = m.Snapshot()
+	_, _, _, _, _, _, bucketReqs, _, keyReqs, _ = m.Snapshot()
 	if bucketReqs["bucket-0"]["5xx"] != 1 {
 		t.Fatalf("expected bucket-0 to be updated")
 	}

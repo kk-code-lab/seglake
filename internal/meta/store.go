@@ -113,6 +113,10 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.initHLC(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -136,6 +140,61 @@ func (s *Store) nextHLC() (string, string) {
 		siteID = "local"
 	}
 	return s.hlc.Next(), siteID
+}
+
+func (s *Store) initHLC(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	last := ""
+	err := s.db.QueryRowContext(ctx, "SELECT last_hlc FROM hlc_state WHERE id=1").Scan(&last)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table") {
+			return err
+		}
+		last = ""
+	}
+	maxOplog, err := s.MaxOplogHLC(ctx)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return err
+	}
+	final := last
+	if maxOplog > final {
+		final = maxOplog
+	}
+	if final != "" {
+		_ = s.hlc.Update(final)
+		_ = s.setHLCState(ctx, final)
+	}
+	return nil
+}
+
+func (s *Store) setHLCState(ctx context.Context, hlc string) error {
+	if s == nil || s.db == nil || hlc == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO hlc_state(id, last_hlc, updated_at)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	last_hlc=CASE WHEN excluded.last_hlc > hlc_state.last_hlc THEN excluded.last_hlc ELSE hlc_state.last_hlc END,
+	updated_at=excluded.updated_at`, hlc, now)
+	return err
+}
+
+func (s *Store) updateHLCStateTx(tx *sql.Tx, hlc string) error {
+	if tx == nil || hlc == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.Exec(`
+INSERT INTO hlc_state(id, last_hlc, updated_at)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	last_hlc=CASE WHEN excluded.last_hlc > hlc_state.last_hlc THEN excluded.last_hlc ELSE hlc_state.last_hlc END,
+	updated_at=excluded.updated_at`, hlc, now)
+	return err
 }
 
 // Close closes the database.
@@ -353,6 +412,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 16 {
+		if err = applyV16(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(16, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -694,6 +761,22 @@ func applyV15(ctx context.Context, tx *sql.Tx) error {
 			if strings.Contains(err.Error(), "no such table") {
 				continue
 			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV16(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS hlc_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			last_hlc TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -1329,12 +1412,19 @@ func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, e
 		}
 	}()
 	hlcTS, _ := s.nextHLC()
+	lastModified := time.Now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogMPUCompletePayload{
 		ETag:         etag,
 		Size:         size,
-		LastModified: time.Now().UTC().Format(time.RFC3339Nano),
+		LastModified: lastModified,
 	})
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+UPDATE versions
+SET etag=?, size=?, last_modified_utc=?
+WHERE version_id=?`, etag, size, lastModified, versionID); err != nil {
 		return err
 	}
 	if err := s.recordOplogTx(tx, hlcTS, "mpu_complete", bucket, key, versionID, string(payload)); err != nil {
@@ -1398,7 +1488,16 @@ func (s *Store) recordOplogTxWithSite(tx *sql.Tx, hlcTS, siteID, opType, bucket,
 INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, bytes, created_at)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		siteID, hlcTS, opType, bucket, key, versionID, payload, bytes, now)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := s.updateHLCStateTx(tx, hlcTS); err != nil {
+		return err
+	}
+	if s.hlc != nil {
+		_ = s.hlc.Update(hlcTS)
+	}
+	return nil
 }
 
 func oplogPayloadBytes(opType, payload string) int64 {
@@ -1449,6 +1548,12 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.SiteID, entry.HLCTS, entry.OpType, entry.Bucket, entry.Key, entry.VersionID, entry.Payload, bytes, createdAt)
 	if err != nil {
 		return false, err
+	}
+	if err := s.updateHLCStateTx(tx, entry.HLCTS); err != nil {
+		return false, err
+	}
+	if s.hlc != nil {
+		_ = s.hlc.Update(entry.HLCTS)
 	}
 	return true, nil
 }
@@ -1546,11 +1651,28 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				if lastModified == "" {
 					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
 				}
-				if _, err := tx.Exec(`
+				if entry.OpType == "mpu_complete" {
+					if _, err := tx.Exec(`
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+ON CONFLICT(version_id) DO UPDATE SET
+	etag=excluded.etag,
+	size=excluded.size,
+	content_type=CASE WHEN excluded.content_type<>'' THEN excluded.content_type ELSE versions.content_type END,
+	last_modified_utc=excluded.last_modified_utc,
+	hlc_ts=excluded.hlc_ts,
+	site_id=excluded.site_id,
+	state='ACTIVE'`,
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+						return err
+					}
+				} else {
+					if _, err := tx.Exec(`
 INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-					entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
-					return err
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+						return err
+					}
 				}
 				var currentVersion string
 				var currentHLC string
@@ -1570,6 +1692,9 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 					}
 					if ok && compareHLC(entry.HLCTS, entry.SiteID, latestHLC, latestSite) < 0 {
 						conflicts++
+						if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+							return err
+						}
 						continue
 					}
 				}
@@ -1583,6 +1708,9 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 					}
 				} else if !errors.Is(err, sql.ErrNoRows) {
 					conflicts++
+					if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+						return err
+					}
 				}
 			case "delete":
 				if entry.VersionID == "" {
@@ -1631,6 +1759,9 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 						}
 					} else {
 						conflicts++
+						if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+							return err
+						}
 					}
 				}
 			case "bucket_policy":
@@ -1760,6 +1891,14 @@ ORDER BY id`)
 		out = append(out, entry)
 		return nil
 	})
+}
+
+func markVersionConflictTx(tx *sql.Tx, versionID string) error {
+	if tx == nil || versionID == "" {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE versions SET state='CONFLICT' WHERE version_id=?`, versionID)
+	return err
 }
 
 // ListOplogSince returns oplog entries with hlc_ts greater than the provided value.
