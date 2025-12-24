@@ -464,6 +464,9 @@ func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset
 	if _, err := file.WriteAt(data, offset); err != nil {
 		return err
 	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return err
