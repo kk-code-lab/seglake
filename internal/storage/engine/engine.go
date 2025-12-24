@@ -107,6 +107,25 @@ func (e *Engine) Put(ctx context.Context, r io.Reader) (*manifest.Manifest, *Put
 
 // PutObject stores an object stream and returns manifest metadata.
 func (e *Engine) PutObject(ctx context.Context, bucket, key, contentType string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
+	return e.PutObjectWithCommit(ctx, bucket, key, contentType, r, nil)
+}
+
+// CommitMeta schedules a meta-only commit through the write barrier.
+func (e *Engine) CommitMeta(ctx context.Context, commit func(tx *sql.Tx) error) error {
+	if commit == nil {
+		return nil
+	}
+	if e.metaStore == nil {
+		return errors.New("engine: meta store not configured")
+	}
+	if err := e.barrier.register(commit); err != nil {
+		return err
+	}
+	return e.barrier.wait(ctx)
+}
+
+// PutObjectWithCommit stores an object stream and runs an optional meta commit in the barrier transaction.
+func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentType string, r io.Reader, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
@@ -167,6 +186,14 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key, contentType string,
 				if err := e.metaStore.RecordManifestTx(tx, versionID, manifestPath); err != nil {
 					return err
 				}
+			}
+		}
+		if extraCommit != nil {
+			if tx == nil {
+				return errors.New("engine: extra commit requires transaction")
+			}
+			if err := extraCommit(tx, result, manifestPath); err != nil {
+				return err
 			}
 		}
 		return nil

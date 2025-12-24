@@ -1433,6 +1433,36 @@ WHERE version_id=?`, etag, size, lastModified, versionID); err != nil {
 	return tx.Commit()
 }
 
+// RecordMPUCompleteTx records an MPU completion in the oplog within the provided transaction.
+func (s *Store) RecordMPUCompleteTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID, etag string, size int64) error {
+	if bucket == "" || key == "" || versionID == "" {
+		return errors.New("meta: bucket, key, and version id required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	hlcTS, _ := s.nextHLC()
+	lastModified := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := json.Marshal(oplogMPUCompletePayload{
+		ETag:         etag,
+		Size:         size,
+		LastModified: lastModified,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+UPDATE versions
+SET etag=?, size=?, last_modified_utc=?
+WHERE version_id=?`, etag, size, lastModified, versionID); err != nil {
+		return err
+	}
+	if err := s.recordOplogTx(tx, hlcTS, "mpu_complete", bucket, key, versionID, string(payload)); err != nil {
+		return err
+	}
+	return nil
+}
+
 // RecordManifestTx records a manifest path for a version id.
 func (s *Store) RecordManifestTx(tx *sql.Tx, versionID, manifestPath string) error {
 	if versionID == "" || manifestPath == "" {
@@ -2205,6 +2235,21 @@ VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
 	return err
 }
 
+// CreateMultipartUploadTx creates an upload within the provided transaction.
+func (s *Store) CreateMultipartUploadTx(ctx context.Context, tx *sql.Tx, bucket, key, uploadID, contentType string) error {
+	if bucket == "" || key == "" || uploadID == "" {
+		return errors.New("meta: bucket, key, and upload id required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state, content_type)
+VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
+	return err
+}
+
 // ListMultipartUploads returns active uploads for a bucket and optional prefix/markers.
 func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker string, limit int) (out []MultipartUpload, err error) {
 	if limit <= 0 {
@@ -2291,6 +2336,24 @@ UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); er
 	return tx.Commit()
 }
 
+// CompleteMultipartUploadTx marks an upload as completed and clears its parts within the provided transaction.
+func (s *Store) CompleteMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID string) error {
+	if uploadID == "" {
+		return errors.New("meta: upload id required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // PutMultipartPart records or replaces a part.
 func (s *Store) PutMultipartPart(ctx context.Context, uploadID string, partNumber int, versionID, etag string, size int64) error {
 	if uploadID == "" || partNumber <= 0 || versionID == "" {
@@ -2298,6 +2361,27 @@ func (s *Store) PutMultipartPart(ctx context.Context, uploadID string, partNumbe
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
+INSERT INTO multipart_parts(upload_id, part_number, version_id, etag, size, last_modified_utc)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(upload_id, part_number) DO UPDATE SET
+	version_id=excluded.version_id,
+	etag=excluded.etag,
+	size=excluded.size,
+	last_modified_utc=excluded.last_modified_utc`,
+		uploadID, partNumber, versionID, etag, size, now)
+	return err
+}
+
+// PutMultipartPartTx records or replaces a part within the provided transaction.
+func (s *Store) PutMultipartPartTx(ctx context.Context, tx *sql.Tx, uploadID string, partNumber int, versionID, etag string, size int64) error {
+	if uploadID == "" || partNumber <= 0 || versionID == "" {
+		return errors.New("meta: invalid part")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO multipart_parts(upload_id, part_number, version_id, etag, size, last_modified_utc)
 VALUES(?, ?, ?, ?, ?, ?)
 ON CONFLICT(upload_id, part_number) DO UPDATE SET

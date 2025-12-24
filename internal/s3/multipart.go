@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	"github.com/kk-code-lab/seglake/internal/storage/engine"
 )
 
 type initiateMultipartResult struct {
@@ -58,7 +59,12 @@ type listPartContent struct {
 func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	if err := h.Meta.CreateMultipartUpload(ctx, bucket, key, uploadID, contentType); err != nil {
+	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		return h.Meta.CreateMultipartUploadTx(ctx, tx, bucket, key, uploadID, contentType)
+	}); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
@@ -127,7 +133,12 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	if verifyPayload || len(expectedMD5) > 0 {
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
-	_, result, err := h.Engine.PutObject(ctx, "", "", "", reader)
+	_, result, err := h.Engine.PutObjectWithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, errPayloadHashMismatch):
@@ -140,10 +151,6 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
 			return
 		}
-		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
-		return
-	}
-	if err := h.Meta.PutMultipartPart(ctx, uploadID, partNumber, result.VersionID, result.ETag, result.Size); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
@@ -256,23 +263,21 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		_ = pw.Close()
 	}()
 
-	_, result, err := h.Engine.PutObject(ctx, upload.Bucket, upload.Key, upload.ContentType, pr)
+	_, result, err := h.Engine.PutObjectWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, pr, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+		if h.Meta == nil {
+			return errors.New("meta store not configured")
+		}
+		if err := h.Meta.CompleteMultipartUploadTx(ctx, tx, uploadID); err != nil {
+			return err
+		}
+		multiETag := multipartETag(ordered)
+		return h.Meta.RecordMPUCompleteTx(ctx, tx, upload.Bucket, upload.Key, result.VersionID, multiETag, result.Size)
+	})
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-
-	if h.Meta != nil {
-		if err := h.Meta.CompleteMultipartUpload(ctx, uploadID); err != nil {
-			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
-			return
-		}
-	}
-
 	multiETag := multipartETag(ordered)
-	if h.Meta != nil && result != nil {
-		_ = h.Meta.RecordMPUComplete(ctx, upload.Bucket, upload.Key, result.VersionID, multiETag, result.Size)
-	}
 	resp := completeMultipartResult{
 		Bucket: upload.Bucket,
 		Key:    upload.Key,
