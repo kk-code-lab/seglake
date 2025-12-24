@@ -15,7 +15,7 @@ func TestMultipartUploadLifecycle(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	if err := store.CreateMultipartUpload(ctx, "bucket", "prefix/key", "u1"); err != nil {
+	if err := store.CreateMultipartUpload(ctx, "bucket", "prefix/key", "u1", ""); err != nil {
 		t.Fatalf("CreateMultipartUpload: %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestMultipartPartsReplaceAndOrder(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	if err := store.CreateMultipartUpload(ctx, "bucket", "key", "u1"); err != nil {
+	if err := store.CreateMultipartUpload(ctx, "bucket", "key", "u1", ""); err != nil {
 		t.Fatalf("CreateMultipartUpload: %v", err)
 	}
 

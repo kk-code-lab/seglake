@@ -58,7 +58,7 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "secret/x", bytes.NewReader([]byte("x"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "secret/x", "", bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestPolicyCopyDenied(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "src", bytes.NewReader([]byte("x"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "src", "", bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -225,7 +225,7 @@ func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -292,7 +292,7 @@ func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 	server2, handler2, cleanup2 := newPolicyServer(t, policy2)
 	defer cleanup2()
 
-	if _, _, err := handler2.Engine.PutObject(context.Background(), "demo", "public/ok", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := handler2.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 	req2, err := http.NewRequest(http.MethodGet, server2.URL+"/demo/public/ok", nil)
@@ -316,7 +316,7 @@ func TestPolicyConditionsAfterFutureDenied(t *testing.T) {
 	server, handler, cleanup := newPolicyServer(t, policy)
 	defer cleanup()
 
-	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/k", nil)

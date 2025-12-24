@@ -230,7 +230,7 @@ func TestGCPlanAndRun(t *testing.T) {
 	if err := writeManifest(manPath, man); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	if err := store.RecordPut(context.Background(), man.Bucket, man.Key, man.VersionID, "", man.Size, manPath); err != nil {
+	if err := store.RecordPut(context.Background(), man.Bucket, man.Key, man.VersionID, "", man.Size, manPath, ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 
@@ -273,7 +273,7 @@ func TestMPUGCPlanAndRun(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	uploadID := "upload-1"
-	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", uploadID); err != nil {
+	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", uploadID, ""); err != nil {
 		t.Fatalf("CreateMultipartUpload: %v", err)
 	}
 	if err := store.PutMultipartPart(context.Background(), uploadID, 1, "v1", "etag", 123); err != nil {
@@ -361,7 +361,7 @@ func TestGCPlanIncludesMultipartParts(t *testing.T) {
 	if err := store.RecordManifest(context.Background(), man.VersionID, manPath); err != nil {
 		t.Fatalf("RecordManifest: %v", err)
 	}
-	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", "upload-2"); err != nil {
+	if err := store.CreateMultipartUpload(context.Background(), "bucket", "key", "upload-2", ""); err != nil {
 		t.Fatalf("CreateMultipartUpload: %v", err)
 	}
 	if err := store.PutMultipartPart(context.Background(), "upload-2", 1, man.VersionID, "etag", int64(len(data))); err != nil {
@@ -443,7 +443,7 @@ func TestGCRewritePlanRun(t *testing.T) {
 	if err := writeManifest(manPath, man); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	if err := store.RecordPut(context.Background(), "b", "k1", man.VersionID, "", man.Size, manPath); err != nil {
+	if err := store.RecordPut(context.Background(), "b", "k1", man.VersionID, "", man.Size, manPath, ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 

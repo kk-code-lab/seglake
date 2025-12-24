@@ -30,6 +30,21 @@ type Handler struct {
 	VirtualHosted bool
 	// TrustedProxies contains CIDR ranges for trusted proxy IPs; used for X-Forwarded-For.
 	TrustedProxies []string
+	// MaxObjectSize enforces an optional max object size (0 = unlimited).
+	MaxObjectSize int64
+	// CORSAllowOrigins contains allowed origins for CORS (empty = "*").
+	CORSAllowOrigins []string
+	// CORSAllowMethods contains allowed methods for CORS (empty = default set).
+	CORSAllowMethods []string
+	// CORSAllowHeaders contains allowed headers for CORS (empty = default set).
+	CORSAllowHeaders []string
+	// CORSMaxAge is the Access-Control-Max-Age value in seconds (0 = default).
+	CORSMaxAge int
+	// RequireContentMD5 enforces Content-MD5 on PUT and UploadPart.
+	RequireContentMD5 bool
+	// ReplayCacheTTL enables replay protection within the TTL window (0 disables).
+	ReplayCacheTTL time.Duration
+	replayCache    *replayCache
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +64,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bucketName = bucketOnly
 	}
 	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
+	h.applyCORSHeaders(mw, r)
 	start := time.Now()
 	accessKey := extractAccessKey(r)
+	if r.Method == http.MethodOptions {
+		requestID := newRequestID()
+		h.handleOptions(mw, r, requestID)
+		return
+	}
 	requestID, ok := h.prepareRequest(mw, r)
 	if !ok {
 		return
@@ -327,7 +348,7 @@ func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWrite
 				return r.URL.Query().Has("uploads")
 			},
 			handler: func() {
-				h.handleInitiateMultipart(ctx, w, bucket, key, requestID, r.URL.Path)
+				h.handleInitiateMultipart(ctx, w, r, bucket, key, requestID, r.URL.Path)
 			},
 		},
 		{
@@ -386,10 +407,22 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
 		case errTimeSkew:
 			writeErrorWithResource(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID, r.URL.Path)
+		case errAuthMalformed:
+			writeErrorWithResource(w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "authorization header malformed", requestID, r.URL.Path)
 		default:
 			writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
 		}
 		return requestID, false
+	}
+	if h.ReplayCacheTTL > 0 {
+		if h.replayCache == nil {
+			h.replayCache = newReplayCache(h.ReplayCacheTTL)
+		}
+		key := replayKey(r)
+		if !h.replayCache.allow(key, time.Now().UTC()) {
+			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "replay detected", requestID, r.URL.Path)
+			return requestID, false
+		}
 	}
 	if err := h.authorizeRequest(r.Context(), r); err != nil {
 		writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
@@ -528,21 +561,59 @@ func (h *Handler) isTrustedProxy(remoteAddr string) bool {
 
 func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string) {
 	defer func() { _ = r.Body.Close() }()
+	contentLength, hasLength, err := contentLengthFromRequest(r)
+	if err != nil {
+		switch err {
+		case errMissingContentLength:
+			writeErrorWithResource(w, http.StatusLengthRequired, "MissingContentLength", "missing content length", requestID, r.URL.Path)
+		default:
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, r.URL.Path)
+		}
+		return
+	}
+	if h.MaxObjectSize > 0 && hasLength && contentLength > h.MaxObjectSize {
+		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		return
+	}
 	reader := io.Reader(r.Body)
+	if h.MaxObjectSize > 0 && !hasLength {
+		reader = newSizeLimitReader(reader, h.MaxObjectSize)
+	}
+	expectedMD5, err := parseContentMD5(r.Header.Get("Content-MD5"))
+	if err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid content-md5", requestID, r.URL.Path)
+		return
+	}
+	if h.RequireContentMD5 && len(expectedMD5) == 0 {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "content-md5 required", requestID, r.URL.Path)
+		return
+	}
+	payloadHash := ""
+	verifyPayload := false
 	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
 		expected, verify, err := parsePayloadHash(hashHeader)
 		if err != nil {
 			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
 			return
 		}
-		if verify {
-			reader = newPayloadHashReader(reader, expected)
-		}
+		payloadHash = expected
+		verifyPayload = verify
 	}
-	_, result, err := h.Engine.PutObject(ctx, bucket, key, reader)
+	if verifyPayload || len(expectedMD5) > 0 {
+		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
+	}
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	if err != nil {
-		if errors.Is(err, errPayloadHashMismatch) {
+		switch {
+		case errors.Is(err, errPayloadHashMismatch):
 			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
+			return
+		case errors.Is(err, errBadDigest):
+			writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, r.URL.Path)
+			return
+		case errors.Is(err, errEntityTooLarge):
+			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
 			return
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
@@ -587,6 +658,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if meta.VersionID != "" {
 		w.Header().Set("x-amz-version-id", meta.VersionID)
+	}
+	if meta.ContentType != "" {
+		w.Header().Set("Content-Type", meta.ContentType)
 	}
 	if meta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
@@ -712,7 +786,8 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	}
 	defer func() { _ = reader.Close() }()
 
-	_, result, err := h.Engine.PutObject(ctx, bucket, key, reader)
+	contentType := srcMeta.ContentType
+	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
@@ -799,6 +874,79 @@ func (h *Handler) handleDeleteBucket(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleOptions(w http.ResponseWriter, r *http.Request, requestID string) {
+	if w.Header().Get("x-amz-request-id") == "" {
+		w.Header().Set("x-amz-request-id", requestID)
+	}
+	if w.Header().Get("x-amz-id-2") == "" {
+		w.Header().Set("x-amz-id-2", hostID())
+	}
+	h.applyCORSPreflightHeaders(w, r)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) applyCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+	allowOrigin := h.corsAllowOrigin(origin)
+	if allowOrigin == "" {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+}
+
+func (h *Handler) applyCORSPreflightHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		allowOrigin := h.corsAllowOrigin(origin)
+		if allowOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+		}
+	}
+	w.Header().Set("Access-Control-Allow-Methods", h.corsAllowMethods())
+	w.Header().Set("Access-Control-Allow-Headers", h.corsAllowHeaders())
+	w.Header().Set("Access-Control-Max-Age", intToString(int64(h.corsMaxAge())))
+}
+
+func (h *Handler) corsAllowOrigin(origin string) string {
+	origins := h.CORSAllowOrigins
+	if len(origins) == 0 {
+		return "*"
+	}
+	for _, allowed := range origins {
+		if allowed == "*" {
+			return "*"
+		}
+		if strings.EqualFold(allowed, origin) {
+			return origin
+		}
+	}
+	return ""
+}
+
+func (h *Handler) corsAllowMethods() string {
+	if len(h.CORSAllowMethods) > 0 {
+		return strings.Join(h.CORSAllowMethods, ", ")
+	}
+	return "GET, PUT, HEAD, DELETE"
+}
+
+func (h *Handler) corsAllowHeaders() string {
+	if len(h.CORSAllowHeaders) > 0 {
+		return strings.Join(h.CORSAllowHeaders, ", ")
+	}
+	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256"
+}
+
+func (h *Handler) corsMaxAge() int {
+	if h.CORSMaxAge > 0 {
+		return h.CORSMaxAge
+	}
+	return 86400
 }
 
 func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter, bucket, requestID, resource string) {
@@ -1020,6 +1168,12 @@ func (h *Handler) checkPreconditions(w http.ResponseWriter, r *http.Request, met
 	if meta == nil {
 		return false
 	}
+	var lastModified time.Time
+	if meta.LastModified != "" {
+		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
+			lastModified = t
+		}
+	}
 	ifMatch := r.Header.Get("If-Match")
 	if ifMatch != "" {
 		if !etagMatch(ifMatch, meta.ETag) {
@@ -1027,11 +1181,30 @@ func (h *Handler) checkPreconditions(w http.ResponseWriter, r *http.Request, met
 			return true
 		}
 	}
+	ifUnmodified := r.Header.Get("If-Unmodified-Since")
+	if ifUnmodified != "" && !lastModified.IsZero() {
+		if since, err := parseHTTPTime(ifUnmodified); err == nil {
+			if lastModified.After(since) {
+				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "precondition failed", requestID, resource)
+				return true
+			}
+		}
+	}
 	ifNone := r.Header.Get("If-None-Match")
 	if ifNone != "" {
 		if etagMatch(ifNone, meta.ETag) {
 			w.WriteHeader(http.StatusNotModified)
 			return true
+		}
+		return false
+	}
+	ifModified := r.Header.Get("If-Modified-Since")
+	if ifModified != "" && !lastModified.IsZero() {
+		if since, err := parseHTTPTime(ifModified); err == nil {
+			if !lastModified.After(since) {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
 		}
 	}
 	return false

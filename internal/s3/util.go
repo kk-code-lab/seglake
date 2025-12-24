@@ -1,12 +1,15 @@
 package s3
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"hash"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -36,42 +39,17 @@ func formatHTTPTime(t time.Time) string {
 	return t.In(httpTimeZone).Format(time.RFC1123)
 }
 
+func parseHTTPTime(value string) (time.Time, error) {
+	return time.Parse(time.RFC1123, value)
+}
+
 var errPayloadHashMismatch = errors.New("payload hash mismatch")
 var errPayloadHashInvalid = errors.New("invalid payload hash")
-
-type payloadHashReader struct {
-	reader   io.Reader
-	hasher   hash.Hash
-	expected string
-	done     bool
-}
-
-func newPayloadHashReader(reader io.Reader, expected string) *payloadHashReader {
-	return &payloadHashReader{
-		reader:   reader,
-		hasher:   sha256.New(),
-		expected: strings.ToLower(expected),
-	}
-}
-
-func (r *payloadHashReader) Read(p []byte) (int, error) {
-	if r.done {
-		return 0, io.EOF
-	}
-	n, err := r.reader.Read(p)
-	if n > 0 {
-		_, _ = r.hasher.Write(p[:n])
-	}
-	if err == io.EOF {
-		sum := hex.EncodeToString(r.hasher.Sum(nil))
-		r.done = true
-		if sum != r.expected {
-			return 0, errPayloadHashMismatch
-		}
-		return n, io.EOF
-	}
-	return n, err
-}
+var errBadDigest = errors.New("bad digest")
+var errInvalidDigest = errors.New("invalid digest")
+var errMissingContentLength = errors.New("missing content length")
+var errInvalidContentLength = errors.New("invalid content length")
+var errEntityTooLarge = errors.New("entity too large")
 
 func parsePayloadHash(header string) (string, bool, error) {
 	header = strings.TrimSpace(header)
@@ -91,6 +69,137 @@ func parsePayloadHash(header string) (string, bool, error) {
 		return "", false, errPayloadHashInvalid
 	}
 	return strings.ToLower(header), true, nil
+}
+
+type validatingReader struct {
+	reader      io.Reader
+	shaExpected string
+	shaVerify   bool
+	md5Expected []byte
+	shaHasher   hash.Hash
+	md5Hasher   hash.Hash
+	done        bool
+}
+
+func newValidatingReader(reader io.Reader, shaExpected string, shaVerify bool, md5Expected []byte) *validatingReader {
+	v := &validatingReader{
+		reader:      reader,
+		shaExpected: strings.ToLower(shaExpected),
+		shaVerify:   shaVerify,
+		md5Expected: md5Expected,
+	}
+	if shaVerify {
+		v.shaHasher = sha256.New()
+	}
+	if len(md5Expected) > 0 {
+		v.md5Hasher = md5.New()
+	}
+	return v
+}
+
+func (r *validatingReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		if r.shaHasher != nil {
+			_, _ = r.shaHasher.Write(p[:n])
+		}
+		if r.md5Hasher != nil {
+			_, _ = r.md5Hasher.Write(p[:n])
+		}
+	}
+	if err == io.EOF {
+		r.done = true
+		if r.shaVerify {
+			sum := hex.EncodeToString(r.shaHasher.Sum(nil))
+			if sum != r.shaExpected {
+				return 0, errPayloadHashMismatch
+			}
+		}
+		if r.md5Hasher != nil {
+			sum := r.md5Hasher.Sum(nil)
+			if !hmacEqual(sum, r.md5Expected) {
+				return 0, errBadDigest
+			}
+		}
+		return n, io.EOF
+	}
+	return n, err
+}
+
+type sizeLimitReader struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func newSizeLimitReader(reader io.Reader, maxBytes int64) io.Reader {
+	if maxBytes <= 0 {
+		return reader
+	}
+	return &sizeLimitReader{reader: reader, remaining: maxBytes}
+}
+
+func (r *sizeLimitReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, errEntityTooLarge
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.remaining -= int64(n)
+	}
+	if err == io.EOF {
+		return n, err
+	}
+	if r.remaining <= 0 {
+		return n, errEntityTooLarge
+	}
+	return n, err
+}
+
+func parseContentMD5(header string) ([]byte, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(header)
+	if err != nil || len(decoded) != md5.Size {
+		return nil, errInvalidDigest
+	}
+	return decoded, nil
+}
+
+func contentLengthFromRequest(r *http.Request) (int64, bool, error) {
+	if r == nil {
+		return 0, false, errMissingContentLength
+	}
+	if r.ContentLength >= 0 {
+		return r.ContentLength, true, nil
+	}
+	decoded := strings.TrimSpace(r.Header.Get("X-Amz-Decoded-Content-Length"))
+	if decoded == "" {
+		return 0, false, errMissingContentLength
+	}
+	v, err := parseInt(decoded)
+	if err != nil {
+		return 0, false, errInvalidContentLength
+	}
+	return v, true, nil
+}
+
+func hmacEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	result := byte(0)
+	for i := 0; i < len(a); i++ {
+		result |= a[i] ^ b[i]
+	}
+	return result == 0
 }
 
 func parseRange(header string, size int64) (start int64, length int64, ok bool) {

@@ -36,7 +36,7 @@ func TestBarrierConcurrentPuts(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			payload := bytes.Repeat([]byte{byte('a' + i)}, 32)
-			if _, _, err := engine.PutObject(context.Background(), "b", "k"+string(rune('a'+i)), bytes.NewReader(payload)); err != nil {
+			if _, _, err := engine.PutObject(context.Background(), "b", "k"+string(rune('a'+i)), "", bytes.NewReader(payload)); err != nil {
 				t.Errorf("PutObject: %v", err)
 			}
 		}(i)

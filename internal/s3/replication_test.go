@@ -37,7 +37,7 @@ func TestReplicationOplogEndpoint(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestReplicationManifestEndpoint(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	_, putResult, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello world"))
+	_, putResult, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader("hello world"))
 	if err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestReplicationChunkEndpoint(t *testing.T) {
 	}
 
 	data := "hello world"
-	man, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader(data))
+	man, _, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader(data))
 	if err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestReplicationSnapshotEndpoint(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	if _, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello")); err != nil {
+	if _, _, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader("hello")); err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
 

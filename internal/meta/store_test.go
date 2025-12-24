@@ -17,7 +17,7 @@ func TestStoreRecordPut(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 12, "/tmp/manifest"); err != nil {
+	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 12, "/tmp/manifest", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 	got, err := store.CurrentVersion(ctx, "b1", "k1")
@@ -70,7 +70,7 @@ func TestMarkDamaged(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 12, "/tmp/manifest"); err != nil {
+	if err := store.RecordPut(ctx, "b1", "k1", "v1", "etag", 12, "/tmp/manifest", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 	if err := store.MarkDamaged(ctx, "v1"); err != nil {
@@ -265,11 +265,11 @@ func TestDeleteObjectVersionPromotesPrevious(t *testing.T) {
 	ctx := context.Background()
 	bucket := "b"
 	key := "k"
-	if err := store.RecordPut(ctx, bucket, key, "v1", "etag1", 1, ""); err != nil {
+	if err := store.RecordPut(ctx, bucket, key, "v1", "etag1", 1, "", ""); err != nil {
 		t.Fatalf("RecordPut v1: %v", err)
 	}
 	time.Sleep(2 * time.Millisecond)
-	if err := store.RecordPut(ctx, bucket, key, "v2", "etag2", 2, ""); err != nil {
+	if err := store.RecordPut(ctx, bucket, key, "v2", "etag2", 2, "", ""); err != nil {
 		t.Fatalf("RecordPut v2: %v", err)
 	}
 	meta, err := store.GetObjectMeta(ctx, bucket, key)

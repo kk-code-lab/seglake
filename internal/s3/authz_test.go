@@ -39,7 +39,7 @@ func TestAuthzPolicyAndBucketAllow(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	if _, _, err := eng.PutObject(ctx, "allowed", "k", bytes.NewReader([]byte("ok"))); err != nil {
+	if _, _, err := eng.PutObject(ctx, "allowed", "k", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
@@ -145,9 +145,9 @@ func TestSigV2ListRequestRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
 	}
-	if resp.StatusCode != http.StatusForbidden {
+	if resp.StatusCode != http.StatusBadRequest {
 		_ = resp.Body.Close()
-		t.Fatalf("expected 403, got %d", resp.StatusCode)
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 	var errResp errorResponse
 	if err := xml.NewDecoder(resp.Body).Decode(&errResp); err != nil {
@@ -155,7 +155,7 @@ func TestSigV2ListRequestRejected(t *testing.T) {
 		t.Fatalf("decode error response: %v", err)
 	}
 	_ = resp.Body.Close()
-	if errResp.Code != "SignatureDoesNotMatch" {
-		t.Fatalf("expected SignatureDoesNotMatch, got %q", errResp.Code)
+	if errResp.Code != "AuthorizationHeaderMalformed" {
+		t.Fatalf("expected AuthorizationHeaderMalformed, got %q", errResp.Code)
 	}
 }

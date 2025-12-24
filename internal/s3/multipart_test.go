@@ -35,6 +35,7 @@ func TestMultipartFlowUnit(t *testing.T) {
 	}
 
 	initReq := httptest.NewRequest("POST", "/bucket/key?uploads", nil)
+	initReq.Header.Set("Content-Type", "text/plain")
 	initW := httptest.NewRecorder()
 	handler.ServeHTTP(initW, initReq)
 	if initW.Code != http.StatusOK {
@@ -68,6 +69,9 @@ func TestMultipartFlowUnit(t *testing.T) {
 	handler.ServeHTTP(getW, getReq)
 	if getW.Code != http.StatusOK {
 		t.Fatalf("get status: %d", getW.Code)
+	}
+	if got := getW.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("content-type mismatch: %q", got)
 	}
 	if !bytes.Equal(getW.Body.Bytes(), []byte("part1")) {
 		t.Fatalf("get mismatch")

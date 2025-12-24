@@ -43,19 +43,19 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 		return errAccessDenied
 	}
 	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	params := parseAuthParams(strings.TrimPrefix(auth, "AWS4-HMAC-SHA256 "))
 	credential := params["Credential"]
 	signedHeaders := params["SignedHeaders"]
 	signature := params["Signature"]
 	if credential == "" || signedHeaders == "" || signature == "" {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 
 	credParts := strings.Split(credential, "/")
 	if len(credParts) != 5 {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	accessKey := credParts[0]
 	dateScope := credParts[1]
@@ -76,11 +76,11 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 
 	amzDate := r.Header.Get("X-Amz-Date")
 	if amzDate == "" {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	reqTime, err := time.Parse("20060102T150405Z", amzDate)
 	if err != nil {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	maxSkew := c.MaxSkew
 	if maxSkew == 0 {
@@ -105,7 +105,10 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 
 	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(r, signedHeaders)
 	if err != nil {
-		return errSignatureMismatch
+		return errAuthMalformed
+	}
+	if !hasSignedHeader(signedHeadersLower, "host") || !hasSignedHeader(signedHeadersLower, "x-amz-date") {
+		return errAuthMalformed
 	}
 	canonicalRequest := strings.Join([]string{
 		r.Method,
@@ -142,15 +145,15 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	signature := query.Get("X-Amz-Signature")
 	expires := query.Get("X-Amz-Expires")
 	if alg == "" || cred == "" || amzDate == "" || signedHeaders == "" || signature == "" || expires == "" {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	if alg != "AWS4-HMAC-SHA256" {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 
 	credParts := strings.Split(cred, "/")
 	if len(credParts) != 5 {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	accessKey := credParts[0]
 	dateScope := credParts[1]
@@ -171,7 +174,7 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 
 	reqTime, err := time.Parse("20060102T150405Z", amzDate)
 	if err != nil {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	maxSkew := c.MaxSkew
 	if maxSkew == 0 {
@@ -179,7 +182,7 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	}
 	expSeconds, err := parseInt(expires)
 	if err != nil || expSeconds < 1 || expSeconds > 604800 {
-		return errSignatureMismatch
+		return errAuthMalformed
 	}
 	delta := time.Since(reqTime)
 	if delta > time.Duration(expSeconds)*time.Second {
@@ -195,7 +198,10 @@ func (c *AuthConfig) verifyPresigned(r *http.Request) error {
 	payloadHash := "UNSIGNED-PAYLOAD"
 	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(r, signedHeaders)
 	if err != nil {
-		return errSignatureMismatch
+		return errAuthMalformed
+	}
+	if !hasSignedHeader(signedHeadersLower, "host") {
+		return errAuthMalformed
 	}
 
 	canonicalRequest := strings.Join([]string{
@@ -251,6 +257,7 @@ var (
 	errSignatureMismatch = errors.New("signature mismatch")
 	errAccessDenied      = errors.New("access denied")
 	errTimeSkew          = errors.New("request time too skewed")
+	errAuthMalformed     = errors.New("authorization header malformed")
 )
 
 func parseAuthParams(s string) map[string]string {
@@ -370,6 +377,15 @@ func buildCanonicalHeaders(r *http.Request, signedHeaders string) (string, []str
 		b.WriteByte('\n')
 	}
 	return b.String(), headers, nil
+}
+
+func hasSignedHeader(headers []string, name string) bool {
+	for _, h := range headers {
+		if h == name {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSpaces(s string) string {

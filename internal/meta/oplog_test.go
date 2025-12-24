@@ -20,7 +20,7 @@ func TestOplogPutDelete(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	store.SetSiteID("site-a")
 
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 	if _, err := store.DeleteObject(context.Background(), "bucket", "key"); err != nil {
@@ -58,10 +58,10 @@ func TestOplogSinceLimit(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	store.SetSiteID("site-a")
 
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag", 124, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag", 124, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestMaxOplogHLC(t *testing.T) {
 	if hlc != "" {
 		t.Fatalf("expected empty HLC, got %q", hlc)
 	}
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 	hlc, err = store.MaxOplogHLC(context.Background())
