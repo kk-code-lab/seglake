@@ -406,6 +406,16 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	if h.Auth == nil {
 		return requestID, true
 	}
+	if h.Auth.AccessKey == "" && h.Auth.SecretKey == "" {
+		hasKeys, err := h.Meta.HasAPIKeys(r.Context())
+		if err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "auth state unavailable", requestID, r.URL.Path)
+			return requestID, false
+		}
+		if !hasKeys {
+			return requestID, true
+		}
+	}
 	if err := h.Auth.VerifyRequest(r); err != nil {
 		if h.AuthLimiter != nil {
 			ip := clientIP(r.RemoteAddr)
