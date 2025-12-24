@@ -116,10 +116,10 @@ Continuous push:
 ```
 
 Notes:
-- Watermarki są przechowywane per-remote (pull i push osobno).
-- Endpointy repl są chronione politykami (`ReplicationRead` / `ReplicationWrite`).
-- `/v1/meta/stats` zawiera sekcję `replication` (lag i backlog).
-- `/v1/meta/stats` raportuje także `replay_detected` (liczba wykrytych replay).
+- Watermarks are stored per-remote (pull and push separately).
+- Replication endpoints are protected by policies (`ReplicationRead` / `ReplicationWrite`).
+- `/v1/meta/stats` includes a `replication` section (lag and backlog).
+- `/v1/meta/stats` also reports `replay_detected` (count of detected replays).
 
 ## API keys / policies
 
