@@ -85,6 +85,7 @@ type serverOptions struct {
 	corsMaxAge        int
 	replayTTL         time.Duration
 	replayBlock       bool
+	replayMaxEntries  int
 	requireIfMatch    string
 	requireMD5        bool
 	readHeaderTimeout time.Duration
@@ -464,6 +465,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.IntVar(&opts.corsMaxAge, "cors-max-age", 86400, "CORS preflight max age in seconds")
 	fs.DurationVar(&opts.replayTTL, "replay-ttl", 0, "Replay protection TTL (0 disables)")
 	fs.BoolVar(&opts.replayBlock, "replay-block", false, "Block requests on replay detection (default logs only)")
+	fs.IntVar(&opts.replayMaxEntries, "replay-cache-max", 0, "Replay cache max entries (0 = default)")
 	fs.StringVar(&opts.requireIfMatch, "require-if-match-buckets", "", "Comma-separated buckets requiring If-Match on overwrite (* for all)")
 	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
 	fs.DurationVar(&opts.readHeaderTimeout, "read-header-timeout", defaultReadHeaderTimeout, "HTTP read header timeout")
@@ -640,6 +642,7 @@ func runServer(opts *serverOptions) error {
 		CORSMaxAge:            opts.corsMaxAge,
 		ReplayCacheTTL:        opts.replayTTL,
 		ReplayBlock:           opts.replayBlock,
+		ReplayCacheMaxEntries: opts.replayMaxEntries,
 		RequireIfMatchBuckets: bucketSet(splitComma(opts.requireIfMatch)),
 		RequireContentMD5:     opts.requireMD5,
 	}

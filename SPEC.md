@@ -164,7 +164,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Region `us` normalized to `us-east-1`.
 - Required signed headers: `host` and `x-amz-date`.
 - Replay protection: signature cache within TTL window (default disabled; enable via `-replay-ttl`; logs by default, blocks only with `-replay-block`).
-- Replay cache size limit: bounded in-memory cache (default cap; configurable via server flags).
+- Replay cache size limit: bounded in-memory cache (default cap; configurable via `-replay-cache-max`).
 - Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
