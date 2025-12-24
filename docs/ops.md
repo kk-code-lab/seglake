@@ -103,6 +103,50 @@ S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_s3_smoke
 S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_security_smoke.sh
 ```
 
+## Test strategy (matrix)
+
+Below is a compact test map that helps catch regressions without deep knowledge of internals.
+It works well as a checklist before release or after larger meta/storage changes.
+
+Correctness (S3 contract):
+- Unit: XML/query parsers, range parsing, ETag, SigV4 canonicalization.
+- Integration: engine + meta (PUT/GET/DELETE/versioning).
+- E2E: list v1/v2, multipart, copy, range/multi-range, conditional headers.
+- Conformance: compare against reference S3/MinIO (differential).
+
+Durability / crash consistency:
+- Unit: write barrier + fsync ordering.
+- Integration: crash after segment write before meta flush.
+- E2E: crash harness (kill -9), fsck + rebuild-index, scrub after corruption.
+
+Concurrency / contention:
+- Unit: locks, barrier, SQLite busy handling.
+- Integration: concurrent PUT/DELETE/MPU.
+- Stress: `mpu_heavy`, `gc_pressure`, burst profiles.
+
+Performance / latency:
+- Bench: PUT/GET (1MiB, 64MiB, 1GiB).
+- Stress: p95/p99 under increasing concurrency.
+- Soak: long runs (1–24h) under steady load.
+
+Security / auth:
+- Unit: SigV4 validation, presign, replay cache.
+- E2E: policies (allow/deny), bucket policy + header conditions.
+- Negative: bad signatures, time skew, missing signed headers.
+
+Metadata integrity:
+- Integration: rebuild-index from manifests, fsck vs meta.
+- E2E: list correctness during write/delete.
+- Ops: snapshot/support-bundle.
+
+Replication (when 2+ nodes are available):
+- Integration: repl pull/push + oplog apply.
+- E2E: repl-validate drift.
+- Soak: long runs with conflicts.
+
+Note: `scripts/stress_s3.sh` includes profiles for quickly surfacing contention
+and performance regressions (especially MPU + DELETE).
+
 ## GC/MPU guardrails
 
 GC warnings and hard limits can be tuned:
