@@ -45,6 +45,8 @@ type Handler struct {
 	RequireContentMD5 bool
 	// ReplayCacheTTL enables replay protection within the TTL window (0 disables).
 	ReplayCacheTTL time.Duration
+	// ReplayCacheMaxEntries caps replay cache size (0 = default).
+	ReplayCacheMaxEntries int
 	// ReplayBlock determines whether replay detection blocks requests.
 	ReplayBlock bool
 	// RequireIfMatchBuckets enforces If-Match on overwrites for selected buckets.
@@ -421,7 +423,7 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	}
 	if h.ReplayCacheTTL > 0 && r.URL.Query().Get("X-Amz-Signature") != "" {
 		if h.replayCache == nil {
-			h.replayCache = newReplayCache(h.ReplayCacheTTL)
+			h.replayCache = newReplayCache(h.ReplayCacheTTL, h.ReplayCacheMaxEntries)
 		}
 		key := replayKey(r)
 		if !h.replayCache.allow(key, time.Now().UTC()) {
