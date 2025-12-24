@@ -40,6 +40,7 @@ Seglake can serve HTTPS directly:
 Notes:
 - Self-signed certs require `--no-verify-ssl` or equivalent in clients.
 - Certificates are hot-reloaded when the cert/key files change.
+- Replay protection is disabled by default; enable with `-replay-ttl` (logs by default) and `-replay-block` to hard-block.
 
 ## awscli examples (SigV4)
 
@@ -118,6 +119,7 @@ Notes:
 - Watermarki są przechowywane per-remote (pull i push osobno).
 - Endpointy repl są chronione politykami (`ReplicationRead` / `ReplicationWrite`).
 - `/v1/meta/stats` zawiera sekcję `replication` (lag i backlog).
+- `/v1/meta/stats` raportuje także `replay_detected` (liczba wykrytych replay).
 
 ## API keys / policies
 
@@ -215,6 +217,9 @@ Example read + list for a single bucket:
 Flags:
 - `-max-object-size` (default 5 GiB, 0 = unlimited)
 - `-require-content-md5` (default false)
+- `-require-if-match-buckets` (comma-separated buckets or `*` to require `If-Match` on overwrite)
+- `-replay-ttl` (default 0 = disabled)
+- `-replay-block` (default false; block requests on replay detection)
 - `-cors-origins` (default `*`, comma-separated list)
 - `-cors-methods` (default `GET,PUT,HEAD,DELETE`)
 - `-cors-headers` (default `authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256`)
