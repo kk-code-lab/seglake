@@ -69,12 +69,12 @@ AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-ea
 
 ## Virtual-hosted vs path-style
 
-Virtual-hosted-style is enabled by default (`-virtual-hosted=true`). Hostnames that are IPs or `localhost` are ignored to keep path-style working locally.
+Virtual-hosted-style is enabled by default (`-virtual-hosted=true`). Hostnames that are IPs, `localhost`, or lack a dot are ignored to keep path-style working locally.
 
 Examples:
 ```
-aws s3 ls --endpoint-url http://localhost:9000
-aws s3 ls --endpoint-url http://bucket.localhost:9000
+aws s3 ls s3://demo --endpoint-url http://localhost:9000
+aws s3 ls s3://demo --endpoint-url http://demo.localhost:9000
 ```
 
 ## GC/MPU guardrails
