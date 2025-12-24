@@ -1,5 +1,17 @@
 # Ops / Deployment Notes
 
+## Production hardening checklist
+
+- Terminate TLS (proxy or native TLS), enforce HTTPS, and restrict trusted proxy IPs.
+- Store data on durable storage (separate volume), monitor disk usage, and alert on low space.
+- Enable access logging and ship logs to central storage (request IDs are included).
+- Set appropriate request size limits at the proxy and tune timeouts for large objects.
+- Configure periodic snapshots of `meta.db` and test restores regularly.
+- Monitor `/v1/meta/stats` and add external metrics/alerts (latency, errors, replay_detected, replication lag).
+- Use separate API keys per app/service and restrict buckets via allow-list + policies.
+- Keep a GC/MPU GC schedule and review reclaim reports before delete modes.
+- Validate replication health (repl-validate) and plan for conflict review workflows.
+
 ## TLS reverse proxy checklist
 
 1) Terminate TLS in a reverse proxy (nginx, Caddy, Envoy).
