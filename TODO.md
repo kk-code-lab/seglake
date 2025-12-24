@@ -6,3 +6,4 @@
 - Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - Decide conflict handling for delete vs put (mark delete conflicts explicitly).
 - Add API ergonomics to surface conflict presence (response headers or listing hints).
+- Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
