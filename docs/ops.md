@@ -230,6 +230,28 @@ Flags:
 - `-max-object-size` (default 5 GiB, 0 = unlimited)
 - `-require-content-md5` (default false)
 - `-require-if-match-buckets` (comma-separated buckets or `*` to require `If-Match` on overwrite)
+
+## HTTP timeouts / graceful shutdown
+
+Flags:
+- `-read-header-timeout` (default 10s)
+- `-read-timeout` (default 30s)
+- `-write-timeout` (default 30s)
+- `-idle-timeout` (default 2m)
+- `-shutdown-timeout` (default 10s)
+
+Notes:
+- For large PUT/GET, increase `-write-timeout` and `-read-timeout` to avoid disconnects.
+- Graceful shutdown waits for in-flight requests up to `-shutdown-timeout`.
+Example (large objects, slower clients):
+```
+./build/seglake -read-timeout 5m -write-timeout 5m -idle-timeout 5m -shutdown-timeout 30s
+```
+
+## Replay cache sizing
+
+Replay protection uses an in-memory cache bounded by a max entries cap (default).
+Use `-replay-ttl` to enable replay detection and `-replay-block` to enforce blocking on replays.
 - `-replay-ttl` (default 0 = disabled)
 - `-replay-block` (default false; block requests on replay detection)
 - `-cors-origins` (default `*`, comma-separated list)

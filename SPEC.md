@@ -16,6 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
+- **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
 - **Replication**: multi-site P2P, multi-writer, LWW + tombstone, JSON/HTTP, HLC as event ordering.
@@ -163,6 +164,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Region `us` normalized to `us-east-1`.
 - Required signed headers: `host` and `x-amz-date`.
 - Replay protection: signature cache within TTL window (default disabled; enable via `-replay-ttl`; logs by default, blocks only with `-replay-block`).
+- Replay cache size limit: bounded in-memory cache (default cap; configurable via server flags).
 - Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
