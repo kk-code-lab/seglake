@@ -3203,31 +3203,14 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, err
 			_ = tx.Rollback()
 		}
 	}()
-	var versionID string
-	err = tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&versionID)
+	deleted, err := s.DeleteObjectTx(ctx, tx, bucket, key)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			_ = tx.Rollback()
-			return false, nil
-		}
-		return false, err
-	}
-	hlcTS, siteID := s.nextHLC()
-	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		return false, err
-	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
-		return false, err
-	}
-	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID)
-	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
-	return true, nil
+	return deleted, nil
 }
 
 // DeleteObjectVersion marks a specific version as deleted and updates objects_current if needed.
@@ -3244,15 +3227,62 @@ func (s *Store) DeleteObjectVersion(ctx context.Context, bucket, key, versionID 
 			_ = tx.Rollback()
 		}
 	}()
+	deleted, err := s.DeleteObjectVersionTx(ctx, tx, bucket, key, versionID)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
 
+// DeleteObjectTx removes the current object pointer and marks the version as deleted within the provided transaction.
+func (s *Store) DeleteObjectTx(ctx context.Context, tx *sql.Tx, bucket, key string) (bool, error) {
+	if bucket == "" || key == "" {
+		return false, errors.New("meta: bucket and key required")
+	}
+	if tx == nil {
+		return false, errors.New("meta: tx required")
+	}
+	var versionID string
+	err := tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&versionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	hlcTS, siteID := s.nextHLC()
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
+		return false, err
+	}
+	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID)
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteObjectVersionTx marks a specific version as deleted and updates objects_current if needed within the provided transaction.
+func (s *Store) DeleteObjectVersionTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID string) (bool, error) {
+	if bucket == "" || key == "" || versionID == "" {
+		return false, errors.New("meta: bucket, key, and version id required")
+	}
+	if tx == nil {
+		return false, errors.New("meta: tx required")
+	}
 	var state string
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 SELECT state
 FROM versions
 WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			_ = tx.Rollback()
 			return false, nil
 		}
 		return false, err
@@ -3293,9 +3323,6 @@ LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
 		}
 	}
 	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil

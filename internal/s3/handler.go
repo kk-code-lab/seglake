@@ -898,7 +898,12 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 	}
 	versionID := r.URL.Query().Get("versionId")
 	if versionID != "" {
-		deleted, err := h.Meta.DeleteObjectVersion(ctx, bucket, key, versionID)
+		var deleted bool
+		err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+			var derr error
+			deleted, derr = h.Meta.DeleteObjectVersionTx(ctx, tx, bucket, key, versionID)
+			return derr
+		})
 		if err != nil {
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 			return
@@ -909,10 +914,17 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 		}
 		w.Header().Set("x-amz-version-id", versionID)
 	} else {
-		if _, err := h.Meta.DeleteObject(ctx, bucket, key); err != nil {
+		var deleted bool
+		err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+			var derr error
+			deleted, derr = h.Meta.DeleteObjectTx(ctx, tx, bucket, key)
+			return derr
+		})
+		if err != nil {
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 			return
 		}
+		_ = deleted
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
