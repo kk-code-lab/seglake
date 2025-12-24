@@ -51,7 +51,7 @@ type Handler struct {
 	ReplayBlock bool
 	// RequireIfMatchBuckets enforces If-Match on overwrites for selected buckets.
 	RequireIfMatchBuckets map[string]struct{}
-	replayCache    *replayCache
+	replayCache           *replayCache
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +155,13 @@ func (h *Handler) handleMetaAndReplication(ctx context.Context, w http.ResponseW
 			prefix: "/v1/meta/stats",
 			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
 				h.handleStats(ctx, w, requestID, r.URL.Path)
+			},
+		},
+		{
+			method: http.MethodGet,
+			prefix: "/v1/meta/conflicts",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleConflicts(ctx, w, r, requestID)
 			},
 		},
 		{
@@ -669,6 +676,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID, r.URL.Path)
 		return
 	}
+	if strings.EqualFold(meta.State, "CONFLICT") {
+		w.Header().Set("x-seglake-conflict", "true")
+	}
 	if meta.ETag != "" {
 		w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	}
@@ -1107,6 +1117,9 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/stats") {
 		return "meta_stats"
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/meta/conflicts") {
+		return "meta_conflicts"
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		return "repl_oplog"

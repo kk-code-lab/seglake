@@ -2452,6 +2452,16 @@ type ObjectMeta struct {
 	State        string
 }
 
+// ConflictMeta describes a conflicting object version.
+type ConflictMeta struct {
+	Bucket       string
+	Key          string
+	VersionID    string
+	ETag         string
+	Size         int64
+	LastModified string
+}
+
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -2465,6 +2475,72 @@ WHERE o.bucket=? AND o.key=?`, bucket, key)
 		return nil, err
 	}
 	return &meta, nil
+}
+
+// ListConflicts returns conflicting object versions with optional filters and pagination.
+func (s *Store) ListConflicts(ctx context.Context, bucket, prefix, afterBucket, afterKey, afterVersion string, limit int) (out []ConflictMeta, err error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	pattern := escapeLike(prefix) + "%"
+	if bucket != "" {
+		rows, err := queryWithMarkers(ctx, s.db,
+			`
+SELECT key, version_id, etag, size, last_modified_utc
+FROM versions
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='CONFLICT'`,
+			"key", "version_id", bucket, pattern, afterKey, afterVersion, limit,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return out, scanRows(rows, func(scan func(dest ...any) error) error {
+			var meta ConflictMeta
+			meta.Bucket = bucket
+			if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+				return err
+			}
+			out = append(out, meta)
+			return nil
+		})
+	}
+
+	query := `
+SELECT bucket, key, version_id, etag, size, last_modified_utc
+FROM versions
+WHERE state='CONFLICT'`
+	args := make([]any, 0, 8)
+	if prefix != "" {
+		query += " AND key LIKE ? ESCAPE '\\'"
+		args = append(args, pattern)
+	}
+	if afterBucket != "" && afterKey != "" && afterVersion != "" {
+		query += " AND (bucket > ? OR (bucket = ? AND key > ?) OR (bucket = ? AND key = ? AND version_id > ?))"
+		args = append(args, afterBucket, afterBucket, afterKey, afterBucket, afterKey, afterVersion)
+	} else if afterBucket != "" && afterKey != "" {
+		query += " AND (bucket > ? OR (bucket = ? AND key > ?))"
+		args = append(args, afterBucket, afterBucket, afterKey)
+	} else if afterBucket != "" {
+		query += " AND bucket > ?"
+		args = append(args, afterBucket)
+	}
+	query += " ORDER BY bucket, key, version_id LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var meta ConflictMeta
+		if err := scan(&meta.Bucket, &meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+			return err
+		}
+		out = append(out, meta)
+		return nil
+	})
 }
 
 // GetObjectVersion returns metadata for a specific object version.
