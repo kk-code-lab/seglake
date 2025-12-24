@@ -34,7 +34,7 @@ func TestScrubMarksDamagedVersion(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	man, result, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello world"))
+	man, result, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader("hello world"))
 	if err != nil {
 		_ = store.Close()
 		t.Fatalf("PutObject: %v", err)
@@ -109,7 +109,7 @@ func TestScrubReportsShortRead(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	man, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello world"))
+	man, _, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader("hello world"))
 	if err != nil {
 		_ = store.Close()
 		t.Fatalf("PutObject: %v", err)

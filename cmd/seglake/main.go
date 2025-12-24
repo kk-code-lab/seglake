@@ -62,6 +62,13 @@ type serverOptions struct {
 	siteID         string
 	syncInterval   time.Duration
 	syncBytes      int64
+	maxObjectSize  int64
+	corsOrigins    string
+	corsMethods    string
+	corsHeaders    string
+	corsMaxAge     int
+	replayTTL      time.Duration
+	requireMD5     bool
 }
 
 type opsOptions struct {
@@ -427,6 +434,13 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.siteID, "site-id", "local", "Site identifier for replication (HLC/oplog)")
 	fs.DurationVar(&opts.syncInterval, "sync-interval", 100*time.Millisecond, "Write barrier interval")
 	fs.Int64Var(&opts.syncBytes, "sync-bytes", 128<<20, "Write barrier byte threshold")
+	fs.Int64Var(&opts.maxObjectSize, "max-object-size", 5<<30, "Max object size in bytes (0 = unlimited)")
+	fs.StringVar(&opts.corsOrigins, "cors-origins", "*", "Comma-separated CORS allowed origins (* for all)")
+	fs.StringVar(&opts.corsMethods, "cors-methods", "GET,PUT,HEAD,DELETE", "Comma-separated CORS allowed methods")
+	fs.StringVar(&opts.corsHeaders, "cors-headers", "authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256", "Comma-separated CORS allowed headers")
+	fs.IntVar(&opts.corsMaxAge, "cors-max-age", 86400, "CORS preflight max age in seconds")
+	fs.DurationVar(&opts.replayTTL, "replay-ttl", 5*time.Minute, "Replay protection TTL (0 disables)")
+	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
 	return fs, opts
 }
 
@@ -585,10 +599,17 @@ func runServer(opts *serverOptions) error {
 				return store.LookupAPISecret(ctx, accessKey)
 			},
 		},
-		Metrics:         s3.NewMetrics(),
-		AuthLimiter:     s3.NewAuthLimiter(),
-		InflightLimiter: s3.NewInflightLimiter(32),
-		VirtualHosted:   opts.virtualHosted,
+		Metrics:           s3.NewMetrics(),
+		AuthLimiter:       s3.NewAuthLimiter(),
+		InflightLimiter:   s3.NewInflightLimiter(32),
+		VirtualHosted:     opts.virtualHosted,
+		MaxObjectSize:     opts.maxObjectSize,
+		CORSAllowOrigins:  splitComma(opts.corsOrigins),
+		CORSAllowMethods:  splitComma(opts.corsMethods),
+		CORSAllowHeaders:  splitComma(opts.corsHeaders),
+		CORSMaxAge:        opts.corsMaxAge,
+		ReplayCacheTTL:    opts.replayTTL,
+		RequireContentMD5: opts.requireMD5,
 	}
 	if opts.trustedProxies != "" {
 		handler.(*s3.Handler).TrustedProxies = splitComma(opts.trustedProxies)

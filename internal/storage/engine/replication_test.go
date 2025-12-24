@@ -26,7 +26,7 @@ func TestStoreManifestBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	man, _, err := eng.PutObject(context.Background(), "bucket", "key", strings.NewReader("hello"))
+	man, _, err := eng.PutObject(context.Background(), "bucket", "key", "", strings.NewReader("hello"))
 	if err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}

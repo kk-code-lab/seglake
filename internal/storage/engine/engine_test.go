@@ -68,7 +68,7 @@ func TestEnginePutObjectRecordsMetadata(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, result, err := engine.PutObject(context.Background(), "bucket1", "key1", bytes.NewReader([]byte("hello")))
+	_, result, err := engine.PutObject(context.Background(), "bucket1", "key1", "", bytes.NewReader([]byte("hello")))
 	if err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}

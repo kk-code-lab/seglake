@@ -37,7 +37,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 2.2 Metadane
 - SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) przy flush.
 - Tabele: buckets, versions, objects_current, manifests, segments, api_keys, api_key_bucket_allow,
-  bucket_policies, multipart_uploads, multipart_parts, rebuild_state, ops_runs.
+  bucket_policies, multipart_uploads (content_type), multipart_parts, rebuild_state, ops_runs.
 
 ### 2.3 S3 API
 - Path-style: `/<bucket>/<key>` + virtual-hosted-style (domyślnie włączony).
@@ -47,6 +47,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - SigV2 **nie jest wspierany**.
 - Presigned GET/PUT (TTL do 7 dni).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
+- CORS/OPTIONS: preflight z nagłówkami Access-Control-Allow-*.
 
 ### 2.4 Ops i observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
@@ -84,7 +85,7 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 
 ### 3.5 Metadane (SQLite)
 - `objects_current` wskazuje aktualną wersję obiektu.
-- `versions` przechowuje etag (MD5), size, last_modified_utc, state.
+- `versions` przechowuje etag (MD5), size, content_type, last_modified_utc, state.
 - `segments` przechowuje stan, size, checksum stopki.
 - Multipart: `multipart_uploads`, `multipart_parts`.
 
@@ -137,6 +138,8 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - `UNSIGNED-PAYLOAD` dozwolony domyślnie; można wyłączyć flagą `-allow-unsigned-payload=false`.
 - Request time skew: domyślnie ±5 min (konfigurowalne).
 - Region `us` normalizowany do `us-east-1`.
+- Wymagane signed headers: `host` i `x-amz-date`.
+- Ochrona replay: cache podpisów w oknie TTL (domyślnie 5 min, można wyłączyć).
 - Klucze z DB (`api_keys`) wspierają politykę `rw`/`ro` oraz allow‑listę bucketów.
 - Polityki są egzekwowane na wszystkich operacjach, w tym `list_buckets` i `meta`.
 - Format polityk: JSON z listą `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match).
@@ -152,6 +155,12 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - Multipart: `md5(concat(md5(part_i))) + "-<partCount>"`.
 - Referencje testów: `internal/s3/e2e_test.go`.
 
+### 4.4 PUT / UploadPart — walidacje
+- Wymagany `Content-Length` lub `X-Amz-Decoded-Content-Length`.
+- Opcjonalna walidacja `Content-MD5` (gdy nagłówek obecny) → `BadDigest` przy niezgodności.
+- Multipart: `Content-Type` z `InitiateMultipartUpload` jest zachowywany i używany przy `Complete`.
+- Wymuszenie `Content-MD5` można włączyć flagą `-require-content-md5`.
+
 ### 4.4 Range GET (zachowanie)
 - `Range: bytes=a-b`, `bytes=a-`, `bytes=-n` wspierane.
 - Multi-range → `multipart/byteranges` z boundary opartym o request-id.
@@ -161,11 +170,14 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 ### 4.5 Conditional GET/HEAD
 - `If-Match` → 412 `PreconditionFailed` gdy ETag się nie zgadza.
 - `If-None-Match` → 304 `NotModified` gdy ETag się zgadza.
+- `If-Modified-Since` → 304 `NotModified` gdy brak zmian od wskazanego czasu.
+- `If-Unmodified-Since` → 412 `PreconditionFailed` gdy obiekt zmieniony po wskazanym czasie.
 
 ### 4.6 Błędy
 - XML zgodny z AWS (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
 - Przykłady walidowane w testach (m.in. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
   `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.
+- Dodatkowe kody: `AuthorizationHeaderMalformed`, `BadDigest`, `MissingContentLength`, `EntityTooLarge`.
 
 ---
 
@@ -215,12 +227,13 @@ Seglake to prosty, zgodny z S3 (minimum użyteczne dla SDK/toolingu) object stor
 - ListObjects max-keys: 1000.
 - ListMultipartUploads max-uploads: 1000.
 - Multipart min part size: 5 MiB poza ostatnim.
-- Brak wymuszonego limitu rozmiaru obiektu w kodzie (praktycznie ogranicza storage).
+- Limit rozmiaru obiektu: `-max-object-size` (domyślnie 5 GiB, 0 = bez limitu).
 
 ## 6.1) Ops / TLS / tooling
 - Checklist TLS i przykłady awscli/s3cmd: `docs/ops.md`.
 - Opcjonalny TLS w aplikacji: `-tls`, `-tls-cert`, `-tls-key` (hot reload certów).
 - Zarządzanie politykami: `-mode keys` (per‑key) oraz `-mode bucket-policy` (per‑bucket).
+- Limity i CORS: `-max-object-size`, `-cors-origins`, `-cors-methods`, `-cors-headers`, `-cors-max-age`.
 
 ---
 

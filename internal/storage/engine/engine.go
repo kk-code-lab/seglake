@@ -100,11 +100,11 @@ func New(opts Options) (*Engine, error) {
 
 // Put stores an object stream and returns manifest metadata.
 func (e *Engine) Put(ctx context.Context, r io.Reader) (*manifest.Manifest, *PutResult, error) {
-	return e.PutObject(ctx, "", "", r)
+	return e.PutObject(ctx, "", "", "", r)
 }
 
 // PutObject stores an object stream and returns manifest metadata.
-func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
+func (e *Engine) PutObject(ctx context.Context, bucket, key, contentType string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
@@ -158,7 +158,7 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key string, r io.Reader)
 		}
 		if e.metaStore != nil {
 			if bucket != "" && key != "" {
-				if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath); err != nil {
+				if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath, contentType); err != nil {
 					return err
 				}
 			} else {

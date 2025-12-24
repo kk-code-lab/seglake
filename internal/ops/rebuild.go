@@ -113,7 +113,7 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 				}
 				hlcTS := fmt.Sprintf("%019d-%010d", physical, logical)
 				lastModified := entry.modTime.Format(time.RFC3339Nano)
-				if err := store.RecordPutWithHLC(tx, hlcTS, "local", entry.bucket, entry.key, entry.versionID, "", entry.size, entry.path, lastModified, true); err != nil {
+				if err := store.RecordPutWithHLC(tx, hlcTS, "local", entry.bucket, entry.key, entry.versionID, "", entry.size, entry.path, "", lastModified, true); err != nil {
 					return err
 				}
 				report.RebuiltObjects++

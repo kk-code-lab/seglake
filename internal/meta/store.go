@@ -49,6 +49,7 @@ type oplogPutPayload struct {
 	ETag         string `json:"etag"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified_utc"`
+	ContentType  string `json:"content_type,omitempty"`
 }
 
 type oplogDeletePayload struct {
@@ -339,6 +340,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 14 {
+		if err = applyV14(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 15 {
+		if err = applyV15(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -354,6 +371,7 @@ func applyV1(ctx context.Context, tx *sql.Tx) error {
 			key TEXT NOT NULL,
 			etag TEXT,
 			size INTEGER NOT NULL,
+			content_type TEXT,
 			last_modified_utc TEXT NOT NULL,
 			hlc_ts TEXT,
 			site_id TEXT,
@@ -409,7 +427,8 @@ func applyV2(ctx context.Context, tx *sql.Tx) error {
 			bucket TEXT NOT NULL,
 			key TEXT NOT NULL,
 			created_at TEXT NOT NULL,
-			state TEXT NOT NULL
+			state TEXT NOT NULL,
+			content_type TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS multipart_uploads_bucket_key_idx ON multipart_uploads(bucket, key)`,
 		`CREATE TABLE IF NOT EXISTS multipart_parts (
@@ -630,6 +649,42 @@ func applyV12(ctx context.Context, tx *sql.Tx) error {
 func applyV13(ctx context.Context, tx *sql.Tx) error {
 	ddl := []string{
 		`ALTER TABLE repl_metrics ADD COLUMN bytes_in_total INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV14(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE versions ADD COLUMN content_type TEXT`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV15(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE multipart_uploads ADD COLUMN content_type TEXT`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -1170,7 +1225,7 @@ ON CONFLICT(segment_id) DO UPDATE SET
 }
 
 // RecordPut inserts a new version and updates objects_current.
-func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag string, size int64, manifestPath string) error {
+func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag string, size int64, manifestPath, contentType string) error {
 	if bucket == "" || key == "" {
 		return errors.New("meta: bucket and key required")
 	}
@@ -1185,24 +1240,24 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
-	if err := s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, now, true); err != nil {
+	if err := s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, contentType, now, true); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 // RecordPutTx inserts a new version and updates objects_current within a transaction.
-func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, size int64, manifestPath string) error {
+func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, size int64, manifestPath, contentType string) error {
 	if bucket == "" || key == "" {
 		return errors.New("meta: bucket and key required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
-	return s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, now, true)
+	return s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, contentType, now, true)
 }
 
 // RecordPutWithHLC inserts a new version using the provided HLC/site_id.
-func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, versionID, etag string, size int64, manifestPath, lastModified string, writeOplog bool) error {
+func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, versionID, etag string, size int64, manifestPath, contentType, lastModified string, writeOplog bool) error {
 	if tx == nil {
 		return errors.New("meta: transaction required")
 	}
@@ -1222,9 +1277,9 @@ func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, version
 		return err
 	}
 	if _, err := tx.Exec(`
-INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-		versionID, bucket, key, etag, size, lastModified, hlcTS, siteID); err != nil {
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+		versionID, bucket, key, etag, size, contentType, lastModified, hlcTS, siteID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -1247,6 +1302,7 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 			ETag:         etag,
 			Size:         size,
 			LastModified: lastModified,
+			ContentType:  contentType,
 		})
 		if err != nil {
 			return err
@@ -1475,7 +1531,11 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 						if err := json.Unmarshal([]byte(entry.Payload), &mpuPayload); err != nil {
 							return err
 						}
-						payload = oplogPutPayload(mpuPayload)
+						payload = oplogPutPayload{
+							ETag:         mpuPayload.ETag,
+							Size:         mpuPayload.Size,
+							LastModified: mpuPayload.LastModified,
+						}
 					} else {
 						if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
 							return err
@@ -1487,9 +1547,9 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
 				}
 				if _, err := tx.Exec(`
-INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-					entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+					entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
 					return err
 				}
 				var currentVersion string
@@ -1547,8 +1607,8 @@ UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?`,
 				affected, _ := res.RowsAffected()
 				if affected == 0 {
 					if _, err := tx.Exec(`
-INSERT INTO versions(version_id, bucket, key, etag, size, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, '', 0, ?, ?, ?, 'DELETED')`,
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, '', 0, '', ?, ?, ?, 'DELETED')`,
 						entry.VersionID, entry.Bucket, entry.Key, lastModified, entry.HLCTS, entry.SiteID); err != nil {
 						return err
 					}
@@ -1976,11 +2036,12 @@ func (s *Store) ManifestPath(ctx context.Context, versionID string) (string, err
 
 // MultipartUpload holds upload metadata.
 type MultipartUpload struct {
-	UploadID  string
-	Bucket    string
-	Key       string
-	CreatedAt string
-	State     string
+	UploadID    string
+	Bucket      string
+	Key         string
+	CreatedAt   string
+	State       string
+	ContentType string
 }
 
 // MultipartPart holds part metadata.
@@ -1994,14 +2055,14 @@ type MultipartPart struct {
 }
 
 // CreateMultipartUpload creates an upload and returns its id.
-func (s *Store) CreateMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
+func (s *Store) CreateMultipartUpload(ctx context.Context, bucket, key, uploadID, contentType string) error {
 	if bucket == "" || key == "" || uploadID == "" {
 		return errors.New("meta: bucket, key, and upload id required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state)
-VALUES(?, ?, ?, ?, 'ACTIVE')`, uploadID, bucket, key, now)
+INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state, content_type)
+VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
 	return err
 }
 
@@ -2013,7 +2074,7 @@ func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMar
 	pattern := escapeLike(prefix) + "%"
 	rows, err := queryWithMarkers(ctx, s.db,
 		`
-SELECT upload_id, bucket, key, created_at, state
+SELECT upload_id, bucket, key, created_at, state, content_type
 FROM multipart_uploads
 WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 		"key", "upload_id", bucket, pattern, keyMarker, uploadIDMarker, limit,
@@ -2023,7 +2084,7 @@ WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 	}
 	return out, scanRows(rows, func(scan func(dest ...any) error) error {
 		var up MultipartUpload
-		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType); err != nil {
 			return err
 		}
 		out = append(out, up)
@@ -2034,11 +2095,11 @@ WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 // GetMultipartUpload returns upload metadata.
 func (s *Store) GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT upload_id, bucket, key, created_at, state
+SELECT upload_id, bucket, key, created_at, state, content_type
 FROM multipart_uploads
 WHERE upload_id=?`, uploadID)
 	var up MultipartUpload
-	if err := row.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+	if err := row.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType); err != nil {
 		return nil, err
 	}
 	return &up, nil
@@ -2141,7 +2202,7 @@ ORDER BY part_number`, uploadID)
 func (s *Store) ListMultipartUploadsBefore(ctx context.Context, cutoff time.Time) (out []MultipartUpload, err error) {
 	ts := cutoff.UTC().Format(time.RFC3339Nano)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT upload_id, bucket, key, created_at, state
+SELECT upload_id, bucket, key, created_at, state, content_type
 FROM multipart_uploads
 WHERE state='ACTIVE' AND created_at < ?
 ORDER BY created_at`, ts)
@@ -2155,7 +2216,7 @@ ORDER BY created_at`, ts)
 	}()
 	for rows.Next() {
 		var up MultipartUpload
-		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State); err != nil {
+		if err := rows.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType); err != nil {
 			return nil, err
 		}
 		out = append(out, up)
@@ -2247,6 +2308,7 @@ type ObjectMeta struct {
 	VersionID    string
 	ETag         string
 	Size         int64
+	ContentType  string
 	LastModified string
 	State        string
 }
@@ -2254,13 +2316,13 @@ type ObjectMeta struct {
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT v.version_id, v.etag, v.size, v.last_modified_utc, v.state
+SELECT v.version_id, v.etag, v.size, v.content_type, v.last_modified_utc, v.state
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key=?`, bucket, key)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified, &meta.State); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -2272,12 +2334,12 @@ func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID str
 		return nil, errors.New("meta: bucket, key, and version id required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT version_id, etag, size, last_modified_utc, state
+SELECT version_id, etag, size, content_type, last_modified_utc, state
 FROM versions
 WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified, &meta.State); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State); err != nil {
 		return nil, err
 	}
 	return &meta, nil

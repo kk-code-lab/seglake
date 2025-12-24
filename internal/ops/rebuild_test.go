@@ -37,7 +37,7 @@ func TestRebuildIndexReconstructsSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	if _, _, err := eng.PutObject(context.Background(), "b", "k", strings.NewReader("data")); err != nil {
+	if _, _, err := eng.PutObject(context.Background(), "b", "k", "", strings.NewReader("data")); err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
 

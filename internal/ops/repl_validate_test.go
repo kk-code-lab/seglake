@@ -33,7 +33,7 @@ func TestReplValidateNoDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open A: %v", err)
 	}
-	if err := storeA.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathA); err != nil {
+	if err := storeA.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathA, ""); err != nil {
 		t.Fatalf("RecordPut A: %v", err)
 	}
 	_ = storeA.Close()
@@ -42,7 +42,7 @@ func TestReplValidateNoDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open B: %v", err)
 	}
-	if err := storeB.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathB); err != nil {
+	if err := storeB.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathB, ""); err != nil {
 		t.Fatalf("RecordPut B: %v", err)
 	}
 	_ = storeB.Close()
@@ -86,7 +86,7 @@ func TestReplValidateDetectsDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta.Open A: %v", err)
 	}
-	if err := storeA.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathA); err != nil {
+	if err := storeA.RecordPut(context.Background(), "bucket", "key", "v1", "", 4, pathA, ""); err != nil {
 		t.Fatalf("RecordPut A: %v", err)
 	}
 	_ = storeA.Close()

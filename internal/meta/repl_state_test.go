@@ -93,10 +93,10 @@ func TestReplStatsBacklog(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
 
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag1", 1, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag1", 1, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag2", 2, ""); err != nil {
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v2", "etag2", 2, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
 	entries, err := store.ListOplog(context.Background())

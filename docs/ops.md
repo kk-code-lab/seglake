@@ -10,6 +10,7 @@
 6) Set request size limits at the proxy if needed (S3 SDKs may retry on 413).
 7) Tune proxy timeouts/keepalive for large PUT/GET; disable buffering only if you need streaming behavior.
 8) Keep access logs/metrics at the proxy (Seglake redacts presigned secrets).
+9) Set CORS at Seglake if needed (see flags below).
 
 Example (nginx, minimal):
 ```
@@ -207,6 +208,41 @@ Example read + list for a single bucket:
     }
   ]
 }
+```
+
+## Request limits / CORS
+
+Flags:
+- `-max-object-size` (default 5 GiB, 0 = unlimited)
+- `-require-content-md5` (default false)
+- `-cors-origins` (default `*`, comma-separated list)
+- `-cors-methods` (default `GET,PUT,HEAD,DELETE`)
+- `-cors-headers` (default `authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256`)
+- `-cors-max-age` (default 86400)
+- `-replay-ttl` (default 5m, 0 = disable replay protection)
+
+## Curl smoke tests
+
+S3 functionality:
+```
+./scripts/curl_s3_smoke.sh
+```
+
+Security checks:
+```
+./scripts/curl_security_smoke.sh
+```
+
+Both scripts can be configured via env vars:
+```
+S3_ENDPOINT=http://localhost:9000 \
+S3_HOST=localhost:9000 \
+S3_ACCESS_KEY=test \
+S3_SECRET_KEY=testsecret \
+S3_BUCKET=demo \
+S3_OBJECT_KEY=spec.md \
+S3_DATA_FILE=./SPEC.md \
+./scripts/curl_s3_smoke.sh
 ```
 
 Example with source IP + header condition:

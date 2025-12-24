@@ -55,9 +55,10 @@ type listPartContent struct {
 	LastModified string `xml:"LastModified"`
 }
 
-func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, bucket, key, requestID, resource string) {
+func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
-	if err := h.Meta.CreateMultipartUpload(ctx, bucket, key, uploadID); err != nil {
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if err := h.Meta.CreateMultipartUpload(ctx, bucket, key, uploadID, contentType); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
@@ -85,21 +86,58 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
+	contentLength, hasLength, err := contentLengthFromRequest(r)
+	if err != nil {
+		switch err {
+		case errMissingContentLength:
+			writeErrorWithResource(w, http.StatusLengthRequired, "MissingContentLength", "missing content length", requestID, r.URL.Path)
+		default:
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, r.URL.Path)
+		}
+		return
+	}
+	if h.MaxObjectSize > 0 && hasLength && contentLength > h.MaxObjectSize {
+		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		return
+	}
 	reader := io.Reader(r.Body)
+	if h.MaxObjectSize > 0 && !hasLength {
+		reader = newSizeLimitReader(reader, h.MaxObjectSize)
+	}
+	expectedMD5, err := parseContentMD5(r.Header.Get("Content-MD5"))
+	if err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid content-md5", requestID, r.URL.Path)
+		return
+	}
+	if h.RequireContentMD5 && len(expectedMD5) == 0 {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "content-md5 required", requestID, r.URL.Path)
+		return
+	}
+	payloadHash := ""
+	verifyPayload := false
 	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
 		expected, verify, err := parsePayloadHash(hashHeader)
 		if err != nil {
 			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
 			return
 		}
-		if verify {
-			reader = newPayloadHashReader(reader, expected)
-		}
+		payloadHash = expected
+		verifyPayload = verify
 	}
-	_, result, err := h.Engine.PutObject(ctx, "", "", reader)
+	if verifyPayload || len(expectedMD5) > 0 {
+		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
+	}
+	_, result, err := h.Engine.PutObject(ctx, "", "", "", reader)
 	if err != nil {
-		if errors.Is(err, errPayloadHashMismatch) {
+		switch {
+		case errors.Is(err, errPayloadHashMismatch):
 			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
+			return
+		case errors.Is(err, errBadDigest):
+			writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, r.URL.Path)
+			return
+		case errors.Is(err, errEntityTooLarge):
+			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
 			return
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
@@ -218,7 +256,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		_ = pw.Close()
 	}()
 
-	_, result, err := h.Engine.PutObject(ctx, upload.Bucket, upload.Key, pr)
+	_, result, err := h.Engine.PutObject(ctx, upload.Bucket, upload.Key, upload.ContentType, pr)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
