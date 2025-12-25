@@ -194,6 +194,13 @@ func (h *Handler) handleListParts(ctx context.Context, w http.ResponseWriter, r 
 }
 
 func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, requestID string) {
+	if h.MPUCompleteLimiter != nil {
+		if !h.MPUCompleteLimiter.Acquire() {
+			writeErrorWithResource(w, http.StatusServiceUnavailable, "SlowDown", "too many inflight multipart completes", requestID, r.URL.Path)
+			return
+		}
+		defer h.MPUCompleteLimiter.Release()
+	}
 	upload, err := h.Meta.GetMultipartUpload(ctx, uploadID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
