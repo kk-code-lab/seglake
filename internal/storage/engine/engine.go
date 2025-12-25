@@ -211,6 +211,61 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 	return man, result, nil
 }
 
+// PutManifestWithCommit stores a manifest and runs an optional meta commit in the barrier transaction.
+// This is used for virtual manifests that reference existing chunks without rewriting data.
+func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, contentType string, size int64, etag string, chunks []manifest.ChunkRef, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
+	if err := e.ensureDirs(); err != nil {
+		return nil, nil, err
+	}
+	if bucket == "" || key == "" {
+		return nil, nil, errors.New("engine: bucket and key required")
+	}
+	versionID, err := newID()
+	if err != nil {
+		return nil, nil, err
+	}
+	man := &manifest.Manifest{
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Size:      size,
+		Chunks:    chunks,
+	}
+	result := &PutResult{
+		VersionID: versionID,
+		ETag:      etag,
+		Size:      size,
+	}
+	manifestPath := e.layout.ManifestPath(formatManifestName(bucket, key, versionID))
+	commit := func(tx *sql.Tx) error {
+		if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
+			return err
+		}
+		if e.metaStore != nil {
+			if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath, contentType); err != nil {
+				return err
+			}
+		}
+		if extraCommit != nil {
+			if tx == nil {
+				return errors.New("engine: extra commit requires transaction")
+			}
+			if err := extraCommit(tx, result, manifestPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := e.barrier.register(commit); err != nil {
+		return nil, nil, err
+	}
+	if err := e.barrier.wait(ctx); err != nil {
+		return nil, nil, err
+	}
+	result.CommittedAt = time.Now().UTC()
+	return man, result, nil
+}
+
 // Get retrieves an object stream by version id.
 func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *manifest.Manifest, error) {
 	if err := e.ensureDirs(); err != nil {
