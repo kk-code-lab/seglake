@@ -15,6 +15,7 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
+	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
 
 type initiateMultipartResult struct {
@@ -252,39 +253,45 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		return
 	}
 
-	pr, pw := io.Pipe()
-	go func() {
-		for _, part := range ordered {
-			reader, _, err := h.Engine.Get(ctx, part.VersionID)
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
-			_, err = io.Copy(pw, reader)
-			_ = reader.Close()
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
+	chunks := make([]manifest.ChunkRef, 0, len(ordered))
+	totalSize := int64(0)
+	chunkIndex := 0
+	for _, part := range ordered {
+		partManifest, err := h.Engine.GetManifest(ctx, part.VersionID)
+		if err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+			return
 		}
-		_ = pw.Close()
-	}()
+		if partManifest.Size != 0 && part.Size != 0 && partManifest.Size != part.Size {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "part size mismatch", requestID, r.URL.Path)
+			return
+		}
+		for _, ch := range partManifest.Chunks {
+			ch.Index = chunkIndex
+			chunkIndex++
+			chunks = append(chunks, ch)
+		}
+		if partManifest.Size > 0 {
+			totalSize += partManifest.Size
+		} else {
+			totalSize += part.Size
+		}
+	}
 
-	_, result, err := h.Engine.PutObjectWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, pr, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+	multiETag := multipartETag(ordered)
+	_, result, err := h.Engine.PutManifestWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, totalSize, multiETag, chunks, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 		if h.Meta == nil {
 			return errors.New("meta store not configured")
 		}
 		if err := h.Meta.CompleteMultipartUploadTx(ctx, tx, uploadID); err != nil {
 			return err
 		}
-		multiETag := multipartETag(ordered)
 		return h.Meta.RecordMPUCompleteTx(ctx, tx, upload.Bucket, upload.Key, result.VersionID, multiETag, result.Size)
 	})
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	multiETag := multipartETag(ordered)
 	resp := completeMultipartResult{
 		Bucket: upload.Bucket,
 		Key:    upload.Key,
