@@ -88,6 +88,7 @@ type serverOptions struct {
 	replayMaxEntries  int
 	requireIfMatch    string
 	requireMD5        bool
+	mpuCompleteLimit  int
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
@@ -468,6 +469,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.IntVar(&opts.replayMaxEntries, "replay-cache-max", 0, "Replay cache max entries (0 = default)")
 	fs.StringVar(&opts.requireIfMatch, "require-if-match-buckets", "", "Comma-separated buckets requiring If-Match on overwrite (* for all)")
 	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
+	fs.IntVar(&opts.mpuCompleteLimit, "mpu-complete-limit", 4, "Max concurrent CompleteMultipartUpload operations (0 disables)")
 	fs.DurationVar(&opts.readHeaderTimeout, "read-header-timeout", defaultReadHeaderTimeout, "HTTP read header timeout")
 	fs.DurationVar(&opts.readTimeout, "read-timeout", defaultReadTimeout, "HTTP read timeout")
 	fs.DurationVar(&opts.writeTimeout, "write-timeout", defaultWriteTimeout, "HTTP write timeout")
@@ -629,12 +631,13 @@ func runServer(opts *serverOptions) error {
 		},
 	}
 	var handler http.Handler = &s3.Handler{
-		Engine: eng,
-		Meta:   store,
-		Auth:   authCfg,
+		Engine:                eng,
+		Meta:                  store,
+		Auth:                  authCfg,
 		Metrics:               s3.NewMetrics(),
 		AuthLimiter:           s3.NewAuthLimiter(),
 		InflightLimiter:       s3.NewInflightLimiter(32),
+		MPUCompleteLimiter:    s3.NewSemaphore(int64(opts.mpuCompleteLimit)),
 		VirtualHosted:         opts.virtualHosted,
 		MaxObjectSize:         opts.maxObjectSize,
 		CORSAllowOrigins:      splitComma(opts.corsOrigins),

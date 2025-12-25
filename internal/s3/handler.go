@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
@@ -27,6 +28,8 @@ type Handler struct {
 	AuthLimiter *AuthLimiter
 	// InflightLimiter limits concurrent requests per access key.
 	InflightLimiter *InflightLimiter
+	// MPUCompleteLimiter limits concurrent CompleteMultipartUpload operations.
+	MPUCompleteLimiter *Semaphore
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
 	// TrustedProxies contains CIDR ranges for trusted proxy IPs; used for X-Forwarded-For.
@@ -51,7 +54,11 @@ type Handler struct {
 	ReplayBlock bool
 	// RequireIfMatchBuckets enforces If-Match on overwrites for selected buckets.
 	RequireIfMatchBuckets map[string]struct{}
-	replayCache           *replayCache
+	// APIKeyUseMinInterval throttles last_used_at updates per access key (0 = default).
+	APIKeyUseMinInterval time.Duration
+	apiKeyUseMu          sync.Mutex
+	apiKeyUseLast        map[string]time.Time
+	replayCache          *replayCache
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -538,11 +545,35 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		}
 	}
 	if h.Engine != nil && h.Meta != nil {
-		_ = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
-			return h.Meta.RecordAPIKeyUseTx(ctx, tx, accessKey)
-		})
+		h.recordAPIKeyUse(accessKey)
 	}
 	return nil
+}
+
+func (h *Handler) recordAPIKeyUse(accessKey string) {
+	if h == nil || h.Meta == nil || accessKey == "" {
+		return
+	}
+	interval := h.APIKeyUseMinInterval
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	now := time.Now()
+	h.apiKeyUseMu.Lock()
+	if h.apiKeyUseLast == nil {
+		h.apiKeyUseLast = make(map[string]time.Time)
+	}
+	last := h.apiKeyUseLast[accessKey]
+	if !last.IsZero() && now.Sub(last) < interval {
+		h.apiKeyUseMu.Unlock()
+		return
+	}
+	h.apiKeyUseLast[accessKey] = now
+	h.apiKeyUseMu.Unlock()
+
+	go func() {
+		_ = h.Meta.RecordAPIKeyUse(context.Background(), accessKey)
+	}()
 }
 
 func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {

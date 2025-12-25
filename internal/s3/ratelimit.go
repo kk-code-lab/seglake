@@ -110,6 +110,43 @@ func (l *InflightLimiter) Release(key string) {
 	}
 }
 
+// Semaphore limits total concurrent operations.
+type Semaphore struct {
+	ch chan struct{}
+}
+
+// NewSemaphore creates a semaphore with a fixed global limit (<=0 disables).
+func NewSemaphore(limit int64) *Semaphore {
+	if limit <= 0 {
+		return nil
+	}
+	return &Semaphore{ch: make(chan struct{}, limit)}
+}
+
+// Acquire attempts to take a slot; returns false if full.
+func (s *Semaphore) Acquire() bool {
+	if s == nil {
+		return true
+	}
+	select {
+	case s.ch <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Release frees a slot.
+func (s *Semaphore) Release() {
+	if s == nil {
+		return
+	}
+	select {
+	case <-s.ch:
+	default:
+	}
+}
+
 func clientIP(remoteAddr string) string {
 	if remoteAddr == "" {
 		return ""
