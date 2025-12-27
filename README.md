@@ -14,6 +14,7 @@ Implementation: append‑only segments + object manifests + metadata in SQLite (
 - Append‑only segments, 4 MiB chunking, BLAKE3 per chunk
 - Ops tooling: fsck, scrub, rebuild-index, snapshot, gc-plan/run, gc-rewrite, mpu-gc, repl-validate
 - Access policies (MVP): per-key + bucket policies + conditions
+- Public buckets (unsigned access) via `-public-buckets` + bucket policy
 
 ---
 
