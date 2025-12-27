@@ -164,3 +164,77 @@ func TestSigV2ListRequestRejected(t *testing.T) {
 		t.Fatalf("expected AuthorizationHeaderMalformed, got %q", errResp.Code)
 	}
 }
+
+func TestPublicBucketUnsignedAccess(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	if _, _, err := eng.PutObject(ctx, "public", "hello.txt", "", bytes.NewReader([]byte("hello"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["getobject","headobject","listbucket"],"resources":[{"bucket":"public"}]}]}`
+	if err := store.SetBucketPolicy(ctx, "public", policy); err != nil {
+		t.Fatalf("SetBucketPolicy: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			Region:               "us-east-1",
+			AccessKey:            "root",
+			SecretKey:            "rootsecret",
+			AllowUnsignedPayload: true,
+		},
+		PublicBuckets: map[string]struct{}{"public": {}},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/public/hello.txt", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(body) != "hello" {
+		t.Fatalf("unexpected body: %s", string(body))
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/public/new.txt", bytes.NewReader([]byte("nope")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	_ = putResp.Body.Close()
+	if putResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+}

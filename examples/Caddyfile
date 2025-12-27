@@ -1,0 +1,9 @@
+# Path-style (bucket in URL path)
+s3.example.com {
+  reverse_proxy 127.0.0.1:9000
+}
+
+# Virtual-hosted-style (bucket as subdomain). Requires wildcard DNS.
+# s3.example.com, *.s3.example.com {
+#   reverse_proxy 127.0.0.1:9000
+# }

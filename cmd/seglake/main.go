@@ -68,6 +68,7 @@ type serverOptions struct {
 	accessKey         string
 	secretKey         string
 	region            string
+	publicBuckets     string
 	virtualHosted     bool
 	logRequests       bool
 	allowUnsigned     bool
@@ -449,6 +450,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.accessKey, "access-key", "", "S3 access key (enables SigV4)")
 	fs.StringVar(&opts.secretKey, "secret-key", "", "S3 secret key (enables SigV4)")
 	fs.StringVar(&opts.region, "region", "us-east-1", "S3 region")
+	fs.StringVar(&opts.publicBuckets, "public-buckets", "", "Comma-separated bucket names allowing unsigned requests (requires bucket policy)")
 	fs.BoolVar(&opts.virtualHosted, "virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	fs.BoolVar(&opts.logRequests, "log-requests", true, "Log HTTP requests")
 	fs.BoolVar(&opts.allowUnsigned, "allow-unsigned-payload", true, "Allow SigV4 UNSIGNED-PAYLOAD")
@@ -639,6 +641,7 @@ func runServer(opts *serverOptions) error {
 		InflightLimiter:       s3.NewInflightLimiter(32),
 		MPUCompleteLimiter:    s3.NewSemaphore(int64(opts.mpuCompleteLimit)),
 		VirtualHosted:         opts.virtualHosted,
+		PublicBuckets:         bucketSet(splitComma(opts.publicBuckets)),
 		MaxObjectSize:         opts.maxObjectSize,
 		CORSAllowOrigins:      splitComma(opts.corsOrigins),
 		CORSAllowMethods:      splitComma(opts.corsMethods),
