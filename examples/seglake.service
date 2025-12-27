@@ -1,0 +1,23 @@
+[Unit]
+Description=Seglake
+After=network.target
+
+[Service]
+User=seglake
+Group=seglake
+WorkingDirectory=/var/lib/seglake
+EnvironmentFile=/etc/seglake/secrets.env
+ExecStart=/opt/seglake/build/seglake \
+  -mode server \
+  --addr 127.0.0.1:9000 \
+  --data-dir /var/lib/seglake \
+  --access-key ${SEGLAKE_ACCESS_KEY} \
+  --secret-key ${SEGLAKE_SECRET_KEY} \
+  --region us-east-1 \
+  --public-buckets public \
+  --trusted-proxies 127.0.0.1/32,::1/128
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

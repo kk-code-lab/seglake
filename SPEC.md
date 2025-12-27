@@ -265,6 +265,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - TLS checklist and awscli/s3cmd examples: `docs/ops.md`.
 - Optional in-app TLS: `-tls`, `-tls-cert`, `-tls-key` (hot reload certs).
 - Policy management: `-mode keys` (per-key) and `-mode bucket-policy` (per-bucket).
+- Public buckets (unsigned access): `-public-buckets` + bucket policy allowlist (see `docs/ops.md`).
+- Deployment examples (systemd, Caddy, public policy) are in `examples/`.
 - Limits and CORS: `-max-object-size`, `-cors-origins`, `-cors-methods`, `-cors-headers`, `-cors-max-age`.
 
 ---

@@ -32,6 +32,8 @@ type Handler struct {
 	MPUCompleteLimiter *Semaphore
 	// VirtualHosted enables bucket resolution from Host header (e.g. bucket.localhost).
 	VirtualHosted bool
+	// PublicBuckets allows unsigned requests for selected buckets (requires bucket policy).
+	PublicBuckets map[string]struct{}
 	// TrustedProxies contains CIDR ranges for trusted proxy IPs; used for X-Forwarded-For.
 	TrustedProxies []string
 	// MaxObjectSize enforces an optional max object size (0 = unlimited).
@@ -59,6 +61,19 @@ type Handler struct {
 	apiKeyUseMu          sync.Mutex
 	apiKeyUseLast        map[string]time.Time
 	replayCache          *replayCache
+}
+
+func isUnsignedRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.Header.Get("Authorization") != "" {
+		return false
+	}
+	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
+		return false
+	}
+	return true
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -423,27 +438,35 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 			return requestID, true
 		}
 	}
-	if err := h.Auth.VerifyRequest(r); err != nil {
-		if h.AuthLimiter != nil {
-			ip := clientIP(r.RemoteAddr)
-			key := extractAccessKey(r)
-			if !h.AuthLimiter.Allow(ip, key) {
-				writeErrorWithResource(w, http.StatusServiceUnavailable, "SlowDown", "too many auth failures", requestID, r.URL.Path)
-				return requestID, false
+	skipVerify := false
+	if isUnsignedRequest(r) {
+		if bucket, ok := h.publicBucketForRequest(r); ok && bucket != "" {
+			skipVerify = true
+		}
+	}
+	if !skipVerify {
+		if err := h.Auth.VerifyRequest(r); err != nil {
+			if h.AuthLimiter != nil {
+				ip := clientIP(r.RemoteAddr)
+				key := extractAccessKey(r)
+				if !h.AuthLimiter.Allow(ip, key) {
+					writeErrorWithResource(w, http.StatusServiceUnavailable, "SlowDown", "too many auth failures", requestID, r.URL.Path)
+					return requestID, false
+				}
+				h.AuthLimiter.ObserveFailure(ip, key)
 			}
-			h.AuthLimiter.ObserveFailure(ip, key)
+			switch err {
+			case errAccessDenied:
+				writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
+			case errTimeSkew:
+				writeErrorWithResource(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID, r.URL.Path)
+			case errAuthMalformed:
+				writeErrorWithResource(w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "authorization header malformed", requestID, r.URL.Path)
+			default:
+				writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
+			}
+			return requestID, false
 		}
-		switch err {
-		case errAccessDenied:
-			writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
-		case errTimeSkew:
-			writeErrorWithResource(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID, r.URL.Path)
-		case errAuthMalformed:
-			writeErrorWithResource(w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "authorization header malformed", requestID, r.URL.Path)
-		default:
-			writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
-		}
-		return requestID, false
 	}
 	if h.ReplayCacheTTL > 0 && r.URL.Query().Get("X-Amz-Signature") != "" {
 		if h.replayCache == nil {
@@ -474,7 +497,19 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 	}
 	accessKey := extractAccessKey(r)
 	if accessKey == "" {
-		return nil
+		if h.Auth == nil {
+			return nil
+		}
+		if h.Auth.AccessKey == "" && h.Auth.SecretKey == "" {
+			hasKeys, err := h.Meta.HasAPIKeys(ctx)
+			if err != nil {
+				return err
+			}
+			if !hasKeys {
+				return nil
+			}
+		}
+		return h.authorizeUnsignedRequest(ctx, r)
 	}
 	hasKeys, err := h.Meta.HasAPIKeys(ctx)
 	if err != nil {
@@ -548,6 +583,63 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		h.recordAPIKeyUse(accessKey)
 	}
 	return nil
+}
+
+func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request) error {
+	if h == nil || h.Meta == nil || r == nil {
+		return errAccessDenied
+	}
+	bucket, ok := h.bucketFromRequest(r)
+	if !ok || !h.isPublicBucket(bucket) {
+		return errAccessDenied
+	}
+	action := policyActionForRequest(h.opForRequest(r))
+	if action == "" {
+		return errAccessDenied
+	}
+	bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket)
+	if err != nil || strings.TrimSpace(bucketPolicy) == "" {
+		return errAccessDenied
+	}
+	bpol, err := ParsePolicy(bucketPolicy)
+	if err != nil {
+		return errAccessDenied
+	}
+	keyName := ""
+	if _, keyParsed, ok := h.parseBucketKey(r); ok {
+		keyName = keyParsed
+	}
+	reqCtx := h.policyContextFromRequest(r)
+	allowed, denied := bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
+	if denied || !allowed {
+		return errAccessDenied
+	}
+	return nil
+}
+
+func (h *Handler) publicBucketForRequest(r *http.Request) (string, bool) {
+	if h == nil || r == nil {
+		return "", false
+	}
+	bucket, ok := h.bucketFromRequest(r)
+	if !ok || bucket == "" {
+		return "", false
+	}
+	if !h.isPublicBucket(bucket) {
+		return "", false
+	}
+	return bucket, true
+}
+
+func (h *Handler) isPublicBucket(bucket string) bool {
+	if h == nil || bucket == "" || len(h.PublicBuckets) == 0 {
+		return false
+	}
+	if _, ok := h.PublicBuckets["*"]; ok {
+		return true
+	}
+	_, ok := h.PublicBuckets[bucket]
+	return ok
 }
 
 func (h *Handler) recordAPIKeyUse(accessKey string) {

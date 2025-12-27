@@ -95,6 +95,7 @@ aws s3 ls s3://demo --endpoint-url http://demo.localhost:9000
 The repo includes two smoke scripts for quick checks against a running server:
 - `scripts/curl_s3_smoke.sh` (basic S3 PUT/GET/HEAD/Range/conditions/CORS)
 - `scripts/curl_security_smoke.sh` (auth/validation error responses)
+- `scripts/curl_public_bucket_smoke.sh` (public bucket unsigned GET + signed setup)
 
 Example:
 ```
@@ -210,6 +211,20 @@ Bucket policies:
 ./build/seglake -mode bucket-policy -bucket-policy-action set -bucket-policy-bucket=demo -bucket-policy='{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}'
 ./build/seglake -mode bucket-policy -bucket-policy-action get -bucket-policy-bucket=demo
 ./build/seglake -mode bucket-policy -bucket-policy-action delete -bucket-policy-bucket=demo
+```
+
+Public buckets (unsigned access):
+- Enable on the server with `-public-buckets` (comma-separated bucket names).
+- Unsigned requests are allowed **only** for those buckets **and** only if a bucket policy explicitly allows the action.
+- Writes still require signed requests unless the policy explicitly allows them (not recommended).
+- Listing all buckets (`GET /`) still requires signing.
+Examples for systemd, Caddy, a public bucket policy, and `secrets.env` live in `examples/`.
+
+Example (public read-only bucket):
+```
+./build/seglake -access-key test -secret-key testsecret -public-buckets public
+./build/seglake -mode bucket-policy -bucket-policy-action set -bucket-policy-bucket=public -bucket-policy='{"version":"v1","statements":[{"effect":"allow","actions":["GetObject","HeadObject","ListBucket"],"resources":[{"bucket":"public"}]}]}'
+curl http://localhost:9000/public/hello.txt
 ```
 
 Policies:
