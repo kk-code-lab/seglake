@@ -105,6 +105,7 @@ func TestAWSChunkedReaderUnsignedTrailerChecksum(t *testing.T) {
 		"0",
 		"x-amz-checksum-sha256: " + checksum,
 		"",
+		"",
 	}, "\r\n")
 
 	r := newAWSChunkedReader(strings.NewReader(body), awsChunkedConfig{
@@ -190,6 +191,7 @@ func TestAWSChunkedReaderSignedTrailer(t *testing.T) {
 		"x-amz-checksum-sha256: " + checksum,
 		"x-amz-trailer-signature: " + trailerSig,
 		"",
+		"",
 	}, "\r\n")
 
 	r := newAWSChunkedReader(strings.NewReader(body), awsChunkedConfig{
@@ -209,6 +211,85 @@ func TestAWSChunkedReaderSignedTrailer(t *testing.T) {
 	}
 	if string(got) != payload {
 		t.Fatalf("expected decoded payload, got %q", string(got))
+	}
+}
+
+func TestAWSChunkedReaderRejectsBadChunkSignature(t *testing.T) {
+	t.Parallel()
+
+	payload := "hello"
+	amzDate := "20251228T000000Z"
+	dateScope := "20251228"
+	region := "us-east-1"
+	signingKey := deriveSigningKey("testsecret", dateScope, region, "s3")
+	seed := "seed-signature"
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+
+	chunkSig := signStreamingChunk(signingKey, amzDate, scope, seed, sha256Hex(payload))
+	finalSig := signStreamingChunk(signingKey, amzDate, scope, chunkSig, emptySHA256Hex)
+
+	body := strings.Join([]string{
+		"5;chunk-signature=deadbeef",
+		payload,
+		"0;chunk-signature=" + finalSig,
+		"",
+	}, "\r\n")
+
+	r := newAWSChunkedReader(strings.NewReader(body), awsChunkedConfig{
+		mode: streamingSigned,
+		sigv4: &sigv4Context{
+			signingKey:    signingKey,
+			seedSignature: seed,
+			amzDate:       amzDate,
+			scope:         scope,
+		},
+		expectedLen: int64(len(payload)),
+	})
+	if _, err := io.ReadAll(r); err == nil {
+		t.Fatalf("expected signature error")
+	}
+}
+
+func TestAWSChunkedReaderRejectsBadTrailerSignature(t *testing.T) {
+	t.Parallel()
+
+	payload := "hi"
+	amzDate := "20251228T000000Z"
+	dateScope := "20251228"
+	region := "us-east-1"
+	signingKey := deriveSigningKey("testsecret", dateScope, region, "s3")
+	seed := "seed-signature"
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+
+	sum := sha256.Sum256([]byte(payload))
+	checksum := base64.StdEncoding.EncodeToString(sum[:])
+
+	chunkSig := signStreamingChunk(signingKey, amzDate, scope, seed, sha256Hex(payload))
+	finalSig := signStreamingChunk(signingKey, amzDate, scope, chunkSig, emptySHA256Hex)
+
+	body := strings.Join([]string{
+		"2;chunk-signature=" + chunkSig,
+		payload,
+		"0;chunk-signature=" + finalSig,
+		"x-amz-checksum-sha256: " + checksum,
+		"x-amz-trailer-signature: deadbeef",
+		"",
+		"",
+	}, "\r\n")
+
+	r := newAWSChunkedReader(strings.NewReader(body), awsChunkedConfig{
+		mode:        streamingSignedTrailer,
+		trailerKeys: []string{"x-amz-checksum-sha256"},
+		expectedLen: int64(len(payload)),
+		sigv4: &sigv4Context{
+			signingKey:    signingKey,
+			seedSignature: seed,
+			amzDate:       amzDate,
+			scope:         scope,
+		},
+	})
+	if _, err := io.ReadAll(r); err == nil {
+		t.Fatalf("expected trailer signature error")
 	}
 }
 
