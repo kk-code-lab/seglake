@@ -99,7 +99,10 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 		payloadHash = "UNSIGNED-PAYLOAD"
 	}
 	// We do not stream-hash payloads yet; accept provided hash values for now.
-	if !c.AllowUnsignedPayload && strings.EqualFold(payloadHash, "UNSIGNED-PAYLOAD") && payloadHashHeader != "" {
+	unsignedPayload := strings.EqualFold(payloadHash, "UNSIGNED-PAYLOAD") ||
+		strings.EqualFold(payloadHash, "STREAMING-UNSIGNED-PAYLOAD") ||
+		strings.EqualFold(payloadHash, "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+	if !c.AllowUnsignedPayload && unsignedPayload && payloadHashHeader != "" {
 		return errSignatureMismatch
 	}
 
