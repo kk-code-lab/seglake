@@ -136,6 +136,16 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) {
 		return errSignatureMismatch
 	}
+	sigCtx := &sigv4Context{
+		accessKey:     accessKey,
+		signingKey:    signingKey,
+		seedSignature: signature,
+		dateScope:     dateScope,
+		regionRaw:     regionRaw,
+		amzDate:       amzDate,
+		scope:         scope,
+	}
+	*r = *r.WithContext(context.WithValue(r.Context(), sigv4ContextKey{}, sigCtx))
 	return nil
 }
 

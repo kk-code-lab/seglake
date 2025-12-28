@@ -159,7 +159,10 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 4.2 Auth
 - SigV4: Authorization header or presigned query.
 - Presigned TTL: 1..7 days.
-- `X-Amz-Content-Sha256` supported; `STREAMING-*` rejected.
+- `X-Amz-Content-Sha256` supported; streaming modes accepted:
+  - `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` (signed chunks),
+  - `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` (signed chunks + signed trailers),
+  - `STREAMING-UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` (unsigned).
 - `UNSIGNED-PAYLOAD` allowed by default; can be disabled via `-allow-unsigned-payload=false`.
 - Request time skew: default ±5 min (fixed; no flag).
 - Region `us` normalized to `us-east-1`.
@@ -184,6 +187,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 4.4 PUT / UploadPart — validation
 - Requires `Content-Length` or `X-Amz-Decoded-Content-Length`.
+- Supports `Content-Encoding: aws-chunked` (AWS SigV4 streaming); chunk framing is stripped before validation/storage.
+- Streaming signatures are validated for signed modes; trailer checksums are validated when provided.
 - Optional `Content-MD5` validation (when header present) → `BadDigest` on mismatch.
 - Multipart: `Content-Type` from `InitiateMultipartUpload` is preserved and used on `Complete`.
 - Enforce `Content-MD5` via `-require-content-md5`.
