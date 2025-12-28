@@ -148,6 +148,38 @@ Replication (when 2+ nodes are available):
 Note: `scripts/stress_s3.sh` includes profiles for quickly surfacing contention
 and performance regressions (especially MPU + DELETE).
 
+## Server lock / heartbeat (CLI safety)
+
+When `-mode server` starts, it creates a heartbeat file in `--data-dir`:
+`.seglake.lock` (updated every 5s, considered stale after 15s).
+This is used by CLI modes to detect a running server and prevent unsafe
+operations on live data.
+
+Behavior:
+- Starting a second server on the same `--data-dir` is blocked if the heartbeat is fresh.
+- “Unsafe live” modes prompt before running if a server is detected.
+- Use `-yes` to skip the prompt.
+
+Mode safety (when server is running):
+
+Safe (no prompt):
+
+| Mode | Note |
+| --- | --- |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `repl-validate` | Read-only or metadata changes only. |
+
+Unsafe (prompt required):
+
+| Mode | Note |
+| --- | --- |
+| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `repl-pull`, `repl-push`, `repl-bootstrap` | Writes or rewrites data/metadata; use maintenance window. |
+
+Examples:
+```
+./build/seglake -mode gc-run -data-dir /var/lib/seglake -gc-force
+./build/seglake -mode gc-run -data-dir /var/lib/seglake -gc-force -yes
+```
+
 ## GC/MPU guardrails
 
 GC warnings and hard limits can be tuned:

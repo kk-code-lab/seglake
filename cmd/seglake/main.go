@@ -60,6 +60,7 @@ type globalArgs struct {
 	modeHelp    bool
 	showVersion bool
 	help        bool
+	assumeYes   bool
 }
 
 type serverOptions struct {
@@ -242,6 +243,9 @@ func main() {
 			printModeHelp(global.mode, fs)
 			return
 		}
+		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
+			exitError("repl pull", err)
+		}
 		if err := runReplPullMode(opts); err != nil {
 			exitError("repl pull", err)
 		}
@@ -257,6 +261,9 @@ func main() {
 			printModeHelp(global.mode, fs)
 			return
 		}
+		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
+			exitError("repl push", err)
+		}
 		if err := runReplPushMode(opts); err != nil {
 			exitError("repl push", err)
 		}
@@ -271,6 +278,9 @@ func main() {
 		} else if help {
 			printModeHelp(global.mode, fs)
 			return
+		}
+		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
+			exitError("repl bootstrap", err)
 		}
 		if err := runReplBootstrap(opts.remote, opts.accessKey, opts.secretKey, opts.region, opts.dataDir, opts.force); err != nil {
 			exitError("repl bootstrap", err)
@@ -319,6 +329,9 @@ func main() {
 			printModeHelp(global.mode, fs)
 			return
 		}
+		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
+			exitError("ops", err)
+		}
 		if err := ensureDataDir(opts.dataDir); err != nil {
 			exitError("data dir", err)
 		}
@@ -366,6 +379,13 @@ func parseGlobalArgs(args []string) (globalArgs, []string, error) {
 				return out, nil, err
 			}
 			out.modeHelp = value
+			continue
+		}
+		if value, ok, err := parseBoolFlag(arg, "-yes"); ok {
+			if err != nil {
+				return out, nil, err
+			}
+			out.assumeYes = value
 			continue
 		}
 		if value, ok, err := parseBoolFlag(arg, "-version"); ok {
@@ -611,6 +631,12 @@ func resolveMetaPath(dataDir, override string) string {
 }
 
 func runServer(opts *serverOptions) error {
+	lock, err := acquireServerLock(opts.dataDir, opts.addr)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+
 	store, err := openStore(opts.dataDir, opts.siteID)
 	if err != nil {
 		return err
@@ -783,7 +809,7 @@ func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, s
 
 func printGlobalHelp() {
 	fmt.Println("Usage: seglake -mode <mode> [flags]")
-	fmt.Println("Global flags: -mode, -mode-help, -version, -v, -h, --help")
+	fmt.Println("Global flags: -mode, -mode-help, -yes, -version, -v, -h, --help")
 	fmt.Println("Modes:")
 	for _, mode := range []string{
 		"server",
