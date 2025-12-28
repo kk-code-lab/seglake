@@ -44,6 +44,38 @@ server {
 }
 ```
 
+Example (Caddy):
+```
+# Path-style (bucket in URL path)
+s3.example.com {
+  reverse_proxy 127.0.0.1:9000
+}
+
+# Virtual-hosted-style (bucket as subdomain). Requires wildcard DNS.
+# s3.example.com, *.s3.example.com {
+#   reverse_proxy 127.0.0.1:9000
+# }
+```
+
+Notes:
+- The repo ships a ready-to-edit `examples/Caddyfile`.
+- Uncomment the virtual-hosted block only if you have wildcard DNS configured.
+
+Example (Caddy, HTTPS redirect + request size limit):
+```
+http://s3.example.com {
+  redir https://s3.example.com{uri}
+}
+
+s3.example.com {
+  request_body {
+    # Adjust to your largest expected PUT size.
+    max_size 10GB
+  }
+  reverse_proxy 127.0.0.1:9000
+}
+```
+
 ## Native TLS (optional)
 
 Seglake can serve HTTPS directly:
