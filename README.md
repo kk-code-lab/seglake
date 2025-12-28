@@ -10,6 +10,7 @@ Implementation: append‑only segments + object manifests + metadata in SQLite (
 - S3 API: PUT/GET/HEAD, ListObjects V1/V2, ListBuckets, Range GET (single and multi‑range)
 - SigV4 + presigned URL (SigV2 not supported)
 - SigV4 streaming uploads (`Content-Encoding: aws-chunked`) with chunk/trailer validation
+- aws-chunked parser fuzz tests (SigV4 streaming)
 - Multipart upload (init/upload/list/complete/abort)
 - Durability contract: fsync segments + WAL commit before ACK
 - Append‑only segments, 4 MiB chunking, BLAKE3 per chunk
