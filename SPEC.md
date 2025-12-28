@@ -189,6 +189,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Requires `Content-Length` or `X-Amz-Decoded-Content-Length`.
 - Supports `Content-Encoding: aws-chunked` (AWS SigV4 streaming); chunk framing is stripped before validation/storage.
 - Streaming signatures are validated for signed modes; trailer checksums are validated when provided.
+- Fuzzed aws-chunked parser: `FuzzAWSChunkedReader` in `internal/s3/streaming_fuzz_test.go`.
 - Optional `Content-MD5` validation (when header present) → `BadDigest` on mismatch.
 - Multipart: `Content-Type` from `InitiateMultipartUpload` is preserved and used on `Complete`.
 - Enforce `Content-MD5` via `-require-content-md5`.
