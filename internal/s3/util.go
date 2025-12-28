@@ -59,6 +59,9 @@ func parsePayloadHash(header string) (string, bool, error) {
 	if header == "UNSIGNED-PAYLOAD" {
 		return header, false, nil
 	}
+	if header == "STREAMING-UNSIGNED-PAYLOAD" || header == "STREAMING-UNSIGNED-PAYLOAD-TRAILER" {
+		return "UNSIGNED-PAYLOAD", false, nil
+	}
 	if strings.HasPrefix(header, "STREAMING-") {
 		return "", false, errPayloadHashInvalid
 	}
