@@ -9,6 +9,7 @@ Implementation: append‑only segments + object manifests + metadata in SQLite (
 
 - S3 API: PUT/GET/HEAD, ListObjects V1/V2, ListBuckets, Range GET (single and multi‑range)
 - SigV4 + presigned URL (SigV2 not supported)
+- SigV4 streaming uploads (`Content-Encoding: aws-chunked`) with chunk/trailer validation
 - Multipart upload (init/upload/list/complete/abort)
 - Durability contract: fsync segments + WAL commit before ACK
 - Append‑only segments, 4 MiB chunking, BLAKE3 per chunk
@@ -78,6 +79,7 @@ More: `docs/ops.md`.
 | CopyObject | Yes | `x-amz-copy-source` |
 | Multipart upload | Yes | init/upload/list/complete/abort/list uploads |
 | SigV4 auth | Yes | Header + presigned |
+| SigV4 streaming | Yes | `aws-chunked` + trailer checksum validation |
 | SigV2 auth | No | Not supported |
 | Presigned URLs | Yes | TTL 1..7 days |
 | ETag behavior | Yes | Single = MD5, multipart = md5(part md5s) + "-N" |
