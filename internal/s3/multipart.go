@@ -108,8 +108,36 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	reader := io.Reader(r.Body)
-	if hasAWSChunkedEncoding(r.Header.Get("Content-Encoding")) {
-		reader = newAWSChunkedReader(reader)
+	streamingMode, err := parseStreamingMode(r.Header.Get("X-Amz-Content-Sha256"))
+	if err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
+		return
+	}
+	if streamingMode != streamingNone {
+		if !hasAWSChunkedEncoding(r.Header.Get("Content-Encoding")) {
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "missing aws-chunked encoding", requestID, r.URL.Path)
+			return
+		}
+		trailerKeys := parseTrailerNames(r.Header.Get("X-Amz-Trailer"))
+		if (streamingMode == streamingSignedTrailer || streamingMode == streamingUnsignedTrailer) && len(trailerKeys) == 0 {
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "missing trailer headers", requestID, r.URL.Path)
+			return
+		}
+		var sigCtx *sigv4Context
+		if streamingMode == streamingSigned || streamingMode == streamingSignedTrailer {
+			if ctx, ok := sigv4ContextFromRequest(r); ok {
+				sigCtx = ctx
+			} else {
+				writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
+				return
+			}
+		}
+		reader = newAWSChunkedReader(reader, awsChunkedConfig{
+			mode:        streamingMode,
+			sigv4:       sigCtx,
+			trailerKeys: trailerKeys,
+			expectedLen: contentLength,
+		})
 	}
 	if h.MaxObjectSize > 0 && !hasLength {
 		reader = newSizeLimitReader(reader, h.MaxObjectSize)
@@ -125,14 +153,16 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	}
 	payloadHash := ""
 	verifyPayload := false
-	if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
-		expected, verify, err := parsePayloadHash(hashHeader)
-		if err != nil {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
-			return
+	if streamingMode == streamingNone {
+		if hashHeader := r.Header.Get("X-Amz-Content-Sha256"); hashHeader != "" {
+			expected, verify, err := parsePayloadHash(hashHeader)
+			if err != nil {
+				writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
+				return
+			}
+			payloadHash = expected
+			verifyPayload = verify
 		}
-		payloadHash = expected
-		verifyPayload = verify
 	}
 	if verifyPayload || len(expectedMD5) > 0 {
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
@@ -148,8 +178,14 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		case errors.Is(err, errPayloadHashMismatch):
 			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
 			return
+		case errors.Is(err, errInvalidDigest):
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
+			return
 		case errors.Is(err, errBadDigest):
 			writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, r.URL.Path)
+			return
+		case errors.Is(err, errInvalidContentLength):
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, r.URL.Path)
 			return
 		case errors.Is(err, errEntityTooLarge):
 			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
