@@ -22,6 +22,7 @@ profile.cov
 *.pprof
 *.log
 .DS_Store
+**/testdata/fuzz/
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
