@@ -1,6 +1,10 @@
 package s3
 
-import "testing"
+import (
+	"io"
+	"strings"
+	"testing"
+)
 
 func TestParsePayloadHash(t *testing.T) {
 	t.Parallel()
@@ -81,5 +85,28 @@ func TestParsePayloadHash(t *testing.T) {
 				t.Fatalf("got hash=%q verify=%v, want hash=%q verify=%v", gotHash, gotVerify, tc.wantHash, tc.wantVerify)
 			}
 		})
+	}
+}
+
+func TestAWSChunkedReader(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"4;chunk-signature=deadbeef",
+		"Wiki",
+		"5;chunk-signature=deadbeef",
+		"pedia",
+		"0;chunk-signature=deadbeef",
+		"x-amz-checksum-crc64nvme: 0000",
+		"",
+	}, "\r\n")
+
+	r := newAWSChunkedReader(strings.NewReader(body))
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if string(got) != "Wikipedia" {
+		t.Fatalf("expected decoded payload, got %q", string(got))
 	}
 }

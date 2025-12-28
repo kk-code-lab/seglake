@@ -736,6 +736,9 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 	reader := io.Reader(r.Body)
+	if hasAWSChunkedEncoding(r.Header.Get("Content-Encoding")) {
+		reader = newAWSChunkedReader(reader)
+	}
 	if h.MaxObjectSize > 0 && !hasLength {
 		reader = newSizeLimitReader(reader, h.MaxObjectSize)
 	}
