@@ -231,7 +231,7 @@ Pull oplog + fetch missing data:
 ./build/seglake -mode repl-pull -repl-remote http://peer:9000
 ```
 
-Bootstrap nowego węzła (snapshot + oplog):
+Bootstrap a new node (snapshot + oplog):
 ```
 ./build/seglake -mode repl-bootstrap -repl-remote http://peer:9000 -repl-bootstrap-force
 ```
