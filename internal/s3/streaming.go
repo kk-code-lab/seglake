@@ -31,6 +31,8 @@ const (
 	streamingTrailerSig = "AWS4-HMAC-SHA256-TRAILER"
 )
 
+const maxChunkLineLen = 64 * 1024
+
 const emptySHA256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func parseStreamingMode(header string) (streamingMode, error) {
@@ -74,6 +76,20 @@ func parseTrailerNames(header string) []string {
 	return out
 }
 
+func validateTrailerKeys(trailerKeys []string) error {
+	checksumCount := 0
+	for _, t := range trailerKeys {
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "x-amz-checksum-crc32", "x-amz-checksum-crc32c", "x-amz-checksum-crc64nvme", "x-amz-checksum-sha1", "x-amz-checksum-sha256":
+			checksumCount++
+		}
+	}
+	if checksumCount > 1 {
+		return errInvalidDigest
+	}
+	return nil
+}
+
 func hasAWSChunkedEncoding(header string) bool {
 	for _, part := range strings.Split(header, ",") {
 		if strings.EqualFold(strings.TrimSpace(part), "aws-chunked") {
@@ -95,6 +111,19 @@ type sigv4Context struct {
 	scope         string
 }
 
+type requestError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e *requestError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.code + ": " + e.message
+}
+
 func sigv4ContextFromRequest(r *http.Request) (*sigv4Context, bool) {
 	if r == nil {
 		return nil, false
@@ -104,6 +133,73 @@ func sigv4ContextFromRequest(r *http.Request) (*sigv4Context, bool) {
 		return nil, false
 	}
 	return ctx, true
+}
+
+func setupStreamingReader(r *http.Request, reader io.Reader) (io.Reader, streamingMode, int64, bool, *requestError) {
+	streamingMode, err := parseStreamingMode(r.Header.Get("X-Amz-Content-Sha256"))
+	if err != nil {
+		return reader, streamingNone, 0, false, &requestError{
+			status:  http.StatusBadRequest,
+			code:    "InvalidDigest",
+			message: "invalid payload hash",
+		}
+	}
+	if streamingMode == streamingNone {
+		return reader, streamingMode, 0, false, nil
+	}
+	if !hasAWSChunkedEncoding(r.Header.Get("Content-Encoding")) {
+		return reader, streamingMode, 0, false, &requestError{
+			status:  http.StatusBadRequest,
+			code:    "InvalidArgument",
+			message: "missing aws-chunked encoding",
+		}
+	}
+	trailerKeys := parseTrailerNames(r.Header.Get("X-Amz-Trailer"))
+	if err := validateTrailerKeys(trailerKeys); err != nil {
+		return reader, streamingMode, 0, false, &requestError{
+			status:  http.StatusBadRequest,
+			code:    "InvalidDigest",
+			message: "invalid trailer headers",
+		}
+	}
+	if (streamingMode == streamingSignedTrailer || streamingMode == streamingUnsignedTrailer) && len(trailerKeys) == 0 {
+		return reader, streamingMode, 0, false, &requestError{
+			status:  http.StatusBadRequest,
+			code:    "InvalidDigest",
+			message: "missing trailer headers",
+		}
+	}
+	decodedLen, hasDecoded, err := decodedContentLength(r)
+	if err != nil {
+		return reader, streamingMode, 0, false, &requestError{
+			status:  http.StatusBadRequest,
+			code:    "InvalidArgument",
+			message: "invalid decoded content length",
+		}
+	}
+	var sigCtx *sigv4Context
+	if streamingMode == streamingSigned || streamingMode == streamingSignedTrailer {
+		if ctx, ok := sigv4ContextFromRequest(r); ok {
+			sigCtx = ctx
+		} else {
+			return reader, streamingMode, decodedLen, hasDecoded, &requestError{
+				status:  http.StatusForbidden,
+				code:    "SignatureDoesNotMatch",
+				message: "signature mismatch",
+			}
+		}
+	}
+	expectedLen := int64(0)
+	if hasDecoded {
+		expectedLen = decodedLen
+	}
+	reader = newAWSChunkedReader(reader, awsChunkedConfig{
+		mode:        streamingMode,
+		sigv4:       sigCtx,
+		trailerKeys: trailerKeys,
+		expectedLen: expectedLen,
+	})
+	return reader, streamingMode, decodedLen, hasDecoded, nil
 }
 
 type awsChunkedConfig struct {
@@ -131,7 +227,7 @@ type awsChunkedReader struct {
 
 func newAWSChunkedReader(reader io.Reader, cfg awsChunkedConfig) io.Reader {
 	r := &awsChunkedReader{
-		r:           bufio.NewReader(reader),
+		r:           bufio.NewReaderSize(reader, maxChunkLineLen+2),
 		mode:        cfg.mode,
 		sigv4:       cfg.sigv4,
 		expectedLen: cfg.expectedLen,
@@ -318,16 +414,22 @@ func (r *awsChunkedReader) verifyTrailers(trailers map[string]string) error {
 }
 
 func (r *awsChunkedReader) readLine() (string, error) {
-	line, err := r.r.ReadString('\n')
+	line, err := r.r.ReadSlice('\n')
 	if err != nil {
+		if err == bufio.ErrBufferFull {
+			return "", errInvalidDigest
+		}
 		return "", err
 	}
-	if !strings.HasSuffix(line, "\n") {
+	if len(line) == 0 || line[len(line)-1] != '\n' {
 		return "", io.ErrUnexpectedEOF
 	}
-	line = strings.TrimSuffix(line, "\n")
-	line = strings.TrimSuffix(line, "\r")
-	return line, nil
+	if len(line) > maxChunkLineLen+2 {
+		return "", errInvalidDigest
+	}
+	s := strings.TrimSuffix(string(line), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s, nil
 }
 
 func (r *awsChunkedReader) readCRLF() error {
