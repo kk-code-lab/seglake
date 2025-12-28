@@ -1,5 +1,7 @@
 # Ops / Deployment Notes
 
+Threat model: `docs/security/threat-model.md`.
+
 ## Production hardening checklist
 
 - Terminate TLS (proxy or native TLS), enforce HTTPS, and restrict trusted proxy IPs.
