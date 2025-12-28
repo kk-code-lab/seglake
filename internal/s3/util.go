@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bufio"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
@@ -72,6 +73,119 @@ func parsePayloadHash(header string) (string, bool, error) {
 		return "", false, errPayloadHashInvalid
 	}
 	return strings.ToLower(header), true, nil
+}
+
+func hasAWSChunkedEncoding(header string) bool {
+	for _, part := range strings.Split(header, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), "aws-chunked") {
+			return true
+		}
+	}
+	return false
+}
+
+type awsChunkedReader struct {
+	r         *bufio.Reader
+	remaining int64
+	done      bool
+}
+
+func newAWSChunkedReader(reader io.Reader) io.Reader {
+	return &awsChunkedReader{r: bufio.NewReader(reader)}
+}
+
+func (r *awsChunkedReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	if r.remaining == 0 {
+		size, err := r.readChunkHeader()
+		if err != nil {
+			return 0, err
+		}
+		if size == 0 {
+			if err := r.readTrailers(); err != nil {
+				return 0, err
+			}
+			r.done = true
+			return 0, io.EOF
+		}
+		r.remaining = size
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := io.ReadFull(r.r, p)
+	if err != nil {
+		return n, err
+	}
+	r.remaining -= int64(n)
+	if r.remaining == 0 {
+		if err := r.readCRLF(); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
+}
+
+func (r *awsChunkedReader) readChunkHeader() (int64, error) {
+	line, err := r.readLine()
+	if err != nil {
+		return 0, err
+	}
+	sizePart := line
+	if semi := strings.IndexByte(line, ';'); semi >= 0 {
+		sizePart = line[:semi]
+	}
+	sizePart = strings.TrimSpace(sizePart)
+	if sizePart == "" {
+		return 0, errInvalidDigest
+	}
+	size, err := strconv.ParseInt(sizePart, 16, 64)
+	if err != nil || size < 0 {
+		return 0, errInvalidDigest
+	}
+	return size, nil
+}
+
+func (r *awsChunkedReader) readTrailers() error {
+	for {
+		line, err := r.readLine()
+		if err != nil {
+			return err
+		}
+		if line == "" {
+			return nil
+		}
+	}
+}
+
+func (r *awsChunkedReader) readLine() (string, error) {
+	line, err := r.r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasSuffix(line, "\n") {
+		return "", io.ErrUnexpectedEOF
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	return line, nil
+}
+
+func (r *awsChunkedReader) readCRLF() error {
+	b1, err := r.r.ReadByte()
+	if err != nil {
+		return err
+	}
+	b2, err := r.r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if b1 != '\r' || b2 != '\n' {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 
 type validatingReader struct {
