@@ -2,8 +2,11 @@ package s3
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,5 +39,39 @@ func FuzzAWSChunkedReader(f *testing.F) {
 		}
 		r = newAWSChunkedReader(bytes.NewReader(data), cfg)
 		_, _ = io.ReadAll(r)
+
+		maybeSaveFuzzInput(data)
 	})
+}
+
+func maybeSaveFuzzInput(data []byte) {
+	if os.Getenv("SEGLAKE_FUZZ_SAVE") == "" {
+		return
+	}
+	if shouldSkipFuzzSave(data) {
+		return
+	}
+	sum := sha256.Sum256(data)
+	name := "seed-" + hex.EncodeToString(sum[:]) + ".bin"
+	dir := filepath.Join("internal", "s3", "testdata", "fuzz", "FuzzAWSChunkedReader")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, name)
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+func shouldSkipFuzzSave(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	dir := filepath.Join("internal", "s3", "testdata", "fuzz", "FuzzAWSChunkedReader")
+	entries, err := os.ReadDir(dir)
+	if err == nil && len(entries) >= 20 {
+		return true
+	}
+	return false
 }
