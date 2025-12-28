@@ -48,6 +48,10 @@ AWS_DEFAULT_REGION=us-east-1 \
 aws s3 ls --endpoint-url http://localhost:9000
 ```
 
+Flags note:
+- Bool flags must use `--flag=false` syntax (no space) when disabling.
+- In `systemd`, line continuation requires a trailing `\` on every continued line.
+
 ## Caddy
 - `Caddyfile` includes both path-style and virtual-hosted-style examples.
 - Uncomment the virtual-hosted block only if you have wildcard DNS.
