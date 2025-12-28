@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -223,4 +225,81 @@ func TestCRC64NVME(t *testing.T) {
 func sha256Hex(payload string) string {
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
+}
+
+func TestValidateTrailerKeys(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		keys    []string
+		wantErr bool
+	}{
+		{
+			name:    "none",
+			keys:    nil,
+			wantErr: false,
+		},
+		{
+			name:    "single checksum",
+			keys:    []string{"x-amz-checksum-sha256"},
+			wantErr: false,
+		},
+		{
+			name:    "mixed non-checksum",
+			keys:    []string{"x-amz-meta-foo", "x-amz-trailer-signature"},
+			wantErr: false,
+		},
+		{
+			name:    "multiple checksums",
+			keys:    []string{"x-amz-checksum-crc32", "x-amz-checksum-sha256"},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateTrailerKeys(tc.keys)
+			if tc.wantErr {
+				if !errors.Is(err, errInvalidDigest) {
+					t.Fatalf("expected errInvalidDigest, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestAWSChunkedReaderLineTooLong(t *testing.T) {
+	t.Parallel()
+
+	line := strings.Repeat("a", maxChunkLineLen+10)
+	body := line + "\r\n" + "0\r\n\r\n"
+	r := newAWSChunkedReader(strings.NewReader(body), awsChunkedConfig{
+		mode: streamingUnsigned,
+	})
+	_, err := io.ReadAll(r)
+	if !errors.Is(err, errInvalidDigest) {
+		t.Fatalf("expected errInvalidDigest, got %v", err)
+	}
+}
+
+func TestDecodedContentLength(t *testing.T) {
+	t.Parallel()
+
+	r, _ := http.NewRequest(http.MethodPut, "http://example.com", nil)
+	r.ContentLength = -1
+	r.Header.Set("X-Amz-Decoded-Content-Length", "123")
+	got, ok, err := decodedContentLength(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || got != 123 {
+		t.Fatalf("expected ok=true and length=123, got ok=%v len=%d", ok, got)
+	}
 }

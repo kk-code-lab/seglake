@@ -103,41 +103,21 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		}
 		return
 	}
-	if h.MaxObjectSize > 0 && hasLength && contentLength > h.MaxObjectSize {
-		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
-		return
-	}
 	reader := io.Reader(r.Body)
-	streamingMode, err := parseStreamingMode(r.Header.Get("X-Amz-Content-Sha256"))
-	if err != nil {
-		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
+	reader, streamingMode, decodedLen, hasDecoded, reqErr := setupStreamingReader(r, reader)
+	if reqErr != nil {
+		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
 	}
-	if streamingMode != streamingNone {
-		if !hasAWSChunkedEncoding(r.Header.Get("Content-Encoding")) {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "missing aws-chunked encoding", requestID, r.URL.Path)
+	if h.MaxObjectSize > 0 {
+		switch {
+		case streamingMode != streamingNone && hasDecoded && decodedLen > h.MaxObjectSize:
+			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+			return
+		case hasLength && contentLength > h.MaxObjectSize:
+			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
 			return
 		}
-		trailerKeys := parseTrailerNames(r.Header.Get("X-Amz-Trailer"))
-		if (streamingMode == streamingSignedTrailer || streamingMode == streamingUnsignedTrailer) && len(trailerKeys) == 0 {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "missing trailer headers", requestID, r.URL.Path)
-			return
-		}
-		var sigCtx *sigv4Context
-		if streamingMode == streamingSigned || streamingMode == streamingSignedTrailer {
-			if ctx, ok := sigv4ContextFromRequest(r); ok {
-				sigCtx = ctx
-			} else {
-				writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
-				return
-			}
-		}
-		reader = newAWSChunkedReader(reader, awsChunkedConfig{
-			mode:        streamingMode,
-			sigv4:       sigCtx,
-			trailerKeys: trailerKeys,
-			expectedLen: contentLength,
-		})
 	}
 	if h.MaxObjectSize > 0 && !hasLength {
 		reader = newSizeLimitReader(reader, h.MaxObjectSize)

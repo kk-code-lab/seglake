@@ -196,6 +196,21 @@ func contentLengthFromRequest(r *http.Request) (int64, bool, error) {
 	return v, true, nil
 }
 
+func decodedContentLength(r *http.Request) (int64, bool, error) {
+	if r == nil {
+		return 0, false, errMissingContentLength
+	}
+	decoded := strings.TrimSpace(r.Header.Get("X-Amz-Decoded-Content-Length"))
+	if decoded == "" {
+		return 0, false, nil
+	}
+	v, err := parseInt(decoded)
+	if err != nil {
+		return 0, false, errInvalidContentLength
+	}
+	return v, true, nil
+}
+
 func hmacEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
