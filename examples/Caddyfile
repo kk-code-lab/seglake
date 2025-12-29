@@ -1,3 +1,7 @@
+{
+  email admin@example.com
+}
+
 # Path-style (bucket in URL path)
 s3.example.com {
   reverse_proxy 127.0.0.1:9000
