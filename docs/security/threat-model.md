@@ -25,16 +25,16 @@ Update assumptions and add mitigations/tests as the system evolves.
 
 ## Threats and Mitigations
 
-| Asset | Entry point | Threat | Example attack | Mitigation (current/planned) | Test/Verify |
-| --- | --- | --- | --- | --- | --- |
-| Object data | S3 API (PUT/GET) | Tampering/Info disclosure | Read/write without auth | SigV4; public buckets require explicit allow + policy | `internal/s3/e2e_test.go`, `internal/s3/policy_integration_test.go`, `internal/s3/authz_test.go` |
-| Metadata | On-disk formats | Tampering/DoS | Corrupt manifest/segment -> crash | Checksums, decoder validation | `internal/storage/manifest/codec_fuzz_test.go`, `internal/storage/segment/format_fuzz_test.go`, `internal/storage/segment/index_fuzz_test.go`, `internal/ops/crash_harness_test.go` |
-| Credentials | Config/env/API keys | Spoofing/Disclosure | Key leak -> full access | Least privilege; operational rotation and secret handling | Ops runbook (`docs/ops.md`) + periodic secrets review |
-| Auth (SigV4) | Headers/query | Spoofing/Replay | Bad canonicalization | Strict canonicalization; optional replay cache for presigned requests (opt-in) | `internal/s3/auth_test.go`, `internal/s3/sigv4_test.go`, `internal/s3/handler_replay_test.go`, `internal/s3/replay_test.go`, `internal/s3/auth_fuzz_test.go` |
-| Policies | Policy JSON | Elevation | Policy parse bug bypass | Validate inputs, deny-by-default | `internal/s3/policy_test.go`, `internal/s3/policy_integration_test.go` |
-| Availability | All inputs | DoS | Large bodies, range explosion | Size/time limits; global RPS limit at proxy/WAF (see recommended limits above) | `internal/s3/put_validation_test.go`, `internal/s3/ratelimit_test.go` |
-| Replication | Replication API | Spoofing/Tampering | Fake peer or public exposure of replication endpoints | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | `internal/s3/replication_test.go`, `cmd/seglake/replication_test.go` |
-| Ops endpoints | /v1/meta/*, ops | Elevation/DoS | Unauth access to ops | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | `internal/s3/policy_integration_test.go`, `scripts/curl_security_smoke.sh` |
+| Asset | Entry point | Threat | Example attack | Mitigation | Enforcement | Default | Notes/Config | Test/Verify |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Object data | S3 API (PUT/GET) | Tampering/Info disclosure | Read/write without auth | SigV4; public buckets require explicit allow + policy | code | auth enabled only when keys exist; public buckets off | `-access-key/-secret-key` or stored API keys; `-public-buckets` (default empty) | `internal/s3/e2e_test.go`, `internal/s3/policy_integration_test.go`, `internal/s3/authz_test.go` |
+| Metadata | On-disk formats | Tampering/DoS | Corrupt manifest/segment -> crash | Checksums, decoder validation | code | on | N/A | `internal/storage/manifest/codec_fuzz_test.go`, `internal/storage/segment/format_fuzz_test.go`, `internal/storage/segment/index_fuzz_test.go`, `internal/ops/crash_harness_test.go` |
+| Credentials | Config/env/API keys | Spoofing/Disclosure | Key leak -> full access | Least privilege; operational rotation and secret handling | code + ops | least privilege on; rotation ops-only | Ops practices in `docs/ops.md` | Ops runbook (`docs/ops.md`) + periodic secrets review |
+| Auth (SigV4) | Headers/query | Spoofing/Replay | Bad canonicalization | Strict canonicalization; optional replay cache for presigned requests (opt-in) | code | canonicalization on; replay off | Replay defaults: `-replay-ttl=0`, `-replay-block=false` | `internal/s3/auth_test.go`, `internal/s3/sigv4_test.go`, `internal/s3/handler_replay_test.go`, `internal/s3/replay_test.go`, `internal/s3/auth_fuzz_test.go` |
+| Policies | Policy JSON | Elevation | Policy parse bug bypass | Validate inputs, deny-by-default | code | on | N/A | `internal/s3/policy_test.go`, `internal/s3/policy_integration_test.go` |
+| Availability | All inputs | DoS | Large bodies, range explosion | Size/time limits; global RPS limit at proxy/WAF (see recommended limits above) | code + deploy | size limits on; global RPS at proxy | Defaults: `-max-object-size=5GiB`, `-max-url-length=32KiB`, `-max-header-bytes=32KiB`, `-read-timeout=30s`, `-write-timeout=30s`, `-idle-timeout=2m`; Auth limiter 5 req/s burst 5 per IP/key; inflight per-key 32; MPU complete 4. Proxy/WAF RPS/timeout limits per deploy. | `internal/s3/put_validation_test.go`, `internal/s3/ratelimit_test.go` |
+| Replication | Replication API | Spoofing/Tampering | Fake peer or public exposure of replication endpoints | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | code + deploy | auth depends on keys; allowlist/mTLS off | Proxy/WAF allowlist/mTLS; SigV4 only when keys exist | `internal/s3/replication_test.go`, `cmd/seglake/replication_test.go` |
+| Ops endpoints | /v1/meta/*, ops | Elevation/DoS | Unauth access to ops | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | code + deploy | auth depends on keys; allowlist/mTLS off | Proxy/WAF allowlist/mTLS; SigV4 only when keys exist | `internal/s3/policy_integration_test.go`, `scripts/curl_security_smoke.sh` |
 
 ## Decisions
 - Public exposure is limited to S3 API; /v1/meta/* and /v1/replication/* are internal-only via proxy allowlist/mTLS.
