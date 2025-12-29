@@ -55,6 +55,25 @@ func bucketSet(names []string) map[string]struct{} {
 	return out
 }
 
+func envOrDefault(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
 type globalArgs struct {
 	mode        string
 	modeHelp    bool
@@ -520,18 +539,18 @@ func exitError(context string, err error) {
 func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	opts := &serverOptions{}
-	fs.StringVar(&opts.addr, "addr", ":9000", "HTTP listen address")
-	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
-	fs.StringVar(&opts.accessKey, "access-key", "", "S3 access key (enables SigV4)")
-	fs.StringVar(&opts.secretKey, "secret-key", "", "S3 secret key (enables SigV4)")
-	fs.StringVar(&opts.region, "region", "us-east-1", "S3 region")
+	fs.StringVar(&opts.addr, "addr", envOrDefault("SEGLAKE_ADDR", ":9000"), "HTTP listen address (env SEGLAKE_ADDR)")
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
+	fs.StringVar(&opts.accessKey, "access-key", envOrDefault("SEGLAKE_ACCESS_KEY", ""), "S3 access key (enables SigV4, env SEGLAKE_ACCESS_KEY)")
+	fs.StringVar(&opts.secretKey, "secret-key", envOrDefault("SEGLAKE_SECRET_KEY", ""), "S3 secret key (enables SigV4, env SEGLAKE_SECRET_KEY)")
+	fs.StringVar(&opts.region, "region", envOrDefault("SEGLAKE_REGION", "us-east-1"), "S3 region (env SEGLAKE_REGION)")
 	fs.StringVar(&opts.publicBuckets, "public-buckets", "", "Comma-separated bucket names allowing unsigned requests (requires bucket policy)")
 	fs.BoolVar(&opts.virtualHosted, "virtual-hosted", true, "Enable virtual-hosted-style bucket routing")
 	fs.BoolVar(&opts.logRequests, "log-requests", true, "Log HTTP requests")
 	fs.BoolVar(&opts.allowUnsigned, "allow-unsigned-payload", true, "Allow SigV4 UNSIGNED-PAYLOAD")
-	fs.BoolVar(&opts.tlsEnable, "tls", false, "Enable HTTPS listener with TLS")
-	fs.StringVar(&opts.tlsCert, "tls-cert", "", "TLS certificate path (PEM)")
-	fs.StringVar(&opts.tlsKey, "tls-key", "", "TLS private key path (PEM)")
+	fs.BoolVar(&opts.tlsEnable, "tls", envBoolOrDefault("SEGLAKE_TLS", false), "Enable HTTPS listener with TLS (env SEGLAKE_TLS)")
+	fs.StringVar(&opts.tlsCert, "tls-cert", envOrDefault("SEGLAKE_TLS_CERT", ""), "TLS certificate path (PEM, env SEGLAKE_TLS_CERT)")
+	fs.StringVar(&opts.tlsKey, "tls-key", envOrDefault("SEGLAKE_TLS_KEY", ""), "TLS private key path (PEM, env SEGLAKE_TLS_KEY)")
 	fs.StringVar(&opts.trustedProxies, "trusted-proxies", "", "Comma-separated CIDR ranges trusted for X-Forwarded-For")
 	fs.StringVar(&opts.siteID, "site-id", "local", "Site identifier for replication (HLC/oplog)")
 	fs.DurationVar(&opts.syncInterval, "sync-interval", 100*time.Millisecond, "Write barrier interval")
@@ -560,7 +579,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs := flag.NewFlagSet("ops", flag.ContinueOnError)
 	opts := &opsOptions{}
-	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.snapshotDir, "snapshot-dir", "", "Snapshot output directory")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db for rebuild-index")
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
@@ -588,7 +607,7 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 func newKeysFlagSet() (*flag.FlagSet, *keysOptions) {
 	fs := flag.NewFlagSet("keys", flag.ContinueOnError)
 	opts := &keysOptions{}
-	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
 	fs.StringVar(&opts.action, "keys-action", "list", "Keys action: list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy")
 	fs.StringVar(&opts.accessKey, "key-access", "", "API access key for keys-action")
@@ -604,7 +623,7 @@ func newKeysFlagSet() (*flag.FlagSet, *keysOptions) {
 func newBucketPolicyFlagSet() (*flag.FlagSet, *bucketPolicyOptions) {
 	fs := flag.NewFlagSet("bucket-policy", flag.ContinueOnError)
 	opts := &bucketPolicyOptions{}
-	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
 	fs.StringVar(&opts.action, "bucket-policy-action", "get", "Bucket policy action: get|set|delete")
 	fs.StringVar(&opts.bucket, "bucket-policy-bucket", "", "Bucket name for bucket-policy action")
@@ -617,7 +636,7 @@ func newBucketPolicyFlagSet() (*flag.FlagSet, *bucketPolicyOptions) {
 func newBucketsFlagSet() (*flag.FlagSet, *bucketsOptions) {
 	fs := flag.NewFlagSet("buckets", flag.ContinueOnError)
 	opts := &bucketsOptions{}
-	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
 	fs.StringVar(&opts.action, "bucket-action", "list", "Bucket action: list|create|delete|exists")
 	fs.StringVar(&opts.bucket, "bucket", "", "Bucket name for bucket-action")
