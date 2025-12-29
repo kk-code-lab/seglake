@@ -160,6 +160,8 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
 	case "bucket-policy":
 		fmt.Println("Mode bucket-policy: manage bucket policies.")
+	case "buckets":
+		fmt.Println("Mode buckets: manage bucket entries (admin).")
 	case "repl-pull":
 		fmt.Println("Mode repl-pull: pull oplog from remote and apply locally.")
 	case "repl-push":

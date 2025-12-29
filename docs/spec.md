@@ -226,6 +226,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `rebuild-index` — rebuild meta from manifests.
 - `snapshot` — copy meta.db(+wal/shm) + report.
 - `support-bundle` — snapshot + fsck + scrub.
+- `buckets` — manage bucket entries (admin; bypasses S3 API).
 - `repl-validate` — compare manifests and versions (live + all versions) between two data dirs.
 - `gc-plan`/`gc-run` — removes segments that are 100% dead (gc-run requires `-gc-force`).
 - `gc-rewrite` — rewrite partially-dead segments (throttle + pause file, requires `-gc-force`).

@@ -234,7 +234,7 @@ Safe (no prompt):
 
 | Mode | Note |
 | --- | --- |
-| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `repl-validate` | Read-only or metadata changes only. |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `repl-validate` | Read-only or metadata changes only. |
 
 Unsafe (prompt required):
 
@@ -290,6 +290,16 @@ Notes:
 - Replication endpoints are protected by policies (`ReplicationRead` / `ReplicationWrite`).
 - `/v1/meta/stats` includes a `replication` section (lag and backlog).
 - `/v1/meta/stats` also reports `replay_detected` (count of detected replays).
+
+## Buckets (admin)
+
+Manage bucket entries with `-mode buckets` (metadata only, bypasses S3 API):
+```
+./build/seglake -mode buckets -bucket-action list
+./build/seglake -mode buckets -bucket-action create -bucket demo
+./build/seglake -mode buckets -bucket-action exists -bucket demo
+./build/seglake -mode buckets -bucket-action delete -bucket demo
+```
 
 ## API keys / policies
 
