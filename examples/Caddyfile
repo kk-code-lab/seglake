@@ -3,6 +3,38 @@ s3.example.com {
   reverse_proxy 127.0.0.1:9000
 }
 
+# Hardening template (commented). Adjust domains and CIDRs before enabling.
+# http://s3.example.com {
+#   redir https://s3.example.com{uri}
+# }
+#
+# s3.example.com {
+#   tls {
+#     ca https://ca.example.com/acme/acme/directory
+#   }
+#
+#   # Restrict /v1/meta/* and /v1/replication/* to internal networks.
+#   @internalPaths {
+#     path /v1/meta/* /v1/replication/*
+#   }
+#   @internalAllowlist {
+#     remote_ip 10.0.0.0/8 192.168.0.0/16 127.0.0.1/32 ::1/128
+#   }
+#   handle @internalPaths {
+#     handle @internalAllowlist {
+#       reverse_proxy 127.0.0.1:9000
+#     }
+#     respond 403
+#   }
+#
+#   # Request body limit (align with max object size + overhead).
+#   request_body {
+#     max_size 5.1GiB
+#   }
+#
+#   reverse_proxy 127.0.0.1:9000
+# }
+
 # Virtual-hosted-style (bucket as subdomain). Requires wildcard DNS.
 # s3.example.com, *.s3.example.com {
 #   reverse_proxy 127.0.0.1:9000
