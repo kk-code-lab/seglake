@@ -77,6 +77,7 @@ Notes:
 - The repo ships a ready-to-edit `examples/Caddyfile`.
 - Uncomment the virtual-hosted block only if you have wildcard DNS configured.
 - The hardening block in `examples/Caddyfile` must be enabled and configured (CIDR allowlist/TLS) to meet the threat model.
+- The optional rate-limit example in `examples/Caddyfile` requires a Caddy plugin (e.g., `caddy-ratelimit`).
 
 Example (Caddy, HTTPS redirect + request size limit):
 ```
