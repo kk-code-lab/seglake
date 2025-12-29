@@ -91,6 +91,8 @@ type serverOptions struct {
 	requireIfMatch    string
 	requireMD5        bool
 	mpuCompleteLimit  int
+	maxHeaderBytes    int
+	maxURLLength      int
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
@@ -192,6 +194,8 @@ const (
 	defaultReadTimeout       = 30 * time.Second
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 2 * time.Minute
+	defaultMaxHeaderBytes    = 32 << 10
+	defaultMaxURLLength      = 32 << 10
 )
 
 func main() {
@@ -492,6 +496,8 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.requireIfMatch, "require-if-match-buckets", "", "Comma-separated buckets requiring If-Match on overwrite (* for all)")
 	fs.BoolVar(&opts.requireMD5, "require-content-md5", false, "Require Content-MD5 on PUT/UploadPart")
 	fs.IntVar(&opts.mpuCompleteLimit, "mpu-complete-limit", 4, "Max concurrent CompleteMultipartUpload operations (0 disables)")
+	fs.IntVar(&opts.maxHeaderBytes, "max-header-bytes", defaultMaxHeaderBytes, "Max request header bytes (0 = Go default)")
+	fs.IntVar(&opts.maxURLLength, "max-url-length", defaultMaxURLLength, "Max request URI length in bytes (0 disables)")
 	fs.DurationVar(&opts.readHeaderTimeout, "read-header-timeout", defaultReadHeaderTimeout, "HTTP read header timeout")
 	fs.DurationVar(&opts.readTimeout, "read-timeout", defaultReadTimeout, "HTTP read timeout")
 	fs.DurationVar(&opts.writeTimeout, "write-timeout", defaultWriteTimeout, "HTTP write timeout")
@@ -678,6 +684,7 @@ func runServer(opts *serverOptions) error {
 		ReplayCacheMaxEntries: opts.replayMaxEntries,
 		RequireIfMatchBuckets: bucketSet(splitComma(opts.requireIfMatch)),
 		RequireContentMD5:     opts.requireMD5,
+		MaxURLLength:          opts.maxURLLength,
 	}
 	if opts.trustedProxies != "" {
 		handler.(*s3.Handler).TrustedProxies = splitComma(opts.trustedProxies)
@@ -753,7 +760,7 @@ func newHTTPServer(opts *serverOptions, handler http.Handler) *http.Server {
 			idleTimeout = opts.idleTimeout
 		}
 	}
-	return &http.Server{
+	server := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -761,6 +768,10 @@ func newHTTPServer(opts *serverOptions, handler http.Handler) *http.Server {
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
+	if opts != nil && opts.maxHeaderBytes > 0 {
+		server.MaxHeaderBytes = opts.maxHeaderBytes
+	}
+	return server
 }
 
 func runReplPullMode(opts *replPullOptions) error {
