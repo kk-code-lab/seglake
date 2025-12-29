@@ -31,4 +31,5 @@
 ## Documentation & Scripts
 
 - Docs map: `docs/spec.md` (API/behavior), `docs/ops.md` (ops/runbook), `docs/optimization.md` (perf), `docs/roadmap.md`, `docs/security/threat-model.md`.
+- If changes affect security/ops surface or controls, update `docs/security/threat-model.md`. If unsure, consult it.
 - Scripts: `scripts/` (smoke, security checks).
