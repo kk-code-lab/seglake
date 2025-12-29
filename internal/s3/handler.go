@@ -1214,6 +1214,10 @@ func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
 		return
 	}
+	if err := ValidateBucketName(bucket); err != nil {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidBucketName", "invalid bucket name", requestID, resource)
+		return
+	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
 			return errors.New("meta store not configured")

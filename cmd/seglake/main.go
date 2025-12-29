@@ -148,6 +148,14 @@ type bucketPolicyOptions struct {
 	jsonOut     bool
 }
 
+type bucketsOptions struct {
+	dataDir     string
+	rebuildMeta string
+	action      string
+	bucket      string
+	jsonOut     bool
+}
+
 type replPullOptions struct {
 	dataDir      string
 	siteID       string
@@ -331,6 +339,27 @@ func main() {
 		if err := runBucketPolicy(opts.action, metaPath, opts.bucket, opts.policy, opts.policyFile, opts.jsonOut); err != nil {
 			exitError("bucket policy", err)
 		}
+	case global.mode == "buckets":
+		fs, opts := newBucketsFlagSet()
+		if global.modeHelp {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if help, err := parseModeFlags(fs, remaining); err != nil {
+			exitParseError(err)
+		} else if help {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if opts.rebuildMeta == "" {
+			if err := requireDataDir(opts.dataDir); err != nil {
+				exitError("data dir", err)
+			}
+		}
+		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
+		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.jsonOut); err != nil {
+			exitError("buckets", err)
+		}
 	case isOpsMode(global.mode):
 		fs, opts := newOpsFlagSet()
 		if global.modeHelp {
@@ -472,6 +501,18 @@ func exitParseError(err error) {
 }
 
 func exitError(context string, err error) {
+	if err == nil {
+		return
+	}
+	if coded, ok := err.(interface{ ExitCode() int }); ok {
+		if quiet, ok := err.(interface{ Quiet() bool }); ok && quiet.Quiet() {
+			os.Exit(coded.ExitCode())
+		}
+		if err.Error() != "" {
+			fmt.Fprintf(os.Stderr, "seglake: %s: %v\n", context, err)
+		}
+		os.Exit(coded.ExitCode())
+	}
 	fmt.Fprintf(os.Stderr, "seglake: %s: %v\n", context, err)
 	os.Exit(1)
 }
@@ -569,6 +610,17 @@ func newBucketPolicyFlagSet() (*flag.FlagSet, *bucketPolicyOptions) {
 	fs.StringVar(&opts.bucket, "bucket-policy-bucket", "", "Bucket name for bucket-policy action")
 	fs.StringVar(&opts.policy, "bucket-policy", "", "Bucket policy JSON")
 	fs.StringVar(&opts.policyFile, "bucket-policy-file", "", "Bucket policy JSON file path")
+	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
+	return fs, opts
+}
+
+func newBucketsFlagSet() (*flag.FlagSet, *bucketsOptions) {
+	fs := flag.NewFlagSet("buckets", flag.ContinueOnError)
+	opts := &bucketsOptions{}
+	fs.StringVar(&opts.dataDir, "data-dir", "./data", "Data directory")
+	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
+	fs.StringVar(&opts.action, "bucket-action", "list", "Bucket action: list|create|delete|exists")
+	fs.StringVar(&opts.bucket, "bucket", "", "Bucket name for bucket-action")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
 	return fs, opts
 }
@@ -866,6 +918,7 @@ func printGlobalHelp() {
 		"support-bundle",
 		"keys",
 		"bucket-policy",
+		"buckets",
 		"repl-pull",
 		"repl-push",
 		"repl-validate",

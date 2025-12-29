@@ -105,7 +105,7 @@ Full details: `docs/spec.md`.
 ## Operations and maintenance
 
 Available modes: `status`, `fsck`, `scrub`, `rebuild-index`, `snapshot`, `support-bundle`,
-`gc-plan`/`gc-run`, `gc-rewrite`, `mpu-gc-plan`/`mpu-gc-run`, `repl-validate`.
+`gc-plan`/`gc-run`, `gc-rewrite`, `mpu-gc-plan`/`mpu-gc-run`, `repl-validate`, `buckets`.
 
 Checklists and examples: `docs/ops.md`
 Smoke scripts: `scripts/`
