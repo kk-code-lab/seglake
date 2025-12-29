@@ -13,6 +13,29 @@ s3.example.com {
 #     ca https://ca.example.com/acme/acme/directory
 #   }
 #
+#   # Optional: global rate limits (requires a Caddy rate-limit plugin).
+#   # Example using caddy-rate-limit (https://github.com/mholt/caddy-ratelimit).
+#   # rate_limit {
+#   #   zone per_ip {
+#   #     key {remote_host}
+#   #     events 200
+#   #     window 1s
+#   #     burst 400
+#   #   }
+#   #   zone per_key {
+#   #     key {header.Authorization}
+#   #     events 500
+#   #     window 1s
+#   #     burst 1000
+#   #   }
+#   #   zone global {
+#   #     key global
+#   #     events 2000
+#   #     window 1s
+#   #     burst 4000
+#   #   }
+#   # }
+#
 #   # Restrict /v1/meta/* and /v1/replication/* to internal networks.
 #   @internalPaths {
 #     path /v1/meta/* /v1/replication/*
