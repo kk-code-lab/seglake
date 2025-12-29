@@ -168,6 +168,10 @@ S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_s3_smoke
 S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 ./scripts/curl_security_smoke.sh
 ```
 
+Note:
+`-mode server` (and `-mode repl-bootstrap`) will create `--data-dir` if it doesn't exist.
+Other modes expect the directory to already exist and will return an error if it doesn't.
+
 ## Test strategy (matrix)
 
 Below is a compact test map that helps catch regressions without deep knowledge of internals.
