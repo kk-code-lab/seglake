@@ -76,6 +76,7 @@ s3.example.com {
 Notes:
 - The repo ships a ready-to-edit `examples/Caddyfile`.
 - Uncomment the virtual-hosted block only if you have wildcard DNS configured.
+- The hardening block in `examples/Caddyfile` must be enabled and configured (CIDR allowlist/TLS) to meet the threat model.
 
 Example (Caddy, HTTPS redirect + request size limit):
 ```
