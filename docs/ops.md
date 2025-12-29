@@ -14,6 +14,19 @@ Threat model: `docs/security/threat-model.md`.
 - Keep a GC/MPU GC schedule and review reclaim reports before delete modes.
 - Validate replication health (repl-validate) and plan for conflict review workflows.
 
+Recommended limits (baseline):
+- Max object size (app): 5 GiB via `-max-object-size`.
+- Proxy request body limit: 5.1 GiB (slightly above max object size).
+- Proxy header size: 16–32 KB.
+- Proxy URL/query length: 8–16 KB (presigned URLs can be long).
+- Proxy timeouts: header ~10s; body based on max object size and expected throughput.
+- Proxy/WAF rate limits (baseline): per-IP 200 RPS (burst 400), per-key 500 RPS (burst 1000), global 2000 RPS (burst 4000).
+
+Secrets handling (ops runbook expectations):
+- Store API keys and secrets in a dedicated secret manager (or encrypted env file on disk).
+- Rotate secrets on a fixed schedule (e.g., every 90 days) and on incident.
+- Audit access to secrets and remove unused keys.
+
 ## TLS reverse proxy checklist
 
 1) Terminate TLS in a reverse proxy (nginx, Caddy, Envoy).
