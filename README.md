@@ -153,7 +153,7 @@ make check
 - `docs/spec.md` — spec/behavior and API scope
 - `docs/ops.md` — deployment, TLS, policies, GC, repl
 - `docs/optimization.md` — performance notes
-- `docs/todo.md` — technical backlog
+- `docs/roadmap.md` — roadmap / planned work
 - `examples/` — systemd, Caddy, public bucket policy
 
 ---
