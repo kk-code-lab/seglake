@@ -109,6 +109,7 @@ Available modes: `status`, `fsck`, `scrub`, `rebuild-index`, `snapshot`, `suppor
 
 Checklists and examples: `docs/ops.md`
 Smoke scripts: `scripts/`
+Helper CLI: `scripts/segctl` (admin wrappers for keys, buckets, bucket policies; uses `SEGLAKE_DATA_DIR`)
 
 ---
 
