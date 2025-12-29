@@ -118,6 +118,23 @@ Hardening knobs (opt-in, may break some clients):
 - Require Content-MD5 (`-require-content-md5=true`).
 - Disallow unsigned payloads (`-allow-unsigned-payload=false`).
 
+## Environment variables (12-factor)
+
+CLI flags override env vars; env vars override defaults.
+
+Server flags:
+- `SEGLAKE_DATA_DIR` → `-data-dir`
+- `SEGLAKE_ADDR` → `-addr`
+- `SEGLAKE_ACCESS_KEY` → `-access-key`
+- `SEGLAKE_SECRET_KEY` → `-secret-key`
+- `SEGLAKE_REGION` → `-region`
+- `SEGLAKE_TLS` → `-tls` (true/false)
+- `SEGLAKE_TLS_CERT` → `-tls-cert`
+- `SEGLAKE_TLS_KEY` → `-tls-key`
+
+Ops/maintenance flags:
+- `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`)
+
 ## awscli examples (SigV4)
 
 List buckets:
