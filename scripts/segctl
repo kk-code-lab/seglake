@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import secrets
+import subprocess
+import sys
+from dataclasses import dataclass
+
+
+@dataclass
+class Config:
+    data_dir: str
+    seglake_bin: str
+    json_out: bool
+
+
+def die(message: str, code: int = 1) -> None:
+    print(f"segctl: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def resolve_bin(custom_bin: str | None) -> str:
+    if custom_bin:
+        if not os.path.isfile(custom_bin) or not os.access(custom_bin, os.X_OK):
+            die(f"SEGLAKE_BIN is not executable: {custom_bin}")
+        return custom_bin
+    local_bin = os.path.join(".", "build", "seglake")
+    if os.path.isfile(local_bin) and os.access(local_bin, os.X_OK):
+        return local_bin
+    path_bin = shutil_which("seglake")
+    if path_bin:
+        return path_bin
+    die("seglake binary not found; run 'make build' or set SEGLAKE_BIN")
+    return ""
+
+
+def require_data_dir(data_dir: str) -> None:
+    if not data_dir:
+        die("data dir required")
+    if not os.path.isdir(data_dir):
+        die(f"data dir not found: {data_dir}")
+
+
+def run(cmd: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            cmd,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr, end="")
+        raise
+
+
+def gen_secret() -> str:
+    return secrets.token_hex(32)
+
+
+def keys_list_text(cfg: Config) -> str:
+    result = run(
+        [cfg.seglake_bin, "-mode", "keys", "-data-dir", cfg.data_dir, "-keys-action", "list"],
+        capture=True,
+    )
+    out = result.stdout or ""
+    if not out.strip():
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        die("empty response from seglake keys list")
+    return out
+
+
+def parse_key_line(line: str) -> dict[str, str]:
+    parts = line.strip().split()
+    out: dict[str, str] = {}
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        out[key] = value
+    return out
+
+
+def find_key_meta(lines: str, access: str) -> tuple[str, str, str]:
+    for line in lines.splitlines():
+        if "access_key=" not in line:
+            continue
+        kv = parse_key_line(line)
+        if kv.get("access_key") == access:
+            policy = kv.get("policy") or "rw"
+            state = kv.get("state", "enabled")
+            enabled = "true" if state == "enabled" else "false"
+            inflight = kv.get("inflight", "0")
+            return policy, enabled, inflight
+    die(f"access key not found: {access}", 2)
+    return "", "", ""
+
+
+def supports_inflight(cfg: Config) -> bool:
+    try:
+        result = run([cfg.seglake_bin, "-mode", "keys", "--help"], capture=True)
+        out = (result.stdout or "") + (result.stderr or "")
+    except subprocess.CalledProcessError:
+        return False
+    return "-key-inflight" in out
+
+
+def bucket_list(cfg: Config) -> None:
+    cmd = [cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "list"]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def bucket_create(cfg: Config, name: str) -> None:
+    run([cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "create", "-bucket", name])
+
+
+def bucket_delete(cfg: Config, name: str) -> None:
+    run([cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "delete", "-bucket", name])
+
+def bucket_exists(cfg: Config, name: str) -> None:
+    cmd = [cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "exists", "-bucket", name]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def key_list(cfg: Config) -> None:
+    cmd = [cfg.seglake_bin, "-mode", "keys", "-data-dir", cfg.data_dir, "-keys-action", "list"]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def key_create(cfg: Config, access: str, secret: str, policy: str, enabled: bool, inflight: int) -> None:
+    if not secret:
+        secret = gen_secret()
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "keys",
+        "-data-dir",
+        cfg.data_dir,
+        "-keys-action",
+        "create",
+        "-key-access",
+        access,
+        "-key-secret",
+        secret,
+        "-key-policy",
+        policy,
+        f"-key-enabled={'true' if enabled else 'false'}",
+    ]
+    if supports_inflight(cfg):
+        cmd += ["-key-inflight", str(inflight)]
+    run(cmd)
+    print(f"access_key={access}")
+    print(f"secret_key={secret}")
+
+
+def key_delete(cfg: Config, access: str) -> None:
+    run(
+        [
+            cfg.seglake_bin,
+            "-mode",
+            "keys",
+            "-data-dir",
+            cfg.data_dir,
+            "-keys-action",
+            "delete",
+            "-key-access",
+            access,
+        ]
+    )
+
+def key_enable(cfg: Config, access: str, enabled: bool) -> None:
+    action = "enable" if enabled else "disable"
+    run(
+        [
+            cfg.seglake_bin,
+            "-mode",
+            "keys",
+            "-data-dir",
+            cfg.data_dir,
+            "-keys-action",
+            action,
+            "-key-access",
+            access,
+        ]
+    )
+
+
+def key_set_policy(cfg: Config, access: str, policy: str) -> None:
+    run(
+        [
+            cfg.seglake_bin,
+            "-mode",
+            "keys",
+            "-data-dir",
+            cfg.data_dir,
+            "-keys-action",
+            "set-policy",
+            "-key-access",
+            access,
+            "-key-policy",
+            policy,
+        ]
+    )
+
+
+def key_allow_bucket(cfg: Config, access: str, bucket: str) -> None:
+    run(
+        [
+            cfg.seglake_bin,
+            "-mode",
+            "keys",
+            "-data-dir",
+            cfg.data_dir,
+            "-keys-action",
+            "allow-bucket",
+            "-key-access",
+            access,
+            "-key-bucket",
+            bucket,
+        ]
+    )
+
+
+def key_disallow_bucket(cfg: Config, access: str, bucket: str) -> None:
+    run(
+        [
+            cfg.seglake_bin,
+            "-mode",
+            "keys",
+            "-data-dir",
+            cfg.data_dir,
+            "-keys-action",
+            "disallow-bucket",
+            "-key-access",
+            access,
+            "-key-bucket",
+            bucket,
+        ]
+    )
+
+
+def key_list_buckets(cfg: Config, access: str) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "keys",
+        "-data-dir",
+        cfg.data_dir,
+        "-keys-action",
+        "list-buckets",
+        "-key-access",
+        access,
+    ]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+def key_list_buckets_all(cfg: Config) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "keys",
+        "-data-dir",
+        cfg.data_dir,
+        "-keys-action",
+        "list-buckets-all",
+    ]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def key_rotate(cfg: Config, access: str, secret: str | None) -> None:
+    if secret is None:
+        secret = gen_secret()
+    lines = keys_list_text(cfg)
+    policy, enabled, inflight = find_key_meta(lines, access)
+
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "keys",
+        "-data-dir",
+        cfg.data_dir,
+        "-keys-action",
+        "create",
+        "-key-access",
+        access,
+        "-key-secret",
+        secret,
+        "-key-policy",
+        policy,
+        f"-key-enabled={enabled}",
+    ]
+    if supports_inflight(cfg):
+        cmd += ["-key-inflight", inflight]
+    run(cmd)
+    print(f"access_key={access}")
+    print(f"secret_key={secret}")
+
+
+def bucket_policy_get(cfg: Config, bucket: str | None) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "bucket-policy",
+        "-data-dir",
+        cfg.data_dir,
+        "-bucket-policy-action",
+        "get",
+    ]
+    if bucket:
+        cmd += ["-bucket-policy-bucket", bucket]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def bucket_policy_set(cfg: Config, bucket: str, policy: str | None, policy_file: str | None) -> None:
+    if not policy and not policy_file:
+        die("bucket-policy set requires --policy or --policy-file")
+    if policy and policy_file:
+        die("bucket-policy set accepts only one of --policy or --policy-file")
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "bucket-policy",
+        "-data-dir",
+        cfg.data_dir,
+        "-bucket-policy-action",
+        "set",
+        "-bucket-policy-bucket",
+        bucket,
+    ]
+    if policy:
+        cmd += ["-bucket-policy", policy]
+    if policy_file:
+        cmd += ["-bucket-policy-file", policy_file]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def bucket_policy_delete(cfg: Config, bucket: str) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "bucket-policy",
+        "-data-dir",
+        cfg.data_dir,
+        "-bucket-policy-action",
+        "delete",
+        "-bucket-policy-bucket",
+        bucket,
+    ]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    if not argv:
+        base = argparse.ArgumentParser(
+            prog="segctl",
+            description="Helper wrapper for seglake admin modes (keys, buckets).",
+        )
+        base.add_argument("--data-dir", default=os.getenv("SEGLAKE_DATA_DIR", "./data"))
+        base.add_argument("--bin", dest="bin_path", default=os.getenv("SEGLAKE_BIN", ""))
+        base.add_argument("--json", dest="json_out", action="store_true")
+        base.print_help(sys.stderr)
+        raise SystemExit(2)
+
+    global_parser = argparse.ArgumentParser(add_help=False)
+    global_parser.add_argument("--data-dir", default=os.getenv("SEGLAKE_DATA_DIR", "./data"))
+    global_parser.add_argument("--bin", dest="bin_path", default=os.getenv("SEGLAKE_BIN", ""))
+    global_parser.add_argument("--json", dest="json_out", action="store_true")
+    globals_ns, rest = global_parser.parse_known_args(argv)
+
+    parser = argparse.ArgumentParser(
+        prog="segctl",
+        description="Helper wrapper for seglake admin modes (keys, buckets).",
+        parents=[global_parser],
+    )
+
+    subparsers = parser.add_subparsers(dest="resource", required=True)
+
+    bucket = subparsers.add_parser("bucket")
+    bucket_sub = bucket.add_subparsers(dest="action", required=True)
+    bucket_sub.add_parser("list")
+    bucket_exists_p = bucket_sub.add_parser("exists")
+    bucket_exists_p.add_argument("name")
+    bucket_create_p = bucket_sub.add_parser("create")
+    bucket_create_p.add_argument("name")
+    bucket_delete_p = bucket_sub.add_parser("delete")
+    bucket_delete_p.add_argument("name")
+
+    key = subparsers.add_parser("key")
+    key_sub = key.add_subparsers(dest="action", required=True)
+    key_sub.add_parser("list")
+    key_create_p = key_sub.add_parser("create")
+    key_create_p.add_argument("access_key")
+    key_create_p.add_argument("--secret", default="")
+    key_create_p.add_argument("--policy", default="rw")
+    key_create_p.add_argument("--inflight", type=int, default=0)
+    key_enabled_group = key_create_p.add_mutually_exclusive_group()
+    key_enabled_group.add_argument("--enabled", action="store_true")
+    key_enabled_group.add_argument("--disabled", action="store_true")
+    key_delete_p = key_sub.add_parser("delete")
+    key_delete_p.add_argument("access_key")
+    key_enable_p = key_sub.add_parser("enable")
+    key_enable_p.add_argument("access_key")
+    key_disable_p = key_sub.add_parser("disable")
+    key_disable_p.add_argument("access_key")
+    key_set_policy_p = key_sub.add_parser("set-policy")
+    key_set_policy_p.add_argument("access_key")
+    key_set_policy_p.add_argument("--policy", default="rw")
+    key_allow_p = key_sub.add_parser("allow-bucket")
+    key_allow_p.add_argument("access_key")
+    key_allow_p.add_argument("bucket")
+    key_disallow_p = key_sub.add_parser("disallow-bucket")
+    key_disallow_p.add_argument("access_key")
+    key_disallow_p.add_argument("bucket")
+    key_list_buckets_p = key_sub.add_parser("list-buckets")
+    key_list_buckets_p.add_argument("access_key", nargs="?")
+    key_list_buckets_p.add_argument("--all", action="store_true")
+    key_list_buckets_all_p = key_sub.add_parser("list-buckets-all")
+    key_rotate_p = key_sub.add_parser("rotate")
+    key_rotate_p.add_argument("access_key")
+    key_rotate_p.add_argument("--secret", default=None)
+
+    bucket_policy = subparsers.add_parser("bucket-policy")
+    bucket_policy_sub = bucket_policy.add_subparsers(dest="action", required=True)
+    bp_get = bucket_policy_sub.add_parser("get")
+    bp_get.add_argument("bucket", nargs="?")
+    bp_set = bucket_policy_sub.add_parser("set")
+    bp_set.add_argument("bucket")
+    bp_set.add_argument("--policy", default=None)
+    bp_set.add_argument("--policy-file", default=None)
+    bp_delete = bucket_policy_sub.add_parser("delete")
+    bp_delete.add_argument("bucket")
+
+    args = parser.parse_args(rest)
+    args.data_dir = globals_ns.data_dir
+    args.bin_path = globals_ns.bin_path
+    args.json_out = globals_ns.json_out
+    return args
+
+
+def main(argv: list[str]) -> None:
+    args = parse_args(argv)
+    seglake_bin = resolve_bin(args.bin_path or None)
+    cfg = Config(data_dir=args.data_dir, seglake_bin=seglake_bin, json_out=args.json_out)
+    require_data_dir(cfg.data_dir)
+
+    if args.resource == "bucket":
+        if args.action == "list":
+            bucket_list(cfg)
+        elif args.action == "exists":
+            bucket_exists(cfg, args.name)
+        elif args.action == "create":
+            bucket_create(cfg, args.name)
+        elif args.action == "delete":
+            bucket_delete(cfg, args.name)
+        else:
+            die(f"unknown bucket action: {args.action}")
+        return
+
+    if args.resource == "key":
+        if args.action == "list":
+            key_list(cfg)
+        elif args.action == "create":
+            enabled = True
+            if args.disabled:
+                enabled = False
+            elif args.enabled:
+                enabled = True
+            key_create(cfg, args.access_key, args.secret, args.policy, enabled, args.inflight)
+        elif args.action == "delete":
+            key_delete(cfg, args.access_key)
+        elif args.action == "enable":
+            key_enable(cfg, args.access_key, True)
+        elif args.action == "disable":
+            key_enable(cfg, args.access_key, False)
+        elif args.action == "set-policy":
+            key_set_policy(cfg, args.access_key, args.policy)
+        elif args.action == "allow-bucket":
+            key_allow_bucket(cfg, args.access_key, args.bucket)
+        elif args.action == "disallow-bucket":
+            key_disallow_bucket(cfg, args.access_key, args.bucket)
+        elif args.action == "list-buckets":
+            if args.all:
+                key_list_buckets_all(cfg)
+            else:
+                if not args.access_key:
+                    die("key list-buckets requires access_key or --all")
+                key_list_buckets(cfg, args.access_key)
+        elif args.action == "list-buckets-all":
+            key_list_buckets_all(cfg)
+        elif args.action == "rotate":
+            key_rotate(cfg, args.access_key, args.secret)
+        else:
+            die(f"unknown key action: {args.action}")
+        return
+
+    if args.resource == "bucket-policy":
+        if args.action == "get":
+            bucket_policy_get(cfg, args.bucket)
+        elif args.action == "set":
+            bucket_policy_set(cfg, args.bucket, args.policy, args.policy_file)
+        elif args.action == "delete":
+            bucket_policy_delete(cfg, args.bucket)
+        else:
+            die(f"unknown bucket-policy action: {args.action}")
+        return
+
+    die(f"unknown resource: {args.resource}")
+
+
+def shutil_which(name: str) -> str | None:
+    paths = os.getenv("PATH", "").split(os.pathsep)
+    for path in paths:
+        full = os.path.join(path, name)
+        if os.path.isfile(full) and os.access(full, os.X_OK):
+            return full
+    return None
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(exc.returncode)
