@@ -86,7 +86,7 @@ More: `docs/ops.md`.
 | ETag behavior | Yes | Single = MD5, multipart = md5(part md5s) + "-N" |
 | CORS / OPTIONS | Yes | Preflight supported |
 
-Full scope: `SPEC.md`.
+Full scope: `docs/spec.md`.
 
 ---
 
@@ -98,7 +98,7 @@ Full scope: `SPEC.md`.
 - **Metadata:** SQLite (WAL, synchronous=FULL)
 - **Durability barrier:** fsync segments → write manifest + meta tx → WAL flush → ACK
 
-Full details: `SPEC.md`.
+Full details: `docs/spec.md`.
 
 ---
 
@@ -128,7 +128,7 @@ Examples and notes: `docs/ops.md`.
 - Presigned TTL: 1..7 days
 - Virtual-hosted style enabled by default
 
-Full list: `SPEC.md`.
+Full list: `docs/spec.md`.
 
 ---
 
@@ -150,10 +150,10 @@ make check
 
 ## Documentation
 
-- `SPEC.md` — spec/behavior and API scope
+- `docs/spec.md` — spec/behavior and API scope
 - `docs/ops.md` — deployment, TLS, policies, GC, repl
-- `OPTIMIZATION.md` — performance notes
-- `TODO.md` — technical backlog
+- `docs/optimization.md` — performance notes
+- `docs/todo.md` — technical backlog
 - `examples/` — systemd, Caddy, public bucket policy
 
 ---

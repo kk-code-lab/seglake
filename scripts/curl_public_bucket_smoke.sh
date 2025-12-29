@@ -10,7 +10,7 @@ service="s3"
 payload_hash="UNSIGNED-PAYLOAD"
 bucket="${S3_BUCKET:-public}"
 object_key="${S3_OBJECT_KEY:-hello.txt}"
-data_file="${S3_DATA_FILE:-./SPEC.md}"
+data_file="${S3_DATA_FILE:-./docs/spec.md}"
 
 sign() {
   local method="$1" path="$2" query="$3" amz_date="$4"

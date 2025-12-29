@@ -458,7 +458,7 @@ S3_ACCESS_KEY=test \
 S3_SECRET_KEY=testsecret \
 S3_BUCKET=demo \
 S3_OBJECT_KEY=spec.md \
-S3_DATA_FILE=./SPEC.md \
+S3_DATA_FILE=./docs/spec.md \
 ./scripts/curl_s3_smoke.sh
 ```
 
