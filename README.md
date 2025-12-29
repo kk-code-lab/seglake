@@ -107,8 +107,8 @@ Full details: `docs/spec.md`.
 Available modes: `status`, `fsck`, `scrub`, `rebuild-index`, `snapshot`, `support-bundle`,
 `gc-plan`/`gc-run`, `gc-rewrite`, `mpu-gc-plan`/`mpu-gc-run`, `repl-validate`, `buckets`.
 
-Checklists and examples: `docs/ops.md`
-Smoke scripts: `scripts/`
+Checklists and examples: `docs/ops.md`  
+Smoke scripts: `scripts/`  
 Helper CLI: `scripts/segctl`
 
 Quick examples:
