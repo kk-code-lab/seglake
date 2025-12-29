@@ -122,26 +122,47 @@ Hardening knobs (opt-in, may break some clients):
 
 List buckets:
 ```
-AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 \
-  aws s3 ls --endpoint-url http://localhost:9000
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000
 ```
 
 List objects:
 ```
-AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 \
-  aws s3 ls s3://demo --endpoint-url http://localhost:9000
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls s3://demo --endpoint-url http://localhost:9000
 ```
 
 PUT object:
 ```
-AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 \
-  aws s3 cp ./file.bin s3://demo/file.bin --endpoint-url http://localhost:9000
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp ./file.bin s3://demo/file.bin --endpoint-url http://localhost:9000
 ```
 
 GET object:
 ```
-AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 \
-  aws s3 cp s3://demo/file.bin ./file.bin --endpoint-url http://localhost:9000
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp s3://demo/file.bin ./file.bin --endpoint-url http://localhost:9000
+```
+
+HTTPS with custom CA (no AWS config):
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 AWS_CA_BUNDLE=~/.aws/ca/custom-ca.pem aws s3 ls --endpoint-url https://s3.example.com
+```
+
+Force path-style via env (no AWS config):
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 AWS_S3_ADDRESSING_STYLE=path aws s3 ls --endpoint-url http://localhost:9000
+```
+
+Endpoint override via env (no AWS config):
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 AWS_ENDPOINT_URL_S3=http://localhost:9000 aws s3 ls
+```
+
+Endpoint + custom CA via env (no AWS config):
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 AWS_ENDPOINT_URL_S3=https://s3.example.com AWS_CA_BUNDLE=~/.aws/ca/custom-ca.pem aws s3 ls
+```
+
+Unsafe (debug only): skip TLS verification
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url https://s3.example.com --no-verify-ssl
 ```
 
 ## Virtual-hosted vs path-style
@@ -466,14 +487,7 @@ Security checks:
 
 Both scripts can be configured via env vars:
 ```
-S3_ENDPOINT=http://localhost:9000 \
-S3_HOST=localhost:9000 \
-S3_ACCESS_KEY=test \
-S3_SECRET_KEY=testsecret \
-S3_BUCKET=demo \
-S3_OBJECT_KEY=spec.md \
-S3_DATA_FILE=./docs/spec.md \
-./scripts/curl_s3_smoke.sh
+S3_ENDPOINT=http://localhost:9000 S3_HOST=localhost:9000 S3_ACCESS_KEY=test S3_SECRET_KEY=testsecret S3_BUCKET=demo S3_OBJECT_KEY=spec.md S3_DATA_FILE=./docs/spec.md ./scripts/curl_s3_smoke.sh
 ```
 
 Example with source IP + header condition:
@@ -523,24 +537,20 @@ Proxy note:
 
 List buckets:
 ```
-s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 \
-  --access_key=test --secret_key=testsecret ls
+s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret ls
 ```
 
 List objects:
 ```
-s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 \
-  --access_key=test --secret_key=testsecret ls s3://demo
+s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret ls s3://demo
 ```
 
 PUT object:
 ```
-s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 \
-  --access_key=test --secret_key=testsecret put ./file.bin s3://demo/file.bin
+s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret put ./file.bin s3://demo/file.bin
 ```
 
 GET object:
 ```
-s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 \
-  --access_key=test --secret_key=testsecret get s3://demo/file.bin ./file.bin
+s3cmd --no-ssl --host=localhost:9000 --host-bucket=localhost:9000 --access_key=test --secret_key=testsecret get s3://demo/file.bin ./file.bin
 ```
