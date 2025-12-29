@@ -609,7 +609,7 @@ func newKeysFlagSet() (*flag.FlagSet, *keysOptions) {
 	opts := &keysOptions{}
 	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
-	fs.StringVar(&opts.action, "keys-action", "list", "Keys action: list|create|allow-bucket|disallow-bucket|list-buckets|enable|disable|delete|set-policy")
+	fs.StringVar(&opts.action, "keys-action", "list", "Keys action: list|create|allow-bucket|disallow-bucket|list-buckets|list-buckets-all|enable|disable|delete|set-policy")
 	fs.StringVar(&opts.accessKey, "key-access", "", "API access key for keys-action")
 	fs.StringVar(&opts.secretKey, "key-secret", "", "API secret key for keys-action")
 	fs.StringVar(&opts.policy, "key-policy", "rw", "API key policy: rw|ro|read-only")
@@ -625,7 +625,7 @@ func newBucketPolicyFlagSet() (*flag.FlagSet, *bucketPolicyOptions) {
 	opts := &bucketPolicyOptions{}
 	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
-	fs.StringVar(&opts.action, "bucket-policy-action", "get", "Bucket policy action: get|set|delete")
+	fs.StringVar(&opts.action, "bucket-policy-action", "get", "Bucket policy action: get|set|delete (get without bucket lists all)")
 	fs.StringVar(&opts.bucket, "bucket-policy-bucket", "", "Bucket name for bucket-policy action")
 	fs.StringVar(&opts.policy, "bucket-policy", "", "Bucket policy JSON")
 	fs.StringVar(&opts.policyFile, "bucket-policy-file", "", "Bucket policy JSON file path")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
@@ -94,6 +96,31 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		}
 		for _, name := range buckets {
 			fmt.Println(name)
+		}
+		return nil
+	case "list-buckets-all":
+		keyBuckets, err := store.ListAllKeyBuckets(context.Background())
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			if keyBuckets == nil {
+				keyBuckets = map[string][]string{}
+			}
+			return writeJSON(keyBuckets)
+		}
+		accessKeys := make([]string, 0, len(keyBuckets))
+		for access := range keyBuckets {
+			accessKeys = append(accessKeys, access)
+		}
+		sort.Strings(accessKeys)
+		for _, access := range accessKeys {
+			buckets := keyBuckets[access]
+			if len(buckets) == 0 {
+				fmt.Printf("access_key=%s buckets=\n", access)
+				continue
+			}
+			fmt.Printf("access_key=%s buckets=%s\n", access, strings.Join(buckets, ","))
 		}
 		return nil
 	case "enable":

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
@@ -24,7 +25,26 @@ func runBucketPolicy(action, metaPath, bucket, policy, policyFile string, jsonOu
 	switch action {
 	case "get":
 		if bucket == "" {
-			return errors.New("bucket-policy-bucket required")
+			policies, err := store.ListBucketPolicies(context.Background())
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				if policies == nil {
+					policies = map[string]string{}
+				}
+				return writeJSON(policies)
+			}
+			names := make([]string, 0, len(policies))
+			for name := range policies {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				value := policies[name]
+				fmt.Printf("bucket=%s policy=%s\n", name, value)
+			}
+			return nil
 		}
 		value, err := store.GetBucketPolicy(context.Background(), bucket)
 		if err != nil {

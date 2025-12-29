@@ -911,6 +911,47 @@ ORDER BY bucket`, accessKey)
 	})
 }
 
+// ListAllKeyBuckets returns all access keys and their bucket allowlists.
+func (s *Store) ListAllKeyBuckets(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT access_key
+FROM api_keys
+ORDER BY access_key`)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string][]string)
+	if err := scanRows(rows, func(scan func(dest ...any) error) error {
+		var accessKey string
+		if err := scan(&accessKey); err != nil {
+			return err
+		}
+		keys[accessKey] = []string{}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	rows, err = s.db.QueryContext(ctx, `
+SELECT access_key, bucket
+FROM api_key_bucket_allow
+ORDER BY access_key, bucket`)
+	if err != nil {
+		return nil, err
+	}
+	if err := scanRows(rows, func(scan func(dest ...any) error) error {
+		var accessKey string
+		var bucket string
+		if err := scan(&accessKey, &bucket); err != nil {
+			return err
+		}
+		keys[accessKey] = append(keys[accessKey], bucket)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 // DisallowBucketForKey removes a bucket allow entry for the given access key.
 func (s *Store) DisallowBucketForKey(ctx context.Context, accessKey, bucket string) error {
 	return s.updateAPIKeyBucketAccess(ctx, accessKey, bucket, false)
@@ -1229,6 +1270,30 @@ func (s *Store) GetBucketPolicy(ctx context.Context, bucket string) (string, err
 		return "", err
 	}
 	return policy, nil
+}
+
+// ListBucketPolicies returns bucket policy JSON by bucket name.
+func (s *Store) ListBucketPolicies(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, policy
+FROM bucket_policies
+ORDER BY bucket`)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string)
+	if err := scanRows(rows, func(scan func(dest ...any) error) error {
+		var bucket string
+		var policy string
+		if err := scan(&bucket, &policy); err != nil {
+			return err
+		}
+		out[bucket] = policy
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // DeleteBucketPolicy removes a bucket policy.
