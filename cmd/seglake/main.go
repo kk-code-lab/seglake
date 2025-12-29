@@ -301,6 +301,11 @@ func main() {
 			printModeHelp(global.mode, fs)
 			return
 		}
+		if opts.rebuildMeta == "" {
+			if err := requireDataDir(opts.dataDir); err != nil {
+				exitError("data dir", err)
+			}
+		}
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
 		if err := runKeys(opts.action, metaPath, opts.accessKey, opts.secretKey, opts.policy, opts.bucket, opts.enabled, opts.inflight, opts.jsonOut); err != nil {
 			exitError("keys", err)
@@ -316,6 +321,11 @@ func main() {
 		} else if help {
 			printModeHelp(global.mode, fs)
 			return
+		}
+		if opts.rebuildMeta == "" {
+			if err := requireDataDir(opts.dataDir); err != nil {
+				exitError("data dir", err)
+			}
 		}
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
 		if err := runBucketPolicy(opts.action, metaPath, opts.bucket, opts.policy, opts.policyFile, opts.jsonOut); err != nil {
@@ -336,7 +346,7 @@ func main() {
 		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
 			exitError("ops", err)
 		}
-		if err := ensureDataDir(opts.dataDir); err != nil {
+		if err := requireDataDir(opts.dataDir); err != nil {
 			exitError("data dir", err)
 		}
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
@@ -629,6 +639,23 @@ func ensureDataDir(dataDir string) error {
 	return os.MkdirAll(dataDir, 0o755)
 }
 
+func requireDataDir(dataDir string) error {
+	if dataDir == "" {
+		return errors.New("data dir required")
+	}
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("data dir %q does not exist", dataDir)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("data dir %q is not a directory", dataDir)
+	}
+	return nil
+}
+
 func resolveMetaPath(dataDir, override string) string {
 	if override != "" {
 		return override
@@ -797,7 +824,7 @@ func runReplPushMode(opts *replPushOptions) error {
 }
 
 func openStore(dataDir, siteID string) (*meta.Store, error) {
-	if err := ensureDataDir(dataDir); err != nil {
+	if err := requireDataDir(dataDir); err != nil {
 		return nil, err
 	}
 	metaPath := filepath.Join(dataDir, "meta.db")
