@@ -26,6 +26,9 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 			return err
 		}
 		if jsonOut {
+			if keys == nil {
+				keys = []meta.APIKey{}
+			}
 			return writeJSON(keys)
 		}
 		for _, key := range keys {
@@ -84,6 +87,9 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 			return err
 		}
 		if jsonOut {
+			if buckets == nil {
+				buckets = []string{}
+			}
 			return writeJSON(buckets)
 		}
 		for _, name := range buckets {

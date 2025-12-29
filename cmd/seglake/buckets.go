@@ -26,6 +26,9 @@ func runBuckets(action, metaPath, bucket string, jsonOut bool) error {
 			return err
 		}
 		if jsonOut {
+			if buckets == nil {
+				buckets = []string{}
+			}
 			return writeJSON(buckets)
 		}
 		for _, name := range buckets {
@@ -56,7 +59,11 @@ func runBuckets(action, metaPath, bucket string, jsonOut bool) error {
 			return err
 		}
 		if !exists {
-			return errors.New("bucket not found")
+			if jsonOut {
+				return writeJSON(map[string]string{"status": "ok"})
+			}
+			fmt.Println("ok")
+			return nil
 		}
 		hasObjects, err := store.BucketHasObjects(context.Background(), bucket)
 		if err != nil {
@@ -82,18 +89,9 @@ func runBuckets(action, metaPath, bucket string, jsonOut bool) error {
 			return err
 		}
 		if jsonOut {
-			if err := writeJSON(map[string]bool{"exists": exists}); err != nil {
-				return err
-			}
-			if !exists {
-				return &exitCodeError{code: 1, quiet: true}
-			}
-			return nil
+			return writeJSON(map[string]bool{"exists": exists})
 		}
 		fmt.Println(exists)
-		if !exists {
-			return &exitCodeError{code: 1, quiet: true}
-		}
 		return nil
 	default:
 		return fmt.Errorf("unknown bucket-action %q", action)
