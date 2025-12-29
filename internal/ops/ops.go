@@ -25,9 +25,9 @@ type Report struct {
 	Manifests               int             `json:"manifests"`
 	Segments                int             `json:"segments"`
 	Errors                  int             `json:"errors"`
-	ErrorSample             []string        `json:"error_sample,omitempty"`
+	ErrorSample             []string        `json:"error_sample"`
 	Warnings                int             `json:"warnings,omitempty"`
-	WarningSample           []string        `json:"warning_sample,omitempty"`
+	WarningSample           []string        `json:"warning_sample"`
 	Candidates              int             `json:"candidates,omitempty"`
 	CandidateBytes          int64           `json:"candidate_bytes,omitempty"`
 	Deleted                 int             `json:"deleted,omitempty"`
@@ -35,14 +35,14 @@ type Report struct {
 	RewrittenSegments       int             `json:"rewritten_segments,omitempty"`
 	RewrittenBytes          int64           `json:"rewritten_bytes,omitempty"`
 	NewSegments             int             `json:"new_segments,omitempty"`
-	CandidateIDs            []string        `json:"candidate_ids,omitempty"`
+	CandidateIDs            []string        `json:"candidate_ids"`
 	MissingSegments         int             `json:"missing_segments,omitempty"`
 	InvalidManifests        int             `json:"invalid_manifests,omitempty"`
 	OutOfBoundsChunks       int             `json:"out_of_bounds_chunks,omitempty"`
 	RebuiltObjects          int             `json:"rebuilt_objects,omitempty"`
 	SkippedManifests        int             `json:"skipped_manifests,omitempty"`
-	MissingSegmentIDs       []string        `json:"missing_segment_ids,omitempty"`
-	Replication             []meta.ReplStat `json:"replication,omitempty"`
+	MissingSegmentIDs       []string        `json:"missing_segment_ids"`
+	Replication             []meta.ReplStat `json:"replication"`
 	CompareManifestsMissing int             `json:"compare_manifests_missing,omitempty"`
 	CompareManifestsExtra   int             `json:"compare_manifests_extra,omitempty"`
 	CompareManifestsLocal   int             `json:"compare_manifests_local,omitempty"`
@@ -61,9 +61,14 @@ const reportSchemaVersion = 1
 
 func newReport(mode string) *Report {
 	return &Report{
-		SchemaVersion: reportSchemaVersion,
-		Mode:          mode,
-		StartedAt:     time.Now().UTC(),
+		SchemaVersion:     reportSchemaVersion,
+		Mode:              mode,
+		StartedAt:         time.Now().UTC(),
+		ErrorSample:       []string{},
+		WarningSample:     []string{},
+		CandidateIDs:      []string{},
+		MissingSegmentIDs: []string{},
+		Replication:       []meta.ReplStat{},
 	}
 }
 

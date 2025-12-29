@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,12 @@ func runBucketPolicy(action, metaPath, bucket, policy, policyFile string, jsonOu
 		}
 		value, err := store.GetBucketPolicy(context.Background(), bucket)
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if jsonOut {
+					return writeJSON(map[string]any{"policy": nil})
+				}
+				return nil
+			}
 			return err
 		}
 		if jsonOut {
