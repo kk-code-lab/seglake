@@ -38,6 +38,8 @@ type Handler struct {
 	TrustedProxies []string
 	// MaxObjectSize enforces an optional max object size (0 = unlimited).
 	MaxObjectSize int64
+	// MaxURLLength enforces an optional max request URI length in bytes (0 = unlimited).
+	MaxURLLength int
 	// CORSAllowOrigins contains allowed origins for CORS (empty = "*").
 	CORSAllowOrigins []string
 	// CORSAllowMethods contains allowed methods for CORS (empty = default set).
@@ -413,6 +415,20 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	requestID := newRequestID()
 	w.Header().Set("x-amz-request-id", requestID)
 	w.Header().Set("x-amz-id-2", hostID())
+	if h.MaxURLLength > 0 {
+		uri := r.RequestURI
+		if uri == "" && r.URL != nil {
+			uri = r.URL.RequestURI()
+		}
+		if len(uri) > h.MaxURLLength {
+			resource := "/"
+			if r.URL != nil && r.URL.Path != "" {
+				resource = r.URL.Path
+			}
+			writeErrorWithResource(w, http.StatusRequestURITooLong, "InvalidURI", "request uri too long", requestID, resource)
+			return requestID, false
+		}
+	}
 	if bucket, ok := h.bucketFromRequest(r); ok {
 		region := "us-east-1"
 		if h.Auth != nil && h.Auth.Region != "" {

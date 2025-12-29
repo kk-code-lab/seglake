@@ -13,12 +13,15 @@ Threat model: `docs/security/threat-model.md`.
 - Use separate API keys per app/service and restrict buckets via allow-list + policies.
 - Keep a GC/MPU GC schedule and review reclaim reports before delete modes.
 - Validate replication health (repl-validate) and plan for conflict review workflows.
+ - Keep compatibility-first defaults unless you have validated client behavior; enable hardening knobs intentionally.
 
 Recommended limits (baseline):
 - Max object size (app): 5 GiB via `-max-object-size`.
+- Max header bytes (app): 32 KB via `-max-header-bytes` (0 uses Go default).
+- Max URL/query length (app): 32 KB via `-max-url-length` (0 disables).
 - Proxy request body limit: 5.1 GiB (slightly above max object size).
 - Proxy header size: 16–32 KB.
-- Proxy URL/query length: 8–16 KB (presigned URLs can be long).
+- Proxy URL/query length: 16–32 KB (presigned URLs can be long).
 - Proxy timeouts: header ~10s; body based on max object size and expected throughput.
 - Proxy/WAF rate limits (baseline): per-IP 200 RPS (burst 400), per-key 500 RPS (burst 1000), global 2000 RPS (burst 4000).
 
@@ -99,7 +102,19 @@ Seglake can serve HTTPS directly:
 Notes:
 - Self-signed certs require `--no-verify-ssl` or equivalent in clients.
 - Certificates are hot-reloaded when the cert/key files change.
-- Replay protection is disabled by default; enable with `-replay-ttl` (logs by default) and `-replay-block` to hard-block.
+- Replay protection is disabled by default; enable with `-replay-ttl` (logs by default) and `-replay-block` to hard-block after validating clients.
+
+## Compatibility vs hardening defaults
+
+Compatibility-first defaults (safe for most clients):
+- Allow SigV4 UNSIGNED-PAYLOAD (default).
+- Do not require Content-MD5 (default).
+- Replay protection disabled by default.
+
+Hardening knobs (opt-in, may break some clients):
+- Enable replay protection (`-replay-ttl`, optionally `-replay-block`).
+- Require Content-MD5 (`-require-content-md5=true`).
+- Disallow unsigned payloads (`-allow-unsigned-payload=false`).
 
 ## awscli examples (SigV4)
 
