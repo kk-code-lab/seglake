@@ -17,7 +17,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, func()) {
+func newPolicyHandler(t *testing.T, policy string) *Handler {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
@@ -25,7 +25,6 @@ func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, f
 		t.Fatalf("meta.Open: %v", err)
 	}
 	if err := store.UpsertAPIKey(context.Background(), "ak", "sk", policy, true, 0); err != nil {
-		_ = store.Close()
 		t.Fatalf("UpsertAPIKey: %v", err)
 	}
 
@@ -34,11 +33,12 @@ func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, f
 		MetaStore: store,
 	})
 	if err != nil {
-		_ = store.Close()
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	handler := &Handler{
+	t.Cleanup(func() { _ = store.Close() })
+
+	return &Handler{
 		Engine: eng,
 		Meta:   store,
 		Auth: &AuthConfig{
@@ -47,47 +47,38 @@ func newPolicyServer(t *testing.T, policy string) (*httptest.Server, *Handler, f
 			AllowUnsignedPayload: true,
 		},
 	}
+}
 
-	server := httptest.NewServer(handler)
-	cleanup := func() {
-		server.Close()
-		_ = store.Close()
-	}
-	return server, handler, cleanup
+func doRequest(t *testing.T, handler *Handler, req *http.Request) *http.Response {
+	t.Helper()
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w.Result()
+}
+
+func newTestRequest(method, path string, body io.Reader) *http.Request {
+	return httptest.NewRequest(method, path, body)
 }
 
 func TestPolicyEnforcedOnRequests(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}]}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	getReq := newTestRequest(http.MethodGet, "/demo/public/ok", nil)
 	signRequestTest(getReq, "ak", "sk", "us-east-1")
-	getResp, err := http.DefaultClient.Do(getReq)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	getResp := doRequest(t, handler, getReq)
 	_ = getResp.Body.Close()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET status: %d", getResp.StatusCode)
 	}
 
-	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/demo/public/new", bytes.NewReader([]byte("nope")))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	putReq := newTestRequest(http.MethodPut, "/demo/public/new", bytes.NewReader([]byte("nope")))
 	signRequestTest(putReq, "ak", "sk", "us-east-1")
-	putResp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("PUT error: %v", err)
-	}
+	putResp := doRequest(t, handler, putReq)
 	_ = putResp.Body.Close()
 	if putResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("PUT status: %d", putResp.StatusCode)
@@ -96,22 +87,15 @@ func TestPolicyEnforcedOnRequests(t *testing.T) {
 
 func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]},{"effect":"deny","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"secret/"}]}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "secret/x", "", bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo/secret/x", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	getReq := newTestRequest(http.MethodGet, "/demo/secret/x", nil)
 	signRequestTest(getReq, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(getReq)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp := doRequest(t, handler, getReq)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET status: %d", resp.StatusCode)
@@ -120,18 +104,11 @@ func TestPolicyDenyPrefixOverridesAllow(t *testing.T) {
 
 func TestPolicyMPUDenied(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
-	server, _, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/demo/key?uploads", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodPost, "/demo/key?uploads", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("MPU initiate status: %d", resp.StatusCode)
@@ -140,23 +117,16 @@ func TestPolicyMPUDenied(t *testing.T) {
 
 func TestPolicyCopyDenied(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "src", "", bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPut, server.URL+"/demo/dst", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodPut, "/demo/dst", nil)
 	req.Header.Set("X-Amz-Copy-Source", "/demo/src")
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("COPY error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("COPY status: %d", resp.StatusCode)
@@ -165,18 +135,11 @@ func TestPolicyCopyDenied(t *testing.T) {
 
 func TestPolicyMetaDenied(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
-	server, _, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/meta/stats", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/v1/meta/stats", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("meta stats error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("meta stats status: %d", resp.StatusCode)
@@ -185,18 +148,11 @@ func TestPolicyMetaDenied(t *testing.T) {
 
 func TestPolicyListBucketsDenied(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
-	server, _, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("list buckets error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("list buckets status: %d", resp.StatusCode)
@@ -205,18 +161,11 @@ func TestPolicyListBucketsDenied(t *testing.T) {
 
 func TestPolicyListObjectsDenied(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}`
-	server, _, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo?list-type=2", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("list objects error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("list objects status: %d", resp.StatusCode)
@@ -224,8 +173,7 @@ func TestPolicyListObjectsDenied(t *testing.T) {
 }
 
 func TestListBucketsHonorsAllowlist(t *testing.T) {
-	server, handler, cleanup := newPolicyServer(t, "rw")
-	defer cleanup()
+	handler := newPolicyHandler(t, "rw")
 
 	ctx := context.Background()
 	if _, _, err := handler.Engine.PutObject(ctx, "xsxs-terraform", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
@@ -238,15 +186,9 @@ func TestListBucketsHonorsAllowlist(t *testing.T) {
 		t.Fatalf("AllowBucketForKey: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("list buckets error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list buckets status: %d", resp.StatusCode)
@@ -265,38 +207,25 @@ func TestListBucketsHonorsAllowlist(t *testing.T) {
 
 func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"headers":{"x-tenant":"alpha"}}}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo/public/ok", nil)
 	req.Header.Set("X-Tenant", "alpha")
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET status: %d", resp.StatusCode)
 	}
 
-	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req2 := newTestRequest(http.MethodGet, "/demo/public/ok", nil)
 	req2.Header.Set("X-Tenant", "beta")
 	signRequestTest(req2, "ak", "sk", "us-east-1")
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp2 := doRequest(t, handler, req2)
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET status: %d", resp2.StatusCode)
@@ -305,8 +234,7 @@ func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 
 func TestGetBucketPolicy(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}`
-	server, handler, cleanup := newPolicyServer(t, "rw")
-	defer cleanup()
+	handler := newPolicyHandler(t, "rw")
 
 	ctx := context.Background()
 	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
@@ -316,15 +244,9 @@ func TestGetBucketPolicy(t *testing.T) {
 		t.Fatalf("SetBucketPolicy: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo?policy", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("get bucket policy error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get bucket policy status: %d", resp.StatusCode)
@@ -347,23 +269,16 @@ func TestGetBucketPolicy(t *testing.T) {
 }
 
 func TestGetBucketPolicyMissing(t *testing.T) {
-	server, handler, cleanup := newPolicyServer(t, "rw")
-	defer cleanup()
+	handler := newPolicyHandler(t, "rw")
 
 	ctx := context.Background()
 	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo?policy", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("get bucket policy error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get bucket policy status: %d", resp.StatusCode)
@@ -379,37 +294,24 @@ func TestGetBucketPolicyMissing(t *testing.T) {
 
 func TestPutDeleteBucketPolicy(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}`
-	server, handler, cleanup := newPolicyServer(t, "rw")
-	defer cleanup()
+	handler := newPolicyHandler(t, "rw")
 
 	ctx := context.Background()
 	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/demo?policy", bytes.NewReader([]byte(policy)))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	putReq := newTestRequest(http.MethodPut, "/demo?policy", bytes.NewReader([]byte(policy)))
 	signRequestTest(putReq, "ak", "sk", "us-east-1")
-	putResp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("put bucket policy error: %v", err)
-	}
+	putResp := doRequest(t, handler, putReq)
 	defer func() { _ = putResp.Body.Close() }()
 	if putResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("put bucket policy status: %d", putResp.StatusCode)
 	}
 
-	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	getReq := newTestRequest(http.MethodGet, "/demo?policy", nil)
 	signRequestTest(getReq, "ak", "sk", "us-east-1")
-	getResp, err := http.DefaultClient.Do(getReq)
-	if err != nil {
-		t.Fatalf("get bucket policy error: %v", err)
-	}
+	getResp := doRequest(t, handler, getReq)
 	defer func() { _ = getResp.Body.Close() }()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("get bucket policy status: %d", getResp.StatusCode)
@@ -430,29 +332,17 @@ func TestPutDeleteBucketPolicy(t *testing.T) {
 		t.Fatalf("unexpected policy body")
 	}
 
-	delReq, err := http.NewRequest(http.MethodDelete, server.URL+"/demo?policy", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	delReq := newTestRequest(http.MethodDelete, "/demo?policy", nil)
 	signRequestTest(delReq, "ak", "sk", "us-east-1")
-	delResp, err := http.DefaultClient.Do(delReq)
-	if err != nil {
-		t.Fatalf("delete bucket policy error: %v", err)
-	}
+	delResp := doRequest(t, handler, delReq)
 	defer func() { _ = delResp.Body.Close() }()
 	if delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete bucket policy status: %d", delResp.StatusCode)
 	}
 
-	missingReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	missingReq := newTestRequest(http.MethodGet, "/demo?policy", nil)
 	signRequestTest(missingReq, "ak", "sk", "us-east-1")
-	missingResp, err := http.DefaultClient.Do(missingReq)
-	if err != nil {
-		t.Fatalf("get bucket policy error: %v", err)
-	}
+	missingResp := doRequest(t, handler, missingReq)
 	defer func() { _ = missingResp.Body.Close() }()
 	if missingResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get bucket policy status: %d", missingResp.StatusCode)
@@ -460,23 +350,16 @@ func TestPutDeleteBucketPolicy(t *testing.T) {
 }
 
 func TestPutBucketPolicyInvalid(t *testing.T) {
-	server, handler, cleanup := newPolicyServer(t, "rw")
-	defer cleanup()
+	handler := newPolicyHandler(t, "rw")
 
 	ctx := context.Background()
 	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/demo?policy", bytes.NewReader([]byte("not-json")))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	putReq := newTestRequest(http.MethodPut, "/demo?policy", bytes.NewReader([]byte("not-json")))
 	signRequestTest(putReq, "ak", "sk", "us-east-1")
-	putResp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("put bucket policy error: %v", err)
-	}
+	putResp := doRequest(t, handler, putReq)
 	defer func() { _ = putResp.Body.Close() }()
 	if putResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("put bucket policy status: %d", putResp.StatusCode)
@@ -497,43 +380,29 @@ func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 	} else if allowed, _ := pol.DecisionWithContext("GetObject", "demo", "public/ok", &PolicyContext{Now: time.Now().UTC()}); !allowed {
 		t.Fatalf("expected policy to allow in time window")
 	}
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/public/ok", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo/public/ok", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET status: %d", resp.StatusCode)
 	}
 
 	policy2 := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"before":"1970-01-01T00:00:00Z"}}]}`
-	server2, handler2, cleanup2 := newPolicyServer(t, policy2)
-	defer cleanup2()
+	handler2 := newPolicyHandler(t, policy2)
 
 	if _, _, err := handler2.Engine.PutObject(context.Background(), "demo", "public/ok", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
-	req2, err := http.NewRequest(http.MethodGet, server2.URL+"/demo/public/ok", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req2 := newTestRequest(http.MethodGet, "/demo/public/ok", nil)
 	signRequestTest(req2, "ak", "sk", "us-east-1")
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp2 := doRequest(t, handler2, req2)
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET status: %d", resp2.StatusCode)
@@ -543,21 +412,14 @@ func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 func TestPolicyConditionsAfterFutureDenied(t *testing.T) {
 	future := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}],"conditions":{"after":"` + future + `"}}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo/k", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo/k", nil)
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET status: %d", resp.StatusCode)
@@ -566,39 +428,28 @@ func TestPolicyConditionsAfterFutureDenied(t *testing.T) {
 
 func TestPolicyConditionsSourceIPMultipleCIDR(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"source_ip":["10.0.0.0/8","192.168.0.0/16"]}}]}`
-	server, handler, cleanup := newPolicyServer(t, policy)
-	defer cleanup()
+	handler := newPolicyHandler(t, policy)
 	handler.TrustedProxies = []string{"127.0.0.1/32"}
 
 	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", "", bytes.NewReader([]byte("ok"))); err != nil {
 		t.Fatalf("PutObject seed: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := newTestRequest(http.MethodGet, "/demo?list-type=2", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "192.168.1.10")
 	signRequestTest(req, "ak", "sk", "us-east-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("list objects error: %v", err)
-	}
+	resp := doRequest(t, handler, req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list objects status: %d", resp.StatusCode)
 	}
 
-	req2, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req2 := newTestRequest(http.MethodGet, "/demo?list-type=2", nil)
+	req2.RemoteAddr = "127.0.0.1:1234"
 	req2.Header.Set("X-Forwarded-For", "172.16.0.1")
 	signRequestTest(req2, "ak", "sk", "us-east-1")
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("list objects error: %v", err)
-	}
+	resp2 := doRequest(t, handler, req2)
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("list objects status: %d", resp2.StatusCode)
