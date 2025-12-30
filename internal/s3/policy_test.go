@@ -191,11 +191,99 @@ func TestParsePolicyAWSUnsupportedCondition(t *testing.T) {
     "Effect": "Allow",
     "Action": "s3:ListBucket",
     "Resource": "arn:aws:s3:::demo",
-    "Condition": {"StringEquals": {"s3:prefix": "public/"}}
+    "Condition": {"StringEquals": {"s3:max-keys": "10"}}
   }]
 }`
 	if _, err := ParsePolicy(raw); err == nil {
 		t.Fatalf("expected unsupported condition error")
+	}
+}
+
+func TestPolicyConditionsPrefixDelimiterSecureTransport(t *testing.T) {
+	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}],"conditions":{"prefix":"public/","delimiter":"/","secure_transport":true}}]}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), Prefix: "public/", Delimiter: "/", SecureTransport: true}
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); !allowed {
+		t.Fatalf("expected allow for prefix/delimiter/secure transport")
+	}
+	ctx.Prefix = "private/"
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for prefix mismatch")
+	}
+	ctx.Prefix = "public/"
+	ctx.Delimiter = "-"
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for delimiter mismatch")
+	}
+	ctx.Delimiter = "/"
+	ctx.SecureTransport = false
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for insecure transport")
+	}
+}
+
+func TestParsePolicyAWSConditionsPrefixAndSecureTransport(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::demo",
+      "Condition": {
+        "StringEquals": { "s3:prefix": "public/" },
+        "Bool": { "aws:SecureTransport": "true" }
+      }
+    }
+  ]
+}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy aws: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), Prefix: "public/", SecureTransport: true}
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); !allowed {
+		t.Fatalf("expected allow for aws prefix/secure transport")
+	}
+	ctx.Prefix = "private/"
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for aws prefix mismatch")
+	}
+	ctx.Prefix = "public/"
+	ctx.SecureTransport = false
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for insecure transport")
+	}
+}
+
+func TestParsePolicyAWSConditionsPrefixLike(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::demo",
+      "Condition": {
+        "StringLike": { "s3:prefix": "public/*" }
+      }
+    }
+  ]
+}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy aws: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), Prefix: "public/data"}
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); !allowed {
+		t.Fatalf("expected allow for prefix like")
+	}
+	ctx.Prefix = "private/data"
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); allowed {
+		t.Fatalf("expected deny for prefix like mismatch")
 	}
 }
 

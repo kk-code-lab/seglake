@@ -26,16 +26,23 @@ type Resource struct {
 }
 
 type Conditions struct {
-	SourceIP []string          `json:"source_ip,omitempty"`
-	Before   string            `json:"before,omitempty"`
-	After    string            `json:"after,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
+	SourceIP        []string          `json:"source_ip,omitempty"`
+	Before          string            `json:"before,omitempty"`
+	After           string            `json:"after,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	Prefix          string            `json:"prefix,omitempty"`
+	PrefixLike      bool              `json:"prefix_like,omitempty"`
+	Delimiter       string            `json:"delimiter,omitempty"`
+	SecureTransport *bool             `json:"secure_transport,omitempty"`
 }
 
 type PolicyContext struct {
-	Now      time.Time
-	SourceIP string
-	Headers  map[string]string
+	Now             time.Time
+	SourceIP        string
+	Headers         map[string]string
+	Prefix          string
+	Delimiter       string
+	SecureTransport bool
 }
 
 const (
@@ -312,6 +319,9 @@ func (c *Conditions) validate() error {
 			return errors.New("policy condition headers require keys")
 		}
 	}
+	if c.PrefixLike && c.Prefix == "" {
+		return errors.New("policy condition prefix_like requires prefix")
+	}
 	return nil
 }
 
@@ -320,7 +330,7 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 		return true
 	}
 	if ctx == nil {
-		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0
+		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0 && c.Prefix == "" && c.Delimiter == "" && c.SecureTransport == nil
 	}
 	if len(c.SourceIP) > 0 {
 		ip := net.ParseIP(ctx.SourceIP)
@@ -364,6 +374,21 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 				return false
 			}
 		}
+	}
+	if c.Prefix != "" {
+		if c.PrefixLike {
+			if !strings.HasPrefix(ctx.Prefix, c.Prefix) {
+				return false
+			}
+		} else if ctx.Prefix != c.Prefix {
+			return false
+		}
+	}
+	if c.Delimiter != "" && ctx.Delimiter != c.Delimiter {
+		return false
+	}
+	if c.SecureTransport != nil && ctx.SecureTransport != *c.SecureTransport {
+		return false
 	}
 	return true
 }

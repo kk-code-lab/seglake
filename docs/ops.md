@@ -397,7 +397,7 @@ Custom JSON policy (stored in `api_keys.policy`):
   ]
 }
 ```
-Note: AWS-style policy JSON is accepted as input and mapped to Seglake policy (subset only; unsupported elements are rejected).
+Note: AWS-style policy JSON is accepted as input and mapped to Seglake policy (subset only; unsupported elements are rejected). Supported condition subset: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport.
 
 Example (AWS-style bucket policy input, allowed subset):
 ```
