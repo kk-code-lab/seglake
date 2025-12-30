@@ -141,6 +141,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `GET /<bucket>?prefix=...` — ListObjectsV1 (marker).
 - `GET /<bucket>?location` — GetBucketLocation.
 - `GET /<bucket>?policy` — GetBucketPolicy.
+- `PUT /<bucket>?policy` — PutBucketPolicy.
+- `DELETE /<bucket>?policy` — DeleteBucketPolicy.
 - `PUT /<bucket>` — CreateBucket (idempotent).
 - `PUT /<bucket>/<key>` — PUT object.
 - `GET /<bucket>/<key>` — GET object.
@@ -174,7 +176,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
-- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetBucketPolicy, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
+- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).
 - `X-Forwarded-For` is used only for trusted proxies (`-trusted-proxies`).
 - Auth failure rate limiting per IP and per access key.

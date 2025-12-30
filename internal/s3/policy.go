@@ -50,6 +50,8 @@ const (
 	policyActionListBucket            = "listbucket"
 	policyActionGetBucketLocation     = "getbucketlocation"
 	policyActionGetBucketPolicy       = "getbucketpolicy"
+	policyActionPutBucketPolicy       = "putbucketpolicy"
+	policyActionDeleteBucketPolicy    = "deletebucketpolicy"
 	policyActionGetObject             = "getobject"
 	policyActionHeadObject            = "headobject"
 	policyActionPutObject             = "putobject"
@@ -74,6 +76,8 @@ var validPolicyActions = map[string]struct{}{
 	policyActionListBucket:            {},
 	policyActionGetBucketLocation:     {},
 	policyActionGetBucketPolicy:       {},
+	policyActionPutBucketPolicy:       {},
+	policyActionDeleteBucketPolicy:    {},
 	policyActionGetObject:             {},
 	policyActionHeadObject:            {},
 	policyActionPutObject:             {},
@@ -378,6 +382,10 @@ func policyActionForRequest(op string) string {
 		return policyActionListBuckets
 	case "get_bucket_policy":
 		return policyActionGetBucketPolicy
+	case "put_bucket_policy":
+		return policyActionPutBucketPolicy
+	case "delete_bucket_policy":
+		return policyActionDeleteBucketPolicy
 	case "list_v1", "list_v2":
 		return policyActionListBucket
 	case "get":
