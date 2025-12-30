@@ -570,6 +570,10 @@ func TestPolicyConditionsSourceIPMultipleCIDR(t *testing.T) {
 	defer cleanup()
 	handler.TrustedProxies = []string{"127.0.0.1/32"}
 
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "k", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?list-type=2", nil)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
