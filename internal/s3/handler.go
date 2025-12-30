@@ -319,7 +319,19 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 		h.handleListV2(ctx, w, r, bucketOnly, requestID)
 		return true
 	case bucketListLocation:
-		_ = bucketOnly
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		exists, err := h.Meta.BucketExists(ctx, bucket)
+		if err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+			return true
+		}
+		if !exists {
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, r.URL.Path)
+			return true
+		}
 		h.handleLocation(w, requestID)
 		return true
 	case bucketListUploads:
