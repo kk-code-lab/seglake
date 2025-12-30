@@ -199,22 +199,20 @@ func (h *Handler) listObjects(ctx context.Context, bucket, prefix, delimiter, af
 		for _, obj := range objs {
 			lastKey = obj.Key
 			lastVersion = obj.VersionID
-			if delimiter != "" {
+			if delimiter != "" && strings.HasPrefix(obj.Key, prefix) {
 				rest := strings.TrimPrefix(obj.Key, prefix)
-				if rest != obj.Key {
-					if idx := strings.Index(rest, delimiter); idx >= 0 {
-						cp := prefix + rest[:idx+len(delimiter)]
-						if _, ok := commonSet[cp]; !ok {
-							commonSet[cp] = struct{}{}
-							common = append(common, commonPrefix{Prefix: cp})
-							count++
-						}
-						if count >= maxKeys {
-							truncated = true
-							break
-						}
-						continue
+				if idx := strings.Index(rest, delimiter); idx >= 0 {
+					cp := prefix + rest[:idx+len(delimiter)]
+					if _, ok := commonSet[cp]; !ok {
+						commonSet[cp] = struct{}{}
+						common = append(common, commonPrefix{Prefix: cp})
+						count++
 					}
+					if count >= maxKeys {
+						truncated = true
+						break
+					}
+					continue
 				}
 			}
 			contents = append(contents, listContents{

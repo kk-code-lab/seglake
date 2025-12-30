@@ -77,3 +77,62 @@ func TestMultipartFlowUnit(t *testing.T) {
 		t.Fatalf("get mismatch")
 	}
 }
+
+func TestListMultipartUploadsDelimiterEmptyPrefix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(dir + "/meta.db")
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(dir + "/objects"),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+	}
+
+	createReq := httptest.NewRequest("PUT", "/bucket", nil)
+	createW := httptest.NewRecorder()
+	handler.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusOK {
+		t.Fatalf("create bucket status: %d", createW.Code)
+	}
+
+	init := func(key string) {
+		req := httptest.NewRequest("POST", "/bucket/"+key+"?uploads", nil)
+		req.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("init status: %d", w.Code)
+		}
+	}
+
+	init("foo/bar")
+	init("baz.txt")
+
+	listReq := httptest.NewRequest("GET", "/bucket?uploads&delimiter=/", nil)
+	listW := httptest.NewRecorder()
+	handler.ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list uploads status: %d", listW.Code)
+	}
+	body := listW.Body.String()
+	if !strings.Contains(body, "<CommonPrefixes><Prefix>foo/</Prefix></CommonPrefixes>") {
+		t.Fatalf("expected common prefix")
+	}
+	if !strings.Contains(body, "<Key>baz.txt</Key>") {
+		t.Fatalf("expected non-delimited key")
+	}
+	if strings.Contains(body, "<Key>foo/bar</Key>") {
+		t.Fatalf("expected keys grouped by delimiter")
+	}
+}
