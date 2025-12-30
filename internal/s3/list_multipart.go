@@ -94,22 +94,20 @@ func (h *Handler) listMultipartUploads(ctx context.Context, bucket, prefix, deli
 		for _, up := range uploads {
 			lastKey = up.Key
 			lastUpload = up.UploadID
-			if delimiter != "" {
+			if delimiter != "" && strings.HasPrefix(up.Key, prefix) {
 				rest := strings.TrimPrefix(up.Key, prefix)
-				if rest != up.Key {
-					if idx := strings.Index(rest, delimiter); idx >= 0 {
-						cp := prefix + rest[:idx+len(delimiter)]
-						if _, ok := commonSet[cp]; !ok {
-							commonSet[cp] = struct{}{}
-							common = append(common, commonPrefix{Prefix: cp})
-							count++
-						}
-						if count >= maxUploads {
-							truncated = true
-							break
-						}
-						continue
+				if idx := strings.Index(rest, delimiter); idx >= 0 {
+					cp := prefix + rest[:idx+len(delimiter)]
+					if _, ok := commonSet[cp]; !ok {
+						commonSet[cp] = struct{}{}
+						common = append(common, commonPrefix{Prefix: cp})
+						count++
 					}
+					if count >= maxUploads {
+						truncated = true
+						break
+					}
+					continue
 				}
 			}
 			uploadsOut = append(uploadsOut, multipartUploadOut{

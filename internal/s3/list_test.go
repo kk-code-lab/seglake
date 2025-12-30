@@ -41,6 +41,79 @@ func TestListV2DelimiterUnit(t *testing.T) {
 	}
 }
 
+func TestListV2DelimiterEmptyPrefix(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	put := func(key string) {
+		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("PUT status: %d", w.Code)
+		}
+	}
+
+	put("foo/bar")
+	put("baz.txt")
+
+	req := httptest.NewRequest("GET", "/bucket?list-type=2&delimiter=/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST status: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<CommonPrefixes><Prefix>foo/</Prefix></CommonPrefixes>") {
+		t.Fatalf("expected common prefix")
+	}
+	if !strings.Contains(body, "<Key>baz.txt</Key>") {
+		t.Fatalf("expected non-delimited key")
+	}
+	if strings.Contains(body, "<Key>foo/bar</Key>") {
+		t.Fatalf("expected keys grouped by delimiter")
+	}
+}
+
+func TestListV2DelimiterMaxKeysTruncates(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	put := func(key string) {
+		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("PUT status: %d", w.Code)
+		}
+	}
+
+	put("a/one.txt")
+	put("b/two.txt")
+
+	req := httptest.NewRequest("GET", "/bucket?list-type=2&delimiter=/&max-keys=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST status: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<IsTruncated>true</IsTruncated>") {
+		t.Fatalf("expected truncated response")
+	}
+	if !strings.Contains(body, "<NextContinuationToken>") {
+		t.Fatalf("expected continuation token")
+	}
+	if !strings.Contains(body, "<KeyCount>1</KeyCount>") {
+		t.Fatalf("expected key count 1")
+	}
+	if !strings.Contains(body, "<CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes>") &&
+		!strings.Contains(body, "<CommonPrefixes><Prefix>b/</Prefix></CommonPrefixes>") {
+		t.Fatalf("expected a common prefix")
+	}
+	if strings.Contains(body, "<Contents>") {
+		t.Fatalf("expected no contents")
+	}
+}
+
 func TestListV2AcceptsTrailingSlashBucketPath(t *testing.T) {
 	handler := newListTestHandler(t)
 
