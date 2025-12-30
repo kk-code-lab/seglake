@@ -31,6 +31,8 @@ func newPolicyHandler(t *testing.T, policy string) *Handler {
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
 		MetaStore: store,
+		// Ensure segment writers seal quickly to avoid temp dir cleanup races.
+		SegmentMaxAge: time.Nanosecond,
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
