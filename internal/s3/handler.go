@@ -244,6 +244,7 @@ const (
 	bucketListV2
 	bucketListLocation
 	bucketListUploads
+	bucketGetPolicy
 )
 
 func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly bool) bucketListKind {
@@ -270,6 +271,12 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			return bucketListNone
 		}
 		return bucketListUploads
+	}
+	if r.URL.Query().Has("policy") {
+		if !hasBucketOnly && hostBucket == "" {
+			return bucketListNone
+		}
+		return bucketGetPolicy
 	}
 	return bucketListNone
 }
@@ -304,6 +311,13 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 		return true
 	case bucketListUploads:
 		h.handleListMultipartUploads(ctx, w, r, bucketOnly, requestID)
+		return true
+	case bucketGetPolicy:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleGetBucketPolicy(ctx, w, r, bucket, requestID)
 		return true
 	}
 	return false
@@ -1336,6 +1350,15 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		return "list_buckets"
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Has("policy") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			return "get_bucket_policy"
+		}
+		if path == "" && h.hostBucket(r) != "" {
+			return "get_bucket_policy"
+		}
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		return "list_v2"

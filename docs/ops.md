@@ -398,7 +398,7 @@ Custom JSON policy (stored in `api_keys.policy`):
 }
 ```
 
-Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetObject`, `HeadObject`, `PutObject`,
+Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetBucketPolicy`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
 `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
 `GetMetaStats`, `GetMetaConflicts`, `ReplicationRead`, `ReplicationWrite`, `*`.
