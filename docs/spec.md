@@ -171,6 +171,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Replay cache size limit: bounded in-memory cache (default cap; configurable via `-replay-cache-max`).
 - Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
+- Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
 - Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).

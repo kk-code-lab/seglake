@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -217,6 +218,46 @@ func TestPolicyListObjectsDenied(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("list objects status: %d", resp.StatusCode)
+	}
+}
+
+func TestListBucketsHonorsAllowlist(t *testing.T) {
+	server, handler, cleanup := newPolicyServer(t, "rw")
+	defer cleanup()
+
+	ctx := context.Background()
+	if _, _, err := handler.Engine.PutObject(ctx, "xsxs-terraform", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed xsxs-terraform: %v", err)
+	}
+	if _, _, err := handler.Engine.PutObject(ctx, "foo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed foo: %v", err)
+	}
+	if err := handler.Meta.AllowBucketForKey(ctx, "ak", "xsxs-terraform"); err != nil {
+		t.Fatalf("AllowBucketForKey: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list buckets error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list buckets status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<Name>xsxs-terraform</Name>")) {
+		t.Fatalf("expected xsxs-terraform in list")
+	}
+	if bytes.Contains(body, []byte("<Name>foo</Name>")) {
+		t.Fatalf("unexpected foo in list")
 	}
 }
 
