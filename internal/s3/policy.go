@@ -380,6 +380,8 @@ func policyActionForRequest(op string) string {
 		return policyActionReplicationWrite
 	case "list_buckets":
 		return policyActionListBuckets
+	case "head_bucket":
+		return policyActionListBucket
 	case "get_bucket_policy":
 		return policyActionGetBucketPolicy
 	case "put_bucket_policy":

@@ -247,6 +247,7 @@ const (
 	bucketGetPolicy
 	bucketPutPolicy
 	bucketDeletePolicy
+	bucketHead
 )
 
 func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly bool) bucketListKind {
@@ -279,6 +280,9 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			return bucketGetPolicy
 		}
 		return bucketListNone
+	}
+	if r.Method == http.MethodHead && (hasBucketOnly || hostBucket != "") {
+		return bucketHead
 	}
 	if r.URL.Query().Has("policy") {
 		if !hasBucketOnly && hostBucket == "" {
@@ -357,6 +361,13 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 			bucket = hostBucket
 		}
 		h.handleDeleteBucketPolicy(ctx, w, r, bucket, requestID)
+		return true
+	case bucketHead:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleHeadBucket(ctx, w, r, bucket, requestID)
 		return true
 	}
 	return false
@@ -1445,6 +1456,10 @@ func (h *Handler) opForRequest(r *http.Request) string {
 		return "get"
 	}
 	if r.Method == http.MethodHead {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if (path == "" && h.hostBucket(r) != "") || (path != "" && !strings.Contains(path, "/")) {
+			return "head_bucket"
+		}
 		return "head"
 	}
 	if r.Method == http.MethodPut {
