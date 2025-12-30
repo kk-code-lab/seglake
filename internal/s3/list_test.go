@@ -11,25 +11,7 @@ import (
 )
 
 func TestListV2DelimiterUnit(t *testing.T) {
-	dir := t.TempDir()
-	store, err := meta.Open(dir + "/meta.db")
-	if err != nil {
-		t.Fatalf("meta.Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(dir + "/objects"),
-		MetaStore: store,
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	handler := &Handler{
-		Engine: eng,
-		Meta:   store,
-	}
+	handler := newListTestHandler(t)
 
 	put := func(key string) {
 		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
@@ -60,25 +42,7 @@ func TestListV2DelimiterUnit(t *testing.T) {
 }
 
 func TestListV2AcceptsTrailingSlashBucketPath(t *testing.T) {
-	dir := t.TempDir()
-	store, err := meta.Open(dir + "/meta.db")
-	if err != nil {
-		t.Fatalf("meta.Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(dir + "/objects"),
-		MetaStore: store,
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	handler := &Handler{
-		Engine: eng,
-		Meta:   store,
-	}
+	handler := newListTestHandler(t)
 
 	create := httptest.NewRequest("PUT", "/bucket", nil)
 	createW := httptest.NewRecorder()
@@ -96,25 +60,7 @@ func TestListV2AcceptsTrailingSlashBucketPath(t *testing.T) {
 }
 
 func TestListV2MissingBucket(t *testing.T) {
-	dir := t.TempDir()
-	store, err := meta.Open(dir + "/meta.db")
-	if err != nil {
-		t.Fatalf("meta.Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eng, err := engine.New(engine.Options{
-		Layout:    fs.NewLayout(dir + "/objects"),
-		MetaStore: store,
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	handler := &Handler{
-		Engine: eng,
-		Meta:   store,
-	}
+	handler := newListTestHandler(t)
 
 	req := httptest.NewRequest("GET", "/missing?list-type=2", nil)
 	w := httptest.NewRecorder()
@@ -127,13 +73,47 @@ func TestListV2MissingBucket(t *testing.T) {
 	}
 }
 
+func TestGetBucketLocationMissingBucket(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	req := httptest.NewRequest("GET", "/missing?location", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 404 {
+		t.Fatalf("GET status: %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "<Code>NoSuchBucket</Code>") {
+		t.Fatalf("expected NoSuchBucket")
+	}
+}
+
 func TestCreateBucket(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	req := httptest.NewRequest("PUT", "/demo/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("PUT status: %d", w.Code)
+	}
+
+	exists, err := handler.Meta.BucketExists(req.Context(), "demo")
+	if err != nil {
+		t.Fatalf("BucketExists: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected bucket to exist")
+	}
+}
+
+func newListTestHandler(t *testing.T) *Handler {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(dir + "/meta.db")
 	if err != nil {
 		t.Fatalf("meta.Open: %v", err)
 	}
-	defer func() { _ = store.Close() }()
+	t.Cleanup(func() { _ = store.Close() })
 
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(dir + "/objects"),
@@ -143,23 +123,8 @@ func TestCreateBucket(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	handler := &Handler{
+	return &Handler{
 		Engine: eng,
 		Meta:   store,
-	}
-
-	req := httptest.NewRequest("PUT", "/demo/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatalf("PUT status: %d", w.Code)
-	}
-
-	exists, err := store.BucketExists(req.Context(), "demo")
-	if err != nil {
-		t.Fatalf("BucketExists: %v", err)
-	}
-	if !exists {
-		t.Fatalf("expected bucket to exist")
 	}
 }
