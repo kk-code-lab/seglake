@@ -233,6 +233,46 @@ func mapAWSConditions(conds map[string]map[string]any) (Conditions, error) {
 	var out Conditions
 	for op, entries := range conds {
 		switch strings.ToLower(op) {
+		case "stringequals", "stringlike":
+			for key, value := range entries {
+				switch strings.ToLower(key) {
+				case "s3:prefix":
+					prefix, like, err := awsPrefixCondition(value, strings.EqualFold(op, "stringlike"))
+					if err != nil {
+						return Conditions{}, err
+					}
+					if out.Prefix != "" && out.Prefix != prefix {
+						return Conditions{}, errors.New("aws policy condition prefix specified multiple times")
+					}
+					out.Prefix = prefix
+					out.PrefixLike = like
+				case "s3:delimiter":
+					delimiter, err := awsSingleString(value)
+					if err != nil {
+						return Conditions{}, err
+					}
+					if strings.Contains(delimiter, "*") {
+						return Conditions{}, errors.New("aws policy delimiter wildcard not supported")
+					}
+					if out.Delimiter != "" && out.Delimiter != delimiter {
+						return Conditions{}, errors.New("aws policy condition delimiter specified multiple times")
+					}
+					out.Delimiter = delimiter
+				default:
+					return Conditions{}, fmt.Errorf("aws policy condition key not supported: %q", key)
+				}
+			}
+		case "bool":
+			for key, value := range entries {
+				if strings.ToLower(key) != "aws:securetransport" {
+					return Conditions{}, fmt.Errorf("aws policy condition key not supported: %q", key)
+				}
+				b, err := awsBoolValue(value)
+				if err != nil {
+					return Conditions{}, err
+				}
+				out.SecureTransport = &b
+			}
 		case "ipaddress":
 			for key, value := range entries {
 				if strings.ToLower(key) != "aws:sourceip" {
@@ -314,6 +354,46 @@ func awsSingleString(value any) (string, error) {
 	default:
 		return "", errors.New("aws policy condition value must be string")
 	}
+}
+
+func awsBoolValue(value any) (bool, error) {
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		default:
+			return false, errors.New("aws policy condition value must be true or false")
+		}
+	case []any:
+		if len(v) != 1 {
+			return false, errors.New("aws policy condition requires single value")
+		}
+		return awsBoolValue(v[0])
+	default:
+		return false, errors.New("aws policy condition value must be true or false")
+	}
+}
+
+func awsPrefixCondition(value any, allowLike bool) (string, bool, error) {
+	prefix, err := awsSingleString(value)
+	if err != nil {
+		return "", false, err
+	}
+	if strings.Contains(prefix, "*") {
+		if !allowLike {
+			return "", false, errors.New("aws policy prefix wildcard not supported")
+		}
+		if !strings.HasSuffix(prefix, "*") || strings.Contains(prefix[:len(prefix)-1], "*") {
+			return "", false, errors.New("aws policy prefix wildcard not supported")
+		}
+		return strings.TrimSuffix(prefix, "*"), true, nil
+	}
+	return prefix, false, nil
 }
 
 func validateAWSPrincipal(principal any) error {

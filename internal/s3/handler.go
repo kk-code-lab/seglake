@@ -766,10 +766,24 @@ func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 			ip = strings.TrimSpace(parts[0])
 		}
 	}
+	secure := r.TLS != nil
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" && h.isTrustedProxy(r.RemoteAddr) {
+		secure = strings.EqualFold(strings.TrimSpace(forwarded), "https")
+	}
+	prefix := ""
+	delimiter := ""
+	if r.URL != nil {
+		q := r.URL.Query()
+		prefix = q.Get("prefix")
+		delimiter = q.Get("delimiter")
+	}
 	return &PolicyContext{
-		Now:      time.Now().UTC(),
-		SourceIP: ip,
-		Headers:  headers,
+		Now:             time.Now().UTC(),
+		SourceIP:        ip,
+		Headers:         headers,
+		Prefix:          prefix,
+		Delimiter:       delimiter,
+		SecureTransport: secure,
 	}
 }
 
