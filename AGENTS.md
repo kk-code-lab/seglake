@@ -22,6 +22,7 @@
 
 - Prefer table-driven tests and subtests; mirror production file names to keep coverage obvious.
 - Keep expensive tests gated; add focused tests when behavior changes.
+- Real-HTTP tests must use the `e2e` build tag and run via `make test-e2e`; untagged tests should use in-process handlers.
 - Smoke (awscli): `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000`.
 
 ## Commit & Pull Request Guidelines
