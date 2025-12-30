@@ -9,7 +9,7 @@
 
 ## Build, Test & Development Commands
 
-- Use `make <target>` for builds/tests; targets include `build`, `run`, `test`, `test-coverage`, `test-race`, `test-e2e`, `fmt`, `lint`, `check`.
+- Use `make <target>` for builds/tests; targets include `build`, `run`, `test`, `test-coverage`, `test-race`, `test-e2e`, `test-all`, `fmt`, `lint`, `check`.
 - `make check` runs lint, builds the binary, and compiles tests without executing them.
 - Run local: `make run` or `make build` + `./build/seglake -data-dir ./data -access-key test -secret-key testsecret` (default addr `:9000`).
 
@@ -22,7 +22,7 @@
 
 - Prefer table-driven tests and subtests; mirror production file names to keep coverage obvious.
 - Keep expensive tests gated; add focused tests when behavior changes.
-- Real-HTTP tests must use the `e2e` build tag and run via `make test-e2e`; untagged tests should use in-process handlers.
+- Real-HTTP tests must use the `e2e` build tag and run via `make test-e2e` (or `make test-all`); untagged tests should use in-process handlers.
 - Smoke (awscli): `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000`.
 
 ## Commit & Pull Request Guidelines

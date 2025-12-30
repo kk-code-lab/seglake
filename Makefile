@@ -1,4 +1,4 @@
-.PHONY: build install test test-coverage test-race test-e2e clean fmt lint check run help
+.PHONY: build install test test-coverage test-race test-e2e test-all clean fmt lint check run help
 
 BINARY_NAME := seglake
 BUILD_DIR := build
@@ -18,7 +18,8 @@ help:
 	@echo "  test               - Run all tests"
 	@echo "  test-coverage      - Run tests with coverage report"
 	@echo "  test-race          - Run tests with race detector"
-	@echo "  test-e2e           - Run e2e tests (tagged)"
+	@echo "  test-e2e           - Run e2e tests only"
+	@echo "  test-all           - Run unit + e2e tests"
 	@echo "  check              - Lint, build, and compile tests without running them"
 	@echo "  run                - Build and run the application (RUN_ARGS=\"...\")"
 	@echo "  clean              - Remove build artifacts"
@@ -48,7 +49,13 @@ test-race:
 
 test-e2e:
 	@echo "Running e2e tests..."
-	@go test $(INTERNAL_PACKAGES) -tags e2e
+	@go test $(INTERNAL_PACKAGES) -tags e2e -run '^TestS3E2E'
+
+test-all:
+	@echo "Running unit tests..."
+	@go test $(INTERNAL_PACKAGES)
+	@echo "Running e2e tests..."
+	@go test $(INTERNAL_PACKAGES) -tags e2e -run '^TestS3E2E'
 
 clean:
 	@echo "Cleaning build artifacts..."
