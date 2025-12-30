@@ -3,7 +3,6 @@ package s3
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 )
 
@@ -38,8 +37,7 @@ func (h *Handler) handleGetBucketPolicy(ctx context.Context, w http.ResponseWrit
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucketPolicy", "bucket policy not found", requestID, r.URL.Path)
 		return
 	}
-	resp := map[string]string{"Policy": policy}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write([]byte(policy))
 }
