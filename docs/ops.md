@@ -353,6 +353,9 @@ Manage keys with `-mode keys`:
 ./build/seglake -mode keys -keys-action delete -key-access=test
 ./build/seglake -mode keys -keys-action set-policy -key-access=test -key-policy='{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo"}]}]}'
 ```
+Allow-list behavior:
+- If an access key has one or more allowed buckets, `GET /` (ListBuckets) returns only those buckets.
+- If the allow-list is empty, `GET /` returns all buckets (subject to policy).
 
 Bucket policies:
 ```

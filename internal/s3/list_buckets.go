@@ -27,7 +27,7 @@ type bucket struct {
 	CreationDate string `xml:"CreationDate"`
 }
 
-func (h *Handler) handleListBuckets(ctx context.Context, w http.ResponseWriter, requestID string) {
+func (h *Handler) handleListBuckets(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
 	if h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, "/")
 		return
@@ -36,6 +36,27 @@ func (h *Handler) handleListBuckets(ctx context.Context, w http.ResponseWriter, 
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, "/")
 		return
+	}
+	accessKey := extractAccessKey(r)
+	if accessKey != "" {
+		allowed, err := h.Meta.ListAllowedBuckets(ctx, accessKey)
+		if err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, "/")
+			return
+		}
+		if len(allowed) > 0 {
+			allowedSet := make(map[string]struct{}, len(allowed))
+			for _, name := range allowed {
+				allowedSet[name] = struct{}{}
+			}
+			filtered := make([]string, 0, len(names))
+			for _, name := range names {
+				if _, ok := allowedSet[name]; ok {
+					filtered = append(filtered, name)
+				}
+			}
+			names = filtered
+		}
 	}
 	out := listBucketsResult{
 		Owner: owner{ID: "seglake", DisplayName: "seglake"},

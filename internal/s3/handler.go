@@ -293,7 +293,7 @@ func isListV1Request(r *http.Request, hasBucketOnly bool) bool {
 func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID, bucketOnly string, hasBucketOnly bool, hostBucket string) bool {
 	switch bucketListKindForRequest(r, hostBucket, hasBucketOnly) {
 	case bucketListBuckets:
-		h.handleListBuckets(ctx, w, requestID)
+		h.handleListBuckets(ctx, w, r, requestID)
 		return true
 	case bucketListV2:
 		h.handleListV2(ctx, w, r, bucketOnly, requestID)
