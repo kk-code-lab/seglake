@@ -399,6 +399,25 @@ Custom JSON policy (stored in `api_keys.policy`):
 ```
 Note: AWS-style policy JSON is accepted as input and mapped to Seglake policy (subset only; unsupported elements are rejected).
 
+Example (AWS-style bucket policy input, allowed subset):
+```
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::demo",
+      "Condition": {
+        "IpAddress": { "aws:SourceIp": ["10.0.0.0/8"] },
+        "DateGreaterThan": { "aws:CurrentTime": "1970-01-01T00:00:00Z" },
+        "DateLessThan": { "aws:CurrentTime": "2999-01-01T00:00:00Z" }
+      }
+    }
+  ]
+}
+```
+
 Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
 `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListMultipartUploads`, `ListMultipartParts`,
