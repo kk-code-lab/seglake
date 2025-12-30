@@ -87,6 +87,34 @@ func TestGetBucketLocationMissingBucket(t *testing.T) {
 	}
 }
 
+func TestHeadBucket(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	req := httptest.NewRequest("HEAD", "/missing", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 404 {
+		t.Fatalf("HEAD status: %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "<Code>NoSuchBucket</Code>") {
+		t.Fatalf("expected NoSuchBucket")
+	}
+
+	create := httptest.NewRequest("PUT", "/demo", nil)
+	createW := httptest.NewRecorder()
+	handler.ServeHTTP(createW, create)
+	if createW.Code != 200 {
+		t.Fatalf("PUT status: %d", createW.Code)
+	}
+
+	okReq := httptest.NewRequest("HEAD", "/demo", nil)
+	okW := httptest.NewRecorder()
+	handler.ServeHTTP(okW, okReq)
+	if okW.Code != 200 {
+		t.Fatalf("HEAD ok status: %d", okW.Code)
+	}
+}
+
 func TestCreateBucket(t *testing.T) {
 	handler := newListTestHandler(t)
 

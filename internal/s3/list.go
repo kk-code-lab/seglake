@@ -153,6 +153,27 @@ func (h *Handler) handleLocation(w http.ResponseWriter, requestID string) {
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
+func (h *Handler) handleHeadBucket(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
+	if h.Meta == nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, r.URL.Path)
+		return
+	}
+	if bucket == "" {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidBucketName", "bucket required", requestID, r.URL.Path)
+		return
+	}
+	exists, err := h.Meta.BucketExists(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
+	if !exists {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, r.URL.Path)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *Handler) listObjects(ctx context.Context, bucket, prefix, delimiter, afterKey, afterVersion string, maxKeys int) ([]listContents, []commonPrefix, int, bool, string, string, error) {
 	pageLimit := maxKeys
 	if pageLimit <= 0 {
