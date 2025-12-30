@@ -151,6 +151,7 @@ make build
 make run
 make test
 make test-race
+make test-e2e
 make fmt
 make lint
 make check

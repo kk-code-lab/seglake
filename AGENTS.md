@@ -9,7 +9,7 @@
 
 ## Build, Test & Development Commands
 
-- Use `make <target>` for builds/tests; targets include `build`, `run`, `test`, `test-coverage`, `test-race`, `fmt`, `lint`, `check`.
+- Use `make <target>` for builds/tests; targets include `build`, `run`, `test`, `test-coverage`, `test-race`, `test-e2e`, `fmt`, `lint`, `check`.
 - `make check` runs lint, builds the binary, and compiles tests without executing them.
 - Run local: `make run` or `make build` + `./build/seglake -data-dir ./data -access-key test -secret-key testsecret` (default addr `:9000`).
 
