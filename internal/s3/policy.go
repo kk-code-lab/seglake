@@ -128,13 +128,19 @@ func ParsePolicy(raw string) (*Policy, error) {
 		}}}, nil
 	}
 	var pol Policy
-	if err := json.Unmarshal([]byte(trimmed), &pol); err != nil {
-		return nil, err
+	if err := json.Unmarshal([]byte(trimmed), &pol); err == nil {
+		if err := pol.validate(); err == nil {
+			return &pol, nil
+		} else if isAWSPolicyJSON(trimmed) {
+			return parseAWSPolicy(trimmed)
+		} else {
+			return nil, err
+		}
 	}
-	if err := pol.validate(); err != nil {
-		return nil, err
+	if isAWSPolicyJSON(trimmed) {
+		return parseAWSPolicy(trimmed)
 	}
-	return &pol, nil
+	return nil, errors.New("invalid policy json")
 }
 
 func (p *Policy) validate() error {

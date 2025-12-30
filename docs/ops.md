@@ -397,7 +397,7 @@ Custom JSON policy (stored in `api_keys.policy`):
   ]
 }
 ```
-Note: AWS-style policy JSON (`Version`/`Statement`/`Principal`/`Resource` ARN) is not supported.
+Note: AWS-style policy JSON is accepted as input and mapped to Seglake policy (subset only; unsupported elements are rejected).
 
 Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
