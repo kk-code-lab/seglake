@@ -152,6 +152,7 @@ make run
 make test
 make test-race
 make test-e2e
+make test-all
 make fmt
 make lint
 make check
