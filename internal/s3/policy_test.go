@@ -105,3 +105,96 @@ func TestPolicyConditionsHeaders(t *testing.T) {
 		t.Fatalf("expected deny for header mismatch")
 	}
 }
+
+func TestParsePolicyAWSBasic(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::demo/public/*"
+    }
+  ]
+}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy aws: %v", err)
+	}
+	if !pol.Allows("GetObject", "demo", "public/x") {
+		t.Fatalf("expected allow for aws prefix")
+	}
+	if pol.Allows("GetObject", "demo", "private/x") {
+		t.Fatalf("expected deny for non-prefix")
+	}
+}
+
+func TestParsePolicyAWSConditions(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::demo",
+      "Condition": {
+        "IpAddress": { "aws:SourceIp": ["10.0.0.0/8"] },
+        "DateGreaterThan": { "aws:CurrentTime": "1970-01-01T00:00:00Z" },
+        "DateLessThan": { "aws:CurrentTime": "2999-01-01T00:00:00Z" }
+      }
+    }
+  ]
+}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy aws: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), SourceIP: "10.1.1.1"}
+	if allowed, _ := pol.DecisionWithContext("ListBucket", "demo", "", ctx); !allowed {
+		t.Fatalf("expected allow for aws conditions")
+	}
+}
+
+func TestParsePolicyAWSUnsupportedAction(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:PutBucketAcl",
+    "Resource": "arn:aws:s3:::demo"
+  }]
+}`
+	if _, err := ParsePolicy(raw); err == nil {
+		t.Fatalf("expected unsupported action error")
+	}
+}
+
+func TestParsePolicyAWSUnsupportedPrincipal(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:ListBucket",
+    "Resource": "arn:aws:s3:::demo",
+    "Principal": {"AWS": "arn:aws:iam::123456789012:user/bob"}
+  }]
+}`
+	if _, err := ParsePolicy(raw); err == nil {
+		t.Fatalf("expected unsupported principal error")
+	}
+}
+
+func TestParsePolicyAWSUnsupportedCondition(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:ListBucket",
+    "Resource": "arn:aws:s3:::demo",
+    "Condition": {"StringEquals": {"s3:prefix": "public/"}}
+  }]
+}`
+	if _, err := ParsePolicy(raw); err == nil {
+		t.Fatalf("expected unsupported condition error")
+	}
+}
