@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -298,6 +299,78 @@ func TestPolicyConditionsHeadersEnforced(t *testing.T) {
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("GET status: %d", resp2.StatusCode)
+	}
+}
+
+func TestGetBucketPolicy(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}`
+	server, handler, cleanup := newPolicyServer(t, "rw")
+	defer cleanup()
+
+	ctx := context.Background()
+	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+	if err := handler.Meta.SetBucketPolicy(ctx, "demo", policy); err != nil {
+		t.Fatalf("SetBucketPolicy: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get bucket policy error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get bucket policy status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	var out struct {
+		Policy string `json:"Policy"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.Policy != policy {
+		t.Fatalf("unexpected policy: %q", out.Policy)
+	}
+}
+
+func TestGetBucketPolicyMissing(t *testing.T) {
+	server, handler, cleanup := newPolicyServer(t, "rw")
+	defer cleanup()
+
+	ctx := context.Background()
+	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get bucket policy error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get bucket policy status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<Code>NoSuchBucketPolicy</Code>")) {
+		t.Fatalf("expected NoSuchBucketPolicy")
 	}
 }
 
