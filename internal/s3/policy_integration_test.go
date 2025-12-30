@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -332,14 +333,16 @@ func TestGetBucketPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	var out struct {
-		Policy string `json:"Policy"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if out.Policy != policy {
-		t.Fatalf("unexpected policy: %q", out.Policy)
+	var want map[string]any
+	if err := json.Unmarshal([]byte(policy), &want); err != nil {
+		t.Fatalf("Unmarshal policy: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected policy body")
 	}
 }
 
