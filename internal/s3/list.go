@@ -56,6 +56,15 @@ type locationResult struct {
 }
 
 func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
+	exists, err := h.Meta.BucketExists(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
+	if !exists {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, r.URL.Path)
+		return
+	}
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
@@ -91,6 +100,15 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 }
 
 func (h *Handler) handleListV1(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID string) {
+	exists, err := h.Meta.BucketExists(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
+	if !exists {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, r.URL.Path)
+		return
+	}
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
