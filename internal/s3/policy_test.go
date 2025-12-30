@@ -198,3 +198,22 @@ func TestParsePolicyAWSUnsupportedCondition(t *testing.T) {
 		t.Fatalf("expected unsupported condition error")
 	}
 }
+
+func FuzzParsePolicyAWS(f *testing.F) {
+	valid := `{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:GetObject"],
+    "Resource": "arn:aws:s3:::demo/public/*"
+  }]
+}`
+	invalid := `{ "Version": "2012-10-17", "Statement": [{"Effect": "Allow"}] }`
+	f.Add(valid)
+	f.Add(invalid)
+	f.Add(`{"Statement": "nope"}`)
+	f.Add(`{"Version": 1, "Statement": []}`)
+	f.Fuzz(func(t *testing.T, input string) {
+		_, _ = ParsePolicy(input)
+	})
+}
