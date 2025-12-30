@@ -245,38 +245,51 @@ const (
 	bucketListLocation
 	bucketListUploads
 	bucketGetPolicy
+	bucketPutPolicy
+	bucketDeletePolicy
 )
 
 func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly bool) bucketListKind {
-	if r.Method != http.MethodGet {
+	if r.Method == http.MethodGet {
+		if r.URL.Path == "/" && hostBucket == "" && r.URL.Query().Get("list-type") == "" {
+			return bucketListBuckets
+		}
+		if r.URL.Query().Get("list-type") == "2" {
+			if !hasBucketOnly {
+				return bucketListNone
+			}
+			return bucketListV2
+		}
+		if r.URL.Query().Has("location") {
+			if !hasBucketOnly {
+				return bucketListNone
+			}
+			return bucketListLocation
+		}
+		if r.URL.Query().Has("uploads") {
+			if !hasBucketOnly {
+				return bucketListNone
+			}
+			return bucketListUploads
+		}
+		if r.URL.Query().Has("policy") {
+			if !hasBucketOnly && hostBucket == "" {
+				return bucketListNone
+			}
+			return bucketGetPolicy
+		}
 		return bucketListNone
-	}
-	if r.URL.Path == "/" && hostBucket == "" && r.URL.Query().Get("list-type") == "" {
-		return bucketListBuckets
-	}
-	if r.URL.Query().Get("list-type") == "2" {
-		if !hasBucketOnly {
-			return bucketListNone
-		}
-		return bucketListV2
-	}
-	if r.URL.Query().Has("location") {
-		if !hasBucketOnly {
-			return bucketListNone
-		}
-		return bucketListLocation
-	}
-	if r.URL.Query().Has("uploads") {
-		if !hasBucketOnly {
-			return bucketListNone
-		}
-		return bucketListUploads
 	}
 	if r.URL.Query().Has("policy") {
 		if !hasBucketOnly && hostBucket == "" {
 			return bucketListNone
 		}
-		return bucketGetPolicy
+		switch r.Method {
+		case http.MethodPut:
+			return bucketPutPolicy
+		case http.MethodDelete:
+			return bucketDeletePolicy
+		}
 	}
 	return bucketListNone
 }
@@ -318,6 +331,20 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 			bucket = hostBucket
 		}
 		h.handleGetBucketPolicy(ctx, w, r, bucket, requestID)
+		return true
+	case bucketPutPolicy:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handlePutBucketPolicy(ctx, w, r, bucket, requestID)
+		return true
+	case bucketDeletePolicy:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleDeleteBucketPolicy(ctx, w, r, bucket, requestID)
 		return true
 	}
 	return false
@@ -1351,13 +1378,27 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		return "list_buckets"
 	}
-	if r.Method == http.MethodGet && r.URL.Query().Has("policy") {
+	if (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Has("policy") {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path != "" && !strings.Contains(path, "/") {
-			return "get_bucket_policy"
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_policy"
+			case http.MethodPut:
+				return "put_bucket_policy"
+			case http.MethodDelete:
+				return "delete_bucket_policy"
+			}
 		}
 		if path == "" && h.hostBucket(r) != "" {
-			return "get_bucket_policy"
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_policy"
+			case http.MethodPut:
+				return "put_bucket_policy"
+			case http.MethodDelete:
+				return "delete_bucket_policy"
+			}
 		}
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {

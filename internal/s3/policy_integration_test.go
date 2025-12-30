@@ -377,6 +377,119 @@ func TestGetBucketPolicyMissing(t *testing.T) {
 	}
 }
 
+func TestPutDeleteBucketPolicy(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["ListBucket"],"resources":[{"bucket":"demo"}]}]}`
+	server, handler, cleanup := newPolicyServer(t, "rw")
+	defer cleanup()
+
+	ctx := context.Background()
+	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/demo?policy", bytes.NewReader([]byte(policy)))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(putReq, "ak", "sk", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("put bucket policy error: %v", err)
+	}
+	defer func() { _ = putResp.Body.Close() }()
+	if putResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("put bucket policy status: %d", putResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(getReq, "ak", "sk", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("get bucket policy error: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get bucket policy status: %d", getResp.StatusCode)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal([]byte(policy), &want); err != nil {
+		t.Fatalf("Unmarshal policy: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected policy body")
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, server.URL+"/demo?policy", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(delReq, "ak", "sk", "us-east-1")
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete bucket policy error: %v", err)
+	}
+	defer func() { _ = delResp.Body.Close() }()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete bucket policy status: %d", delResp.StatusCode)
+	}
+
+	missingReq, err := http.NewRequest(http.MethodGet, server.URL+"/demo?policy", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(missingReq, "ak", "sk", "us-east-1")
+	missingResp, err := http.DefaultClient.Do(missingReq)
+	if err != nil {
+		t.Fatalf("get bucket policy error: %v", err)
+	}
+	defer func() { _ = missingResp.Body.Close() }()
+	if missingResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get bucket policy status: %d", missingResp.StatusCode)
+	}
+}
+
+func TestPutBucketPolicyInvalid(t *testing.T) {
+	server, handler, cleanup := newPolicyServer(t, "rw")
+	defer cleanup()
+
+	ctx := context.Background()
+	if _, _, err := handler.Engine.PutObject(ctx, "demo", "obj", "", bytes.NewReader([]byte("ok"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/demo?policy", bytes.NewReader([]byte("not-json")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestTest(putReq, "ak", "sk", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("put bucket policy error: %v", err)
+	}
+	defer func() { _ = putResp.Body.Close() }()
+	if putResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("put bucket policy status: %d", putResp.StatusCode)
+	}
+	body, err := io.ReadAll(putResp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Contains(body, []byte("<Code>InvalidArgument</Code>")) {
+		t.Fatalf("expected InvalidArgument")
+	}
+}
+
 func TestPolicyConditionsTimeWindowEnforced(t *testing.T) {
 	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"demo","prefix":"public/"}],"conditions":{"after":"1970-01-01T00:00:00Z","before":"2999-01-01T00:00:00Z"}}]}`
 	if pol, err := ParsePolicy(policy); err != nil {
