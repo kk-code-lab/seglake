@@ -397,6 +397,7 @@ Custom JSON policy (stored in `api_keys.policy`):
   ]
 }
 ```
+Note: AWS-style policy JSON (`Version`/`Statement`/`Principal`/`Resource` ARN) is not supported.
 
 Actions: `ListBuckets`, `ListBucket`, `GetBucketLocation`, `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy`, `GetObject`, `HeadObject`, `PutObject`,
 `DeleteObject`, `DeleteBucket`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`,
