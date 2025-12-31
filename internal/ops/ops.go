@@ -23,6 +23,7 @@ type Report struct {
 	FinishedAt              time.Time       `json:"finished_at"`
 	Mode                    string          `json:"mode"`
 	Manifests               int             `json:"manifests"`
+	LiveManifests           int             `json:"live_manifests"`
 	Segments                int             `json:"segments"`
 	Errors                  int             `json:"errors"`
 	ErrorSample             []string        `json:"error_sample"`
@@ -111,18 +112,32 @@ func Status(layout fs.Layout) (*Report, error) {
 	report.Segments = len(segments)
 	report.FinishedAt = time.Now().UTC()
 	if store, err := meta.Open(filepath.Join(layout.Root, "meta.db")); err == nil {
+		livePaths, err := store.ListLiveManifestPaths(context.Background())
+		if err == nil {
+			mpuPaths, mpuErr := store.ListMultipartPartManifestPaths(context.Background())
+			if mpuErr == nil {
+				livePaths = mergeUniquePaths(livePaths, mpuPaths)
+			} else {
+				report.addWarning(fmt.Sprintf("ops: list MPU manifests failed (%v)", mpuErr))
+			}
+			report.LiveManifests = len(livePaths)
+		} else {
+			report.addWarning(fmt.Sprintf("ops: list live manifests failed (%v)", err))
+		}
 		if repl, err := store.GetReplStats(context.Background()); err == nil {
 			report.Replication = repl
 		}
 		_ = store.Close()
+	} else {
+		report.addWarning(fmt.Sprintf("ops: meta open failed (%v)", err))
 	}
 	return report, nil
 }
 
 // Fsck validates manifests and segment boundaries.
-func Fsck(layout fs.Layout) (*Report, error) {
+func Fsck(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 	report := newReport("fsck")
-	manifests, err := listFiles(layout.ManifestsDir)
+	manifests, store, err := listManifestPaths(layout, metaPath, liveOnly, report)
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +145,8 @@ func Fsck(layout fs.Layout) (*Report, error) {
 
 	segmentInfo := make(map[string]os.FileInfo)
 	segmentSeen := make(map[string]struct{})
-	store, err := meta.Open(filepath.Join(layout.Root, "meta.db"))
-	if err != nil {
-		store = nil
+	if store == nil && metaPath != "" {
+		store, _ = meta.Open(metaPath)
 	}
 	if store != nil {
 		defer func() { _ = store.Close() }()
@@ -223,20 +237,21 @@ func Fsck(layout fs.Layout) (*Report, error) {
 }
 
 // Scrub verifies chunk hashes against stored data.
-func Scrub(layout fs.Layout, metaPath string) (*Report, error) {
+func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 	report := newReport("scrub")
-	manifests, err := listFiles(layout.ManifestsDir)
+	manifests, store, err := listManifestPaths(layout, metaPath, liveOnly, report)
 	if err != nil {
 		return nil, err
 	}
 	report.Manifests = len(manifests)
 
-	var store *meta.Store
-	if metaPath != "" {
+	if store == nil && metaPath != "" {
 		store, err = meta.Open(metaPath)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if store != nil {
 		defer func() { _ = store.Close() }()
 	}
 
@@ -335,9 +350,9 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 	}
 	snapDir := filepath.Join(outDir, "snapshot")
 	_, _ = Snapshot(layout, metaPath, snapDir)
-	fsck, _ := Fsck(layout)
+	fsck, _ := Fsck(layout, metaPath, true)
 	_ = writeJSON(filepath.Join(outDir, "fsck.json"), fsck)
-	scrub, _ := Scrub(layout, metaPath)
+	scrub, _ := Scrub(layout, metaPath, true)
 	_ = writeJSON(filepath.Join(outDir, "scrub.json"), scrub)
 	if metaPath != "" {
 		if store, err := meta.Open(metaPath); err == nil {
@@ -594,6 +609,47 @@ func mergeUniquePaths(a, b []string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+func listManifestPaths(layout fs.Layout, metaPath string, liveOnly bool, report *Report) ([]string, *meta.Store, error) {
+	if !liveOnly {
+		manifests, err := listFiles(layout.ManifestsDir)
+		return manifests, nil, err
+	}
+	if metaPath == "" {
+		if report != nil {
+			report.addWarning("ops: meta path missing, scanning all manifests")
+		}
+		manifests, err := listFiles(layout.ManifestsDir)
+		return manifests, nil, err
+	}
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		if report != nil {
+			report.addWarning(fmt.Sprintf("ops: meta open failed (%v), scanning all manifests", err))
+		}
+		manifests, err := listFiles(layout.ManifestsDir)
+		return manifests, nil, err
+	}
+	livePaths, err := store.ListLiveManifestPaths(context.Background())
+	if err != nil {
+		if report != nil {
+			report.addWarning(fmt.Sprintf("ops: list live manifests failed (%v), scanning all manifests", err))
+		}
+		_ = store.Close()
+		manifests, err := listFiles(layout.ManifestsDir)
+		return manifests, nil, err
+	}
+	mpuPaths, err := store.ListMultipartPartManifestPaths(context.Background())
+	if err != nil {
+		if report != nil {
+			report.addWarning(fmt.Sprintf("ops: list MPU manifests failed (%v), scanning all manifests", err))
+		}
+		_ = store.Close()
+		manifests, err := listFiles(layout.ManifestsDir)
+		return manifests, nil, err
+	}
+	return mergeUniquePaths(livePaths, mpuPaths), store, nil
 }
 
 func listFiles(dir string) ([]string, error) {

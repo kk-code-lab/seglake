@@ -23,6 +23,8 @@ type opsRunRequest struct {
 	SnapshotDir       string  `json:"snapshot_dir,omitempty"`
 	RebuildMeta       string  `json:"rebuild_meta,omitempty"`
 	ReplCompareDir    string  `json:"repl_compare_dir,omitempty"`
+	FsckAllManifests  bool    `json:"fsck_all_manifests,omitempty"`
+	ScrubAllManifests bool    `json:"scrub_all_manifests,omitempty"`
 	GCMinAgeNanos     int64   `json:"gc_min_age_nanos,omitempty"`
 	GCForce           bool    `json:"gc_force,omitempty"`
 	GCWarnSegments    int     `json:"gc_warn_segments,omitempty"`
@@ -60,6 +62,8 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 			SnapshotDir:       opts.snapshotDir,
 			RebuildMeta:       opts.rebuildMeta,
 			ReplCompareDir:    opts.replCompareDir,
+			FsckAllManifests:  opts.fsckAllManifests,
+			ScrubAllManifests: opts.scrubAllManifests,
 			GCMinAgeNanos:     int64(opts.gcMinAge),
 			GCForce:           opts.gcForce,
 			GCWarnSegments:    opts.gcWarnSegments,
@@ -93,7 +97,7 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		MaxUploads:         opts.mpuMaxUploads,
 		MaxReclaimedBytes:  opts.mpuMaxReclaim,
 	}
-	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.jsonOut)
+	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.jsonOut)
 }
 
 func runOpsRemote(url string, req opsRunRequest, jsonOut bool, accessKey, secretKey, region string) error {
@@ -174,7 +178,7 @@ func normalizeOpsURL(addr string) string {
 	return addr + "/v1/ops/run"
 }
 
-func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -184,9 +188,9 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, gcMinAg
 	case "status":
 		report, err = ops.Status(layout)
 	case "fsck":
-		report, err = ops.Fsck(layout)
+		report, err = ops.Fsck(layout, metaPath, !fsckAllManifests)
 	case "scrub":
-		report, err = ops.Scrub(layout, metaPath)
+		report, err = ops.Scrub(layout, metaPath, !scrubAllManifests)
 	case "snapshot":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "snapshots", "snapshot-"+fmtTime())
@@ -274,6 +278,12 @@ func formatReport(report *ops.Report) string {
 			report.CompareLiveRemote,
 			report.Errors,
 		)
+	}
+	if report.Mode == "status" && report.LiveManifests > 0 {
+		if report.Warnings > 0 {
+			return fmt.Sprintf("mode=%s manifests_total=%d live_manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.LiveManifests, report.Segments, report.Errors, report.Warnings)
+		}
+		return fmt.Sprintf("mode=%s manifests_total=%d live_manifests=%d segments=%d errors=%d", report.Mode, report.Manifests, report.LiveManifests, report.Segments, report.Errors)
 	}
 	if report.Warnings > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
