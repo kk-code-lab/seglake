@@ -20,6 +20,7 @@ Tag legend (order used below):
 - [observability][repl] Add conflict metrics per bucket/key to highlight hotspots.
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
+- [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Support `If-Match: *` semantics for overwrite guard (only if object exists).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 
