@@ -61,6 +61,24 @@ More: `docs/ops.md`.
 
 ---
 
+## Maintenance quickstart
+
+Run unsafe ops without stopping the server by entering maintenance (quiesced) mode and using an `ops` policy key:
+
+```
+./build/seglake -mode keys -keys-action create -key-access=ops -key-secret=opsecret -key-policy=ops
+./build/seglake -mode maintenance -maintenance-action enable
+./build/seglake -mode gc-run -gc-force -ops-access-key=ops -ops-secret-key=opsecret
+./build/seglake -mode maintenance -maintenance-action disable
+```
+
+Notes:
+- `gc-run` (and other destructive ops) require `-gc-force`.
+- `/v1/ops/run` only accepts keys with policy `ops` (not `rw`).
+- See `docs/ops.md` for full details and troubleshooting.
+
+---
+
 ## S3 compatibility (selected)
 
 | Feature | Status | Notes |

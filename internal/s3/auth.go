@@ -17,6 +17,8 @@ import (
 type AuthConfig struct {
 	AccessKey            string
 	SecretKey            string
+	OpsAccessKey         string
+	OpsSecretKey         string
 	Region               string
 	MaxSkew              time.Duration
 	AllowUnsignedPayload bool
@@ -252,6 +254,12 @@ func (c *AuthConfig) secretFor(ctx context.Context, accessKey string) (string, e
 			return "", errAccessDenied
 		}
 		return c.SecretKey, nil
+	}
+	if c.OpsAccessKey != "" && accessKey == c.OpsAccessKey {
+		if c.OpsSecretKey == "" {
+			return "", errAccessDenied
+		}
+		return c.OpsSecretKey, nil
 	}
 	if c.SecretLookup == nil {
 		return "", errAccessDenied

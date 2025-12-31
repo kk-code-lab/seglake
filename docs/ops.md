@@ -272,7 +272,7 @@ Safe (no prompt):
 
 | Mode | Note |
 | --- | --- |
-| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `repl-validate` | Read-only or metadata changes only. |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
 
 Unsafe (prompt required):
 
@@ -284,6 +284,49 @@ Examples:
 ```
 ./build/seglake -mode gc-run -data-dir /var/lib/seglake -gc-force
 ./build/seglake -mode gc-run -data-dir /var/lib/seglake -gc-force -yes
+```
+
+## Maintenance mode (read-only)
+
+Toggle a global read-only switch that blocks write operations over HTTP while still allowing GET/HEAD/LIST:
+```
+./build/seglake -mode maintenance -maintenance-action status
+./build/seglake -mode maintenance -maintenance-action enable
+./build/seglake -mode maintenance -maintenance-action disable
+```
+Notes:
+- States: `off` → `entering` → `quiesced` (writes drained) → `exiting` → `off`.
+- Applies to S3 and replication write endpoints (writes only).
+- Read-only operations continue to work.
+- Unsafe ops allowed without a live prompt when maintenance is `quiesced`: `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`.
+- `maintenance status` reports `write_inflight` when the server is running.
+- `/v1/meta/stats` includes `maintenance_state`, `maintenance_updated_at`, `write_inflight`, and `maintenance_transitions`.
+- Smoke script: `scripts/maintenance_smoke.sh` (expects a running server and `SEGLAKE_DATA_DIR`).
+- `segctl` helper:
+  - `scripts/segctl maintenance status|enable|disable`
+  - `scripts/segctl ops <mode> -- <flags>`
+    - example: `scripts/segctl ops gc-run -- -gc-force`
+
+Ops over HTTP (server-side):
+- When the server is running and maintenance is `quiesced`, unsafe ops run via `POST /v1/ops/run`.
+- CLI automatically uses this path when it detects a running server + `quiesced` (or you can set `-ops-url`).
+- If API keys are configured on the server, pass `-ops-access-key` / `-ops-secret-key` (SigV4 presign).
+- `/v1/ops/run` requires a key with policy `ops`; `rw` is not sufficient. Exception: the server ops key set via `-ops-access-key/-ops-secret-key` (env `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY`) is treated as `ops` for `/v1/ops/run` (defaults to the main access/secret if unset).
+
+Example (create ops key + run gc-run):
+```
+./build/seglake -mode keys -keys-action create -key-access=ops -key-secret=opsecret -key-policy=ops
+./build/seglake -mode maintenance -maintenance-action enable
+./build/seglake -mode gc-run -gc-force -ops-access-key=ops -ops-secret-key=opsecret
+./build/seglake -mode maintenance -maintenance-action disable
+```
+
+Example (server ops key via env):
+```
+export SEGLAKE_OPS_ACCESS_KEY=ops
+export SEGLAKE_OPS_SECRET_KEY=opsecret
+./build/seglake -mode maintenance -maintenance-action enable
+./build/seglake -mode gc-run -gc-force
 ```
 
 ## GC/MPU guardrails

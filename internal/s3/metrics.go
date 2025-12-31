@@ -27,6 +27,9 @@ type Metrics struct {
 	bytesIn        atomic.Int64
 	bytesOut       atomic.Int64
 	replayDetected atomic.Int64
+
+	maintMu          sync.Mutex
+	maintTransitions map[string]int64
 }
 
 type latencyWindow struct {
@@ -47,13 +50,14 @@ type LatencyStats struct {
 // NewMetrics creates a Metrics instance.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		requests:       make(map[string]map[string]int64),
-		inflight:       make(map[string]int64),
-		latency:        make(map[string]*latencyWindow),
-		bucketRequests: make(map[string]map[string]int64),
-		bucketLatency:  make(map[string]*latencyWindow),
-		keyRequests:    make(map[string]map[string]int64),
-		keyLatency:     make(map[string]*latencyWindow),
+		requests:         make(map[string]map[string]int64),
+		inflight:         make(map[string]int64),
+		latency:          make(map[string]*latencyWindow),
+		bucketRequests:   make(map[string]map[string]int64),
+		bucketLatency:    make(map[string]*latencyWindow),
+		keyRequests:      make(map[string]map[string]int64),
+		keyLatency:       make(map[string]*latencyWindow),
+		maintTransitions: make(map[string]int64),
 	}
 }
 
@@ -96,6 +100,15 @@ func (m *Metrics) IncReplayDetected() {
 		return
 	}
 	m.replayDetected.Add(1)
+}
+
+func (m *Metrics) IncMaintenanceTransition(state string) {
+	if m == nil || state == "" {
+		return
+	}
+	m.maintMu.Lock()
+	m.maintTransitions[state]++
+	m.maintMu.Unlock()
 }
 
 func (m *Metrics) Record(op string, status int, dur time.Duration, bucketName, key string) {
@@ -148,9 +161,9 @@ func (m *Metrics) Record(op string, status int, dur time.Duration, bucketName, k
 	}
 }
 
-func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, replayDetected int64, latency map[string]LatencyStats, bucketReqs map[string]map[string]int64, bucketLatency map[string]LatencyStats, keyReqs map[string]map[string]int64, keyLatency map[string]LatencyStats) {
+func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map[string]int64, bytesIn, bytesOut int64, replayDetected int64, latency map[string]LatencyStats, bucketReqs map[string]map[string]int64, bucketLatency map[string]LatencyStats, keyReqs map[string]map[string]int64, keyLatency map[string]LatencyStats, maintTransitions map[string]int64) {
 	if m == nil {
-		return nil, nil, 0, 0, 0, nil, nil, nil, nil, nil
+		return nil, nil, 0, 0, 0, nil, nil, nil, nil, nil, nil
 	}
 	requests = make(map[string]map[string]int64)
 	m.requestsMu.Lock()
@@ -211,7 +224,14 @@ func (m *Metrics) Snapshot() (requests map[string]map[string]int64, inflight map
 	}
 	m.keyMu.Unlock()
 
-	return requests, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency
+	maintTransitions = make(map[string]int64)
+	m.maintMu.Lock()
+	for state, v := range m.maintTransitions {
+		maintTransitions[state] = v
+	}
+	m.maintMu.Unlock()
+
+	return requests, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency, maintTransitions
 }
 
 func updateClassMap(target map[string]map[string]int64, key, class string, limit int) {

@@ -64,7 +64,7 @@ func TestReplaySoftDoesNotBlock(t *testing.T) {
 	if w2.Code == http.StatusForbidden {
 		t.Fatalf("expected replay to be logged only, got %d", w2.Code)
 	}
-	_, _, _, _, replayDetected, _, _, _, _, _ := handler.Metrics.Snapshot()
+	_, _, _, _, replayDetected, _, _, _, _, _, _ := handler.Metrics.Snapshot()
 	if replayDetected != 1 {
 		t.Fatalf("expected replay detected 1, got %d", replayDetected)
 	}
