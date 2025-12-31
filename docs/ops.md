@@ -280,6 +280,13 @@ Unsafe (prompt required):
 | --- | --- |
 | `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `repl-pull`, `repl-push`, `repl-bootstrap` | Writes or rewrites data/metadata; use maintenance window. |
 
+Fsck/scrub scope:
+- By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
+- Use `-fsck-all-manifests` / `-scrub-all-manifests` to scan every manifest file on disk (including orphans).
+
+Status:
+- `status` reports `live_manifests` (from `meta.db` + MPU parts) when available; falls back to disk-only counts if meta can't be opened.
+
 Examples:
 ```
 ./build/seglake -mode gc-run -data-dir /var/lib/seglake -gc-force
@@ -301,11 +308,13 @@ Notes:
 - Unsafe ops allowed without a live prompt when maintenance is `quiesced`: `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`.
 - `maintenance status` reports `write_inflight` when the server is running.
 - `/v1/meta/stats` includes `maintenance_state`, `maintenance_updated_at`, `write_inflight`, and `maintenance_transitions`.
+- `/v1/meta/stats` includes `live_manifests` (count from meta + MPU parts) and `manifests_total` (all manifest files on disk).
 - Smoke script: `scripts/maintenance_smoke.sh` (expects a running server and `SEGLAKE_DATA_DIR`).
 - `segctl` helper:
   - `scripts/segctl maintenance status|enable|disable`
   - `scripts/segctl ops <mode> -- <flags>`
     - example: `scripts/segctl ops gc-run -- -gc-force`
+  - `scripts/segctl stats --endpoint http://127.0.0.1:9000 --access test --secret testsecret`
 
 Ops over HTTP (server-side):
 - When the server is running and maintenance is `quiesced`, unsafe ops run via `POST /v1/ops/run`.

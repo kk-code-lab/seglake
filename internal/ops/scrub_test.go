@@ -63,7 +63,7 @@ func TestScrubMarksDamagedVersion(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	report, err := Scrub(layout, metaPath)
+	report, err := Scrub(layout, metaPath, true)
 	if err != nil {
 		t.Fatalf("Scrub: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestScrubReportsShortRead(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	report, err := Scrub(layout, metaPath)
+	report, err := Scrub(layout, metaPath, true)
 	if err != nil {
 		t.Fatalf("Scrub: %v", err)
 	}

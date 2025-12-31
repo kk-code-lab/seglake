@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 )
@@ -12,6 +14,8 @@ type statsResponse struct {
 	Objects                 int64                       `json:"objects"`
 	Segments                int64                       `json:"segments"`
 	BytesLive               int64                       `json:"bytes_live"`
+	LiveManifests           int64                       `json:"live_manifests"`
+	ManifestsTotal          int64                       `json:"manifests_total"`
 	LastFsckAt              string                      `json:"last_fsck_at,omitempty"`
 	LastFsckErrors          int                         `json:"last_fsck_errors,omitempty"`
 	LastScrubAt             string                      `json:"last_scrub_at,omitempty"`
@@ -70,10 +74,37 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
+	liveManifests := int64(0)
+	manifestsTotal := int64(0)
+	if livePaths, err := h.Meta.ListLiveManifestPaths(ctx); err == nil {
+		seen := make(map[string]struct{}, len(livePaths))
+		for _, path := range livePaths {
+			if path == "" {
+				continue
+			}
+			seen[path] = struct{}{}
+		}
+		if mpuPaths, err := h.Meta.ListMultipartPartManifestPaths(ctx); err == nil {
+			for _, path := range mpuPaths {
+				if path == "" {
+					continue
+				}
+				seen[path] = struct{}{}
+			}
+		}
+		liveManifests = int64(len(seen))
+	}
+	if h.Engine != nil {
+		if total, err := countFiles(h.Engine.Layout().ManifestsDir); err == nil {
+			manifestsTotal = total
+		}
+	}
 	resp := statsResponse{
 		Objects:                 stats.Objects,
 		Segments:                stats.Segments,
 		BytesLive:               stats.BytesLive,
+		LiveManifests:           liveManifests,
+		ManifestsTotal:          manifestsTotal,
 		LastFsckAt:              stats.LastFsckAt,
 		LastFsckErrors:          stats.LastFsckErrors,
 		LastScrubAt:             stats.LastScrubAt,
@@ -112,4 +143,25 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func countFiles(dir string) (int64, error) {
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		total++
+		return nil
+	})
+	return total, err
 }

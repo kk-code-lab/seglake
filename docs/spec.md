@@ -240,7 +240,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 5.2 Stats API
 `GET /v1/meta/stats` (JSON):
-- objects, segments, bytes_live,
+- objects, segments, bytes_live, live_manifests, manifests_total,
 - last fsck/scrub/gc results (time + errors + reclaim/rewritten),
 - requests_total{op,status_class}, inflight{op},
 - bytes_in_total, bytes_out_total,

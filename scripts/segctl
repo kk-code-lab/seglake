@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
+import hmac
 import os
 import secrets
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 
 
@@ -398,6 +403,68 @@ def ops_run(cfg: Config, mode: str, extra_args: list[str]) -> None:
     run(cmd)
 
 
+def presign_url(method: str, url: str, access_key: str, secret_key: str, region: str, expires: int) -> str:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc
+    if not host:
+        die(f"invalid endpoint url: {url}")
+    uri = parsed.path or "/"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    credential_scope = f"{date_stamp}/{region}/s3/aws4_request"
+    params = {
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Credential": f"{access_key}/{credential_scope}",
+        "X-Amz-Date": amz_date,
+        "X-Amz-Expires": str(expires),
+        "X-Amz-SignedHeaders": "host",
+    }
+    if parsed.query:
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
+            params[key] = value
+    canonical_qs = "&".join(
+        f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='-_.~')}"
+        for k, v in sorted(params.items())
+    )
+    canonical_headers = f"host:{host}\n"
+    signed_headers = "host"
+    payload_hash = "UNSIGNED-PAYLOAD"
+    canonical_request = "\n".join([method, uri, canonical_qs, canonical_headers, signed_headers, payload_hash])
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+
+    def sign(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+    k_date = sign(("AWS4" + secret_key).encode(), date_stamp)
+    k_region = sign(k_date, region)
+    k_service = sign(k_region, "s3")
+    k_signing = sign(k_service, "aws4_request")
+    signature = hmac.new(k_signing, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    return f"{parsed.scheme}://{host}{uri}?{canonical_qs}&X-Amz-Signature={signature}"
+
+
+def stats_fetch(cfg: Config, endpoint: str, access_key: str, secret_key: str, region: str, expires: int) -> None:
+    if not access_key or not secret_key:
+        die("stats requires --access and --secret (or SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY)")
+    if not region:
+        region = "us-east-1"
+    if not endpoint:
+        endpoint = "http://127.0.0.1:9000"
+    url = endpoint.rstrip("/") + "/v1/meta/stats"
+    signed = presign_url("GET", url, access_key, secret_key, region, expires)
+    with urllib.request.urlopen(signed, timeout=10) as resp:
+        body = resp.read().decode("utf-8")
+    print(body)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     if not argv:
         base = argparse.ArgumentParser(
@@ -489,6 +556,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ops_cmd.add_argument("mode")
     ops_cmd.add_argument("args", nargs=argparse.REMAINDER)
 
+    stats_cmd = subparsers.add_parser("stats")
+    stats_cmd.add_argument("--endpoint", default=os.getenv("SEGLAKE_ENDPOINT", "http://127.0.0.1:9000"))
+    stats_cmd.add_argument("--access", default=os.getenv("SEGLAKE_ACCESS_KEY", ""))
+    stats_cmd.add_argument("--secret", default=os.getenv("SEGLAKE_SECRET_KEY", ""))
+    stats_cmd.add_argument("--region", default=os.getenv("SEGLAKE_REGION", "us-east-1"))
+    stats_cmd.add_argument("--expires", type=int, default=60)
+
     args = parser.parse_args(rest)
     args.data_dir = globals_ns.data_dir
     args.bin_path = globals_ns.bin_path
@@ -500,9 +574,9 @@ def main(argv: list[str]) -> None:
     args = parse_args(argv)
     seglake_bin = resolve_bin(args.bin_path or None)
     cfg = Config(data_dir=args.data_dir, seglake_bin=seglake_bin, json_out=args.json_out)
-    require_data_dir(cfg.data_dir)
 
     if args.resource == "bucket":
+        require_data_dir(cfg.data_dir)
         if args.action == "list":
             bucket_list(cfg)
         elif args.action == "exists":
@@ -516,6 +590,7 @@ def main(argv: list[str]) -> None:
         return
 
     if args.resource == "key":
+        require_data_dir(cfg.data_dir)
         if args.action == "list":
             key_list(cfg)
         elif args.action == "create":
@@ -553,6 +628,7 @@ def main(argv: list[str]) -> None:
         return
 
     if args.resource == "bucket-policy":
+        require_data_dir(cfg.data_dir)
         if args.action == "get":
             bucket_policy_get(cfg, args.bucket)
         elif args.action == "set":
@@ -564,6 +640,7 @@ def main(argv: list[str]) -> None:
         return
 
     if args.resource == "maintenance":
+        require_data_dir(cfg.data_dir)
         if args.action in ("status", "enable", "disable"):
             maintenance_action(cfg, args.action)
         else:
@@ -571,7 +648,12 @@ def main(argv: list[str]) -> None:
         return
 
     if args.resource == "ops":
+        require_data_dir(cfg.data_dir)
         ops_run(cfg, args.mode, args.args)
+        return
+
+    if args.resource == "stats":
+        stats_fetch(cfg, args.endpoint, args.access, args.secret, args.region, args.expires)
         return
 
     die(f"unknown resource: {args.resource}")

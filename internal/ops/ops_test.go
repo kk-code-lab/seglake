@@ -55,7 +55,7 @@ func TestFsckWithValidSegment(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	report, err := Fsck(layout)
+	report, err := Fsck(layout, "", true)
 	if err != nil {
 		t.Fatalf("Fsck: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFsckReportsMissingSegment(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	report, err := Fsck(layout)
+	report, err := Fsck(layout, "", true)
 	if err != nil {
 		t.Fatalf("Fsck: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestFsckReportsInvalidFooter(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	report, err := Fsck(layout)
+	report, err := Fsck(layout, "", true)
 	if err != nil {
 		t.Fatalf("Fsck: %v", err)
 	}

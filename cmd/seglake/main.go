@@ -125,6 +125,8 @@ type opsOptions struct {
 	snapshotDir       string
 	rebuildMeta       string
 	replCompareDir    string
+	fsckAllManifests  bool
+	scrubAllManifests bool
 	gcMinAge          time.Duration
 	gcForce           bool
 	gcWarnSegments    int
@@ -592,6 +594,8 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.snapshotDir, "snapshot-dir", "", "Snapshot output directory")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db for rebuild-index")
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
+	fs.BoolVar(&opts.fsckAllManifests, "fsck-all-manifests", false, "Fsck scan all manifests instead of live set from meta")
+	fs.BoolVar(&opts.scrubAllManifests, "scrub-all-manifests", false, "Scrub scan all manifests instead of live set from meta")
 	fs.StringVar(&opts.opsURL, "ops-url", "", "Ops API base URL (default uses running server heartbeat)")
 	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_ACCESS_KEY", ""), "Ops API access key (env SEGLAKE_ACCESS_KEY)")
 	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_SECRET_KEY", ""), "Ops API secret key (env SEGLAKE_SECRET_KEY)")
