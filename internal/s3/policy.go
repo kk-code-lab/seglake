@@ -75,6 +75,7 @@ const (
 	policyActionGetMetaConflicts      = "getmetaconflicts"
 	policyActionReplicationRead       = "replicationread"
 	policyActionReplicationWrite      = "replicationwrite"
+	policyActionOps                   = "ops"
 )
 
 var validPolicyActions = map[string]struct{}{
@@ -101,6 +102,7 @@ var validPolicyActions = map[string]struct{}{
 	policyActionGetMetaConflicts:      {},
 	policyActionReplicationRead:       {},
 	policyActionReplicationWrite:      {},
+	policyActionOps:                   {},
 }
 
 // ParsePolicy parses a policy JSON string or accepts short-hands "rw" and "ro".
@@ -110,6 +112,18 @@ func ParsePolicy(raw string) (*Policy, error) {
 		return &Policy{Version: "v1", Statements: []Statement{{
 			Effect:  policyEffectAllow,
 			Actions: []string{policyActionAll},
+			Resources: []Resource{{
+				Bucket: "*",
+			}},
+		}}}, nil
+	}
+	if strings.EqualFold(trimmed, "ops") {
+		return &Policy{Version: "v1", Statements: []Statement{{
+			Effect: policyEffectAllow,
+			Actions: []string{
+				policyActionOps,
+				policyActionGetMetaStats,
+			},
 			Resources: []Resource{{
 				Bucket: "*",
 			}},
@@ -409,6 +423,8 @@ func policyActionForRequest(op string) string {
 		return policyActionReplicationRead
 	case "repl_oplog_apply":
 		return policyActionReplicationWrite
+	case "ops_run":
+		return policyActionOps
 	case "list_buckets":
 		return policyActionListBuckets
 	case "head_bucket":

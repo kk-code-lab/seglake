@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
@@ -40,6 +41,8 @@ type Handler struct {
 	MaxObjectSize int64
 	// MaxURLLength enforces an optional max request URI length in bytes (0 = unlimited).
 	MaxURLLength int
+	// DataDir is the base data directory for ops endpoints.
+	DataDir string
 	// CORSAllowOrigins contains allowed origins for CORS (empty = "*").
 	CORSAllowOrigins []string
 	// CORSAllowMethods contains allowed methods for CORS (empty = default set).
@@ -63,7 +66,10 @@ type Handler struct {
 	apiKeyUseMu          sync.Mutex
 	apiKeyUseLast        map[string]time.Time
 	replayCache          *replayCache
+	writeInflight        int64
 }
+
+type maintenanceStateKey struct{}
 
 func isUnsignedRequest(r *http.Request) bool {
 	if r == nil {
@@ -107,6 +113,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.Meta != nil {
+		state, err := h.Meta.MaintenanceState(r.Context())
+		if err != nil {
+			writeErrorWithResource(mw, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), maintenanceStateKey{}, state.State))
+		if isWriteOp(op) && state.State != "off" {
+			writeErrorWithResource(mw, http.StatusServiceUnavailable, "ServiceUnavailable", "maintenance mode enabled (read-only)", requestID, r.URL.Path)
+			return
+		}
+	}
 	if h.InflightLimiter != nil && accessKey != "" {
 		limit := int64(0)
 		if h.Meta != nil {
@@ -123,6 +141,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Metrics != nil {
 		h.Metrics.InflightInc(op)
 		defer h.Metrics.InflightDec(op)
+	}
+	if isWriteOp(op) {
+		atomic.AddInt64(&h.writeInflight, 1)
+		defer atomic.AddInt64(&h.writeInflight, -1)
 	}
 	defer func() {
 		if h.Metrics != nil {
@@ -221,6 +243,13 @@ func (h *Handler) handleMetaAndReplication(ctx context.Context, w http.ResponseW
 			prefix: "/v1/replication/oplog",
 			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
 				h.handleOplogApply(ctx, w, r, requestID)
+			},
+		},
+		{
+			method: http.MethodPost,
+			prefix: "/v1/ops/run",
+			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
+				h.handleOpsRun(ctx, w, r, requestID)
 			},
 		},
 	}
@@ -591,6 +620,10 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		}
 		return h.authorizeUnsignedRequest(ctx, r)
 	}
+	action := policyActionForRequest(h.opForRequest(r))
+	if action == policyActionOps && h.Auth != nil && h.Auth.OpsAccessKey != "" && h.Auth.OpsSecretKey != "" && accessKey == h.Auth.OpsAccessKey {
+		return nil
+	}
 	hasKeys, err := h.Meta.HasAPIKeys(ctx)
 	if err != nil {
 		return err
@@ -609,7 +642,6 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		return errAccessDenied
 	}
 	policy := strings.TrimSpace(key.Policy)
-	action := policyActionForRequest(h.opForRequest(r))
 	bucket := ""
 	keyName := ""
 	if bkt, ok := h.bucketFromRequest(r); ok {
@@ -659,10 +691,27 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 			return errAccessDenied
 		}
 	}
+	if action == policyActionOps && strings.EqualFold(strings.TrimSpace(key.Policy), "rw") {
+		return errAccessDenied
+	}
 	if h.Engine != nil && h.Meta != nil {
-		h.recordAPIKeyUse(accessKey)
+		if maintenanceStateFromContext(ctx) == "off" {
+			h.recordAPIKeyUse(accessKey)
+		}
 	}
 	return nil
+}
+
+func maintenanceStateFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return "off"
+	}
+	if value := ctx.Value(maintenanceStateKey{}); value != nil {
+		if state, ok := value.(string); ok && state != "" {
+			return state
+		}
+	}
+	return "off"
 }
 
 func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request) error {
@@ -1412,6 +1461,9 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		return "repl_oplog_apply"
 	}
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/ops/run") {
+		return "ops_run"
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		return "list_buckets"
 	}
@@ -1487,6 +1539,70 @@ func (h *Handler) opForRequest(r *http.Request) string {
 		return "delete"
 	}
 	return "other"
+}
+
+func isWriteOp(op string) bool {
+	switch op {
+	case "put", "delete", "delete_bucket", "copy",
+		"put_bucket_policy", "delete_bucket_policy",
+		"mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort",
+		"repl_oplog_apply":
+		return true
+	default:
+		return false
+	}
+}
+
+// RunMaintenanceLoop transitions maintenance states based on inflight writes.
+func (h *Handler) RunMaintenanceLoop(ctx context.Context, interval time.Duration) {
+	if h == nil || h.Meta == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			state, err := h.Meta.MaintenanceState(ctx)
+			if err != nil {
+				continue
+			}
+			if state.State == "entering" {
+				if atomic.LoadInt64(&h.writeInflight) == 0 {
+					if next, err := h.Meta.SetMaintenanceState(ctx, "quiesced"); err == nil {
+						log.Printf("maintenance_transition from=entering to=%s", next.State)
+						if h.Metrics != nil {
+							h.Metrics.IncMaintenanceTransition(next.State)
+						}
+					}
+				}
+				continue
+			}
+			if state.State == "exiting" {
+				if atomic.LoadInt64(&h.writeInflight) == 0 {
+					if next, err := h.Meta.SetMaintenanceState(ctx, "off"); err == nil {
+						log.Printf("maintenance_transition from=exiting to=%s", next.State)
+						if h.Metrics != nil {
+							h.Metrics.IncMaintenanceTransition(next.State)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// WriteInflight returns the number of inflight write operations.
+func (h *Handler) WriteInflight() int64 {
+	if h == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&h.writeInflight)
 }
 
 type metricsWriter struct {

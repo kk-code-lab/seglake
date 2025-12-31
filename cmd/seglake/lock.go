@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/app"
+	"github.com/kk-code-lab/seglake/internal/meta"
 )
 
 const (
@@ -199,6 +201,11 @@ func confirmLiveMode(dataDir, mode string, assumeYes bool) error {
 	if !isUnsafeLiveMode(mode) {
 		return nil
 	}
+	if allowsUnsafeInMaintenance(mode) {
+		if state, err := maintenanceState(dataDir); err == nil && state == "quiesced" {
+			return nil
+		}
+	}
 	if assumeYes {
 		if status.HasData {
 			fmt.Fprintf(os.Stderr, "seglake: detected running server for %s (pid=%d addr=%s); proceeding due to -yes\n", dataDir, status.Data.PID, status.Data.Addr)
@@ -225,6 +232,28 @@ func confirmLiveMode(dataDir, mode string, assumeYes bool) error {
 		return nil
 	default:
 		return errors.New("aborted by user")
+	}
+}
+
+func maintenanceState(dataDir string) (string, error) {
+	store, err := meta.Open(filepath.Join(dataDir, "meta.db"))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = store.Close() }()
+	state, err := store.MaintenanceState(context.Background())
+	if err != nil {
+		return "", err
+	}
+	return state.State, nil
+}
+
+func allowsUnsafeInMaintenance(mode string) bool {
+	switch mode {
+	case "gc-run", "gc-rewrite", "gc-rewrite-run", "mpu-gc-run":
+		return true
+	default:
+		return false
 	}
 }
 

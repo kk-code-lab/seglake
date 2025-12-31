@@ -27,6 +27,9 @@ type statsResponse struct {
 	LastMPUGCReclaimed      int64                       `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
 	ReplicationConflicts    int64                       `json:"replication_conflicts,omitempty"`
 	ReplicationBytesInTotal int64                       `json:"replication_bytes_in_total,omitempty"`
+	MaintenanceState        string                      `json:"maintenance_state,omitempty"`
+	MaintenanceUpdatedAt    string                      `json:"maintenance_updated_at,omitempty"`
+	WriteInflight           int64                       `json:"write_inflight,omitempty"`
 	RequestsTotal           map[string]map[string]int64 `json:"requests_total,omitempty"`
 	Inflight                map[string]int64            `json:"inflight,omitempty"`
 	BytesInTotal            int64                       `json:"bytes_in_total,omitempty"`
@@ -37,6 +40,7 @@ type statsResponse struct {
 	LatencyByBucketMs       map[string]LatencyStats     `json:"latency_ms_by_bucket,omitempty"`
 	RequestsByKey           map[string]map[string]int64 `json:"requests_total_by_key,omitempty"`
 	LatencyByKeyMs          map[string]LatencyStats     `json:"latency_ms_by_key,omitempty"`
+	MaintenanceTransitions  map[string]int64            `json:"maintenance_transitions,omitempty"`
 	GCTrends                []meta.GCTrend              `json:"gc_trends,omitempty"`
 	Replication             []meta.ReplStat             `json:"replication,omitempty"`
 }
@@ -61,6 +65,11 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
 	}
+	maintenanceState, err := h.Meta.MaintenanceState(ctx)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+		return
+	}
 	resp := statsResponse{
 		Objects:                 stats.Objects,
 		Segments:                stats.Segments,
@@ -80,11 +89,14 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		LastMPUGCReclaimed:      stats.LastMPUGCReclaimed,
 		ReplicationConflicts:    stats.ReplConflicts,
 		ReplicationBytesInTotal: stats.ReplBytesInTotal,
+		MaintenanceState:        maintenanceState.State,
+		MaintenanceUpdatedAt:    maintenanceState.UpdatedAt,
+		WriteInflight:           h.WriteInflight(),
 		GCTrends:                gcTrends,
 		Replication:             replStats,
 	}
 	if h.Metrics != nil {
-		reqs, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency := h.Metrics.Snapshot()
+		reqs, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency, maintTransitions := h.Metrics.Snapshot()
 		resp.RequestsTotal = reqs
 		resp.Inflight = inflight
 		resp.BytesInTotal = bytesIn
@@ -95,6 +107,7 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		resp.LatencyByBucketMs = bucketLatency
 		resp.RequestsByKey = keyReqs
 		resp.LatencyByKeyMs = keyLatency
+		resp.MaintenanceTransitions = maintTransitions
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

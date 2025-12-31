@@ -94,6 +94,20 @@ type oplogAPIKeyBucketPayload struct {
 }
 
 const metaOplogBucket = "_meta"
+const maintenanceSettingKey = "maintenance_mode"
+
+const (
+	maintenanceStateOff      = "off"
+	maintenanceStateEntering = "entering"
+	maintenanceStateQuiesced = "quiesced"
+	maintenanceStateExiting  = "exiting"
+)
+
+// MaintenanceState describes the current maintenance mode.
+type MaintenanceState struct {
+	State     string `json:"state"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
 
 // Open opens or creates the metadata database at the given path.
 func Open(path string) (*Store, error) {
@@ -420,6 +434,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(16, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if version < 17 {
+		if err = applyV17(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(17, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -772,6 +794,22 @@ func applyV16(ctx context.Context, tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS hlc_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			last_hlc TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV17(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS settings (
+			name TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
 	}
@@ -3452,4 +3490,70 @@ LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
 func (s *Store) DeleteSegment(ctx context.Context, segmentID string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM segments WHERE segment_id=?", segmentID)
 	return err
+}
+
+// MaintenanceState returns the current maintenance mode state.
+func (s *Store) MaintenanceState(ctx context.Context) (MaintenanceState, error) {
+	if s == nil || s.db == nil {
+		return MaintenanceState{}, errors.New("meta: store not initialized")
+	}
+	var value string
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, "SELECT value, updated_at FROM settings WHERE name=?", maintenanceSettingKey).Scan(&value, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return MaintenanceState{State: maintenanceStateOff}, nil
+		}
+		return MaintenanceState{}, err
+	}
+	state := normalizeMaintenanceState(value)
+	return MaintenanceState{State: state, UpdatedAt: updatedAt}, nil
+}
+
+// SetMaintenanceState updates maintenance state.
+func (s *Store) SetMaintenanceState(ctx context.Context, state string) (MaintenanceState, error) {
+	if s == nil || s.db == nil {
+		return MaintenanceState{}, errors.New("meta: store not initialized")
+	}
+	state = normalizeMaintenanceState(state)
+	if !isValidMaintenanceState(state) {
+		return MaintenanceState{}, errors.New("meta: invalid maintenance state")
+	}
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO settings(name, value, updated_at)
+VALUES(?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+	value=excluded.value,
+	updated_at=excluded.updated_at`,
+		maintenanceSettingKey, state, updatedAt)
+	if err != nil {
+		return MaintenanceState{}, err
+	}
+	return MaintenanceState{State: state, UpdatedAt: updatedAt}, nil
+}
+
+func normalizeMaintenanceState(state string) string {
+	state = strings.TrimSpace(strings.ToLower(state))
+	switch state {
+	case "", "off", "false", "0":
+		return maintenanceStateOff
+	case "on", "true", "1", maintenanceStateEntering:
+		return maintenanceStateEntering
+	case maintenanceStateQuiesced:
+		return maintenanceStateQuiesced
+	case maintenanceStateExiting:
+		return maintenanceStateExiting
+	default:
+		return state
+	}
+}
+
+func isValidMaintenanceState(state string) bool {
+	switch state {
+	case maintenanceStateOff, maintenanceStateEntering, maintenanceStateQuiesced, maintenanceStateExiting:
+		return true
+	default:
+		return false
+	}
 }

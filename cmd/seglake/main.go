@@ -19,7 +19,6 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/app"
 	"github.com/kk-code-lab/seglake/internal/meta"
-	"github.com/kk-code-lab/seglake/internal/ops"
 	"github.com/kk-code-lab/seglake/internal/s3"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
@@ -117,6 +116,8 @@ type serverOptions struct {
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
 	shutdownTimeout   time.Duration
+	opsAccessKey      string
+	opsSecretKey      string
 }
 
 type opsOptions struct {
@@ -142,6 +143,10 @@ type opsOptions struct {
 	mpuMaxUploads     int
 	mpuMaxReclaim     int64
 	jsonOut           bool
+	opsURL            string
+	opsAccessKey      string
+	opsSecretKey      string
+	opsRegion         string
 }
 
 type keysOptions struct {
@@ -379,6 +384,21 @@ func main() {
 		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.jsonOut); err != nil {
 			exitError("buckets", err)
 		}
+	case global.mode == "maintenance":
+		fs, opts := newMaintenanceFlagSet()
+		if global.modeHelp {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if help, err := parseModeFlags(fs, remaining); err != nil {
+			exitParseError(err)
+		} else if help {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if err := runMaintenance(opts); err != nil {
+			exitError("maintenance", err)
+		}
 	case isOpsMode(global.mode):
 		fs, opts := newOpsFlagSet()
 		if global.modeHelp {
@@ -397,20 +417,7 @@ func main() {
 		if err := requireDataDir(opts.dataDir); err != nil {
 			exitError("data dir", err)
 		}
-		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
-		gcGuard := ops.GCGuardrails{
-			WarnCandidates:     opts.gcWarnSegments,
-			WarnReclaimedBytes: opts.gcWarnReclaim,
-			MaxCandidates:      opts.gcMaxSegments,
-			MaxReclaimedBytes:  opts.gcMaxReclaim,
-		}
-		mpuGuard := ops.MPUGCGuardrails{
-			WarnUploads:        opts.mpuWarnUploads,
-			WarnReclaimedBytes: opts.mpuWarnReclaim,
-			MaxUploads:         opts.mpuMaxUploads,
-			MaxReclaimedBytes:  opts.mpuMaxReclaim,
-		}
-		if err := runOps(global.mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.jsonOut); err != nil {
+		if err := runOpsWithMode(global.mode, opts); err != nil {
 			exitError("ops", err)
 		}
 	default:
@@ -552,6 +559,8 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.tlsCert, "tls-cert", envOrDefault("SEGLAKE_TLS_CERT", ""), "TLS certificate path (PEM, env SEGLAKE_TLS_CERT)")
 	fs.StringVar(&opts.tlsKey, "tls-key", envOrDefault("SEGLAKE_TLS_KEY", ""), "TLS private key path (PEM, env SEGLAKE_TLS_KEY)")
 	fs.StringVar(&opts.trustedProxies, "trusted-proxies", "", "Comma-separated CIDR ranges trusted for X-Forwarded-For")
+	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_OPS_ACCESS_KEY", envOrDefault("SEGLAKE_ACCESS_KEY", "")), "Ops API access key (env SEGLAKE_OPS_ACCESS_KEY)")
+	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_OPS_SECRET_KEY", envOrDefault("SEGLAKE_SECRET_KEY", "")), "Ops API secret key (env SEGLAKE_OPS_SECRET_KEY)")
 	fs.StringVar(&opts.siteID, "site-id", "local", "Site identifier for replication (HLC/oplog)")
 	fs.DurationVar(&opts.syncInterval, "sync-interval", 100*time.Millisecond, "Write barrier interval")
 	fs.Int64Var(&opts.syncBytes, "sync-bytes", 128<<20, "Write barrier byte threshold")
@@ -583,6 +592,10 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.snapshotDir, "snapshot-dir", "", "Snapshot output directory")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db for rebuild-index")
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
+	fs.StringVar(&opts.opsURL, "ops-url", "", "Ops API base URL (default uses running server heartbeat)")
+	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_ACCESS_KEY", ""), "Ops API access key (env SEGLAKE_ACCESS_KEY)")
+	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_SECRET_KEY", ""), "Ops API secret key (env SEGLAKE_SECRET_KEY)")
+	fs.StringVar(&opts.opsRegion, "ops-region", envOrDefault("SEGLAKE_REGION", "us-east-1"), "Ops API SigV4 region (env SEGLAKE_REGION)")
 	fs.DurationVar(&opts.gcMinAge, "gc-min-age", 24*time.Hour, "GC minimum segment age")
 	fs.BoolVar(&opts.gcForce, "gc-force", false, "GC delete segments (required for gc-run)")
 	fs.IntVar(&opts.gcWarnSegments, "gc-warn-segments", 100, "GC warn when candidates exceed this count (0 disables)")
@@ -755,6 +768,8 @@ func runServer(opts *serverOptions) error {
 	authCfg := &s3.AuthConfig{
 		AccessKey:            opts.accessKey,
 		SecretKey:            opts.secretKey,
+		OpsAccessKey:         opts.opsAccessKey,
+		OpsSecretKey:         opts.opsSecretKey,
 		Region:               opts.region,
 		MaxSkew:              5 * time.Minute,
 		AllowUnsignedPayload: opts.allowUnsigned,
@@ -762,7 +777,7 @@ func runServer(opts *serverOptions) error {
 			return store.LookupAPISecret(ctx, accessKey)
 		},
 	}
-	var handler http.Handler = &s3.Handler{
+	h := &s3.Handler{
 		Engine:                eng,
 		Meta:                  store,
 		Auth:                  authCfg,
@@ -783,15 +798,20 @@ func runServer(opts *serverOptions) error {
 		RequireIfMatchBuckets: bucketSet(splitComma(opts.requireIfMatch)),
 		RequireContentMD5:     opts.requireMD5,
 		MaxURLLength:          opts.maxURLLength,
+		DataDir:               opts.dataDir,
 	}
 	if opts.trustedProxies != "" {
-		handler.(*s3.Handler).TrustedProxies = splitComma(opts.trustedProxies)
+		h.TrustedProxies = splitComma(opts.trustedProxies)
 	}
+	var handler http.Handler = h
 	if opts.logRequests {
 		handler = s3.LoggingMiddleware(handler)
 	}
 	server := newHTTPServer(opts, handler)
 	srvErr := make(chan error, 1)
+	maintCtx, maintCancel := context.WithCancel(context.Background())
+	defer maintCancel()
+	go h.RunMaintenanceLoop(maintCtx, 250*time.Millisecond)
 	if opts.tlsEnable || (opts.tlsCert != "" || opts.tlsKey != "") {
 		cfg, err := newTLSConfig(opts.tlsCert, opts.tlsKey)
 		if err != nil {
@@ -938,6 +958,7 @@ func printGlobalHelp() {
 		"keys",
 		"bucket-policy",
 		"buckets",
+		"maintenance",
 		"repl-pull",
 		"repl-push",
 		"repl-validate",

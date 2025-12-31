@@ -369,11 +369,40 @@ def bucket_policy_delete(cfg: Config, bucket: str) -> None:
     run(cmd)
 
 
+def maintenance_action(cfg: Config, action: str) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "maintenance",
+        "-data-dir",
+        cfg.data_dir,
+        "-maintenance-action",
+        action,
+    ]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
+
+
+def ops_run(cfg: Config, mode: str, extra_args: list[str]) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        mode,
+        "-data-dir",
+        cfg.data_dir,
+    ]
+    cmd.extend(extra_args)
+    if cfg.json_out and "-json" not in extra_args:
+        cmd.append("-json")
+    run(cmd)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     if not argv:
         base = argparse.ArgumentParser(
             prog="segctl",
-            description="Helper wrapper for seglake admin modes (keys, buckets).",
+            description="Helper wrapper for seglake admin modes (keys, buckets, maintenance, ops).",
         )
         base.add_argument("--data-dir", default=os.getenv("SEGLAKE_DATA_DIR", "./data"))
         base.add_argument("--bin", dest="bin_path", default=os.getenv("SEGLAKE_BIN", ""))
@@ -389,7 +418,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         prog="segctl",
-        description="Helper wrapper for seglake admin modes (keys, buckets).",
+        description="Helper wrapper for seglake admin modes (keys, buckets, maintenance, ops).",
         parents=[global_parser],
     )
 
@@ -449,6 +478,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     bp_set.add_argument("--policy-file", default=None)
     bp_delete = bucket_policy_sub.add_parser("delete")
     bp_delete.add_argument("bucket")
+
+    maintenance = subparsers.add_parser("maintenance")
+    maintenance_sub = maintenance.add_subparsers(dest="action", required=True)
+    maintenance_sub.add_parser("status")
+    maintenance_sub.add_parser("enable")
+    maintenance_sub.add_parser("disable")
+
+    ops_cmd = subparsers.add_parser("ops")
+    ops_cmd.add_argument("mode")
+    ops_cmd.add_argument("args", nargs=argparse.REMAINDER)
 
     args = parser.parse_args(rest)
     args.data_dir = globals_ns.data_dir
@@ -522,6 +561,17 @@ def main(argv: list[str]) -> None:
             bucket_policy_delete(cfg, args.bucket)
         else:
             die(f"unknown bucket-policy action: {args.action}")
+        return
+
+    if args.resource == "maintenance":
+        if args.action in ("status", "enable", "disable"):
+            maintenance_action(cfg, args.action)
+        else:
+            die(f"unknown maintenance action: {args.action}")
+        return
+
+    if args.resource == "ops":
+        ops_run(cfg, args.mode, args.args)
         return
 
     die(f"unknown resource: {args.resource}")
