@@ -420,7 +420,7 @@ func TestMigrationV18AddsDeleteMarkersForOrphans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	tx, err := db.Begin()
 	if err != nil {
