@@ -96,15 +96,15 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	}
 
 	payloadHashHeader := r.Header.Get("X-Amz-Content-Sha256")
-	payloadHash := payloadHashHeader
-	if payloadHash == "" {
-		payloadHash = "UNSIGNED-PAYLOAD"
+	if payloadHashHeader == "" {
+		return errMissingContentSHA256
 	}
+	payloadHash := payloadHashHeader
 	// We do not stream-hash payloads yet; accept provided hash values for now.
 	unsignedPayload := strings.EqualFold(payloadHash, "UNSIGNED-PAYLOAD") ||
 		strings.EqualFold(payloadHash, "STREAMING-UNSIGNED-PAYLOAD") ||
 		strings.EqualFold(payloadHash, "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
-	if !c.AllowUnsignedPayload && unsignedPayload && payloadHashHeader != "" {
+	if !c.AllowUnsignedPayload && unsignedPayload {
 		return errSignatureMismatch
 	}
 
@@ -112,7 +112,9 @@ func (c *AuthConfig) VerifyRequest(r *http.Request) error {
 	if err != nil {
 		return errAuthMalformed
 	}
-	if !hasSignedHeader(signedHeadersLower, "host") || !hasSignedHeader(signedHeadersLower, "x-amz-date") {
+	if !hasSignedHeader(signedHeadersLower, "host") ||
+		!hasSignedHeader(signedHeadersLower, "x-amz-date") ||
+		!hasSignedHeader(signedHeadersLower, "x-amz-content-sha256") {
 		return errAuthMalformed
 	}
 	canonicalRequest := strings.Join([]string{
@@ -279,6 +281,7 @@ var (
 	errAccessDenied      = errors.New("access denied")
 	errTimeSkew          = errors.New("request time too skewed")
 	errAuthMalformed     = errors.New("authorization header malformed")
+	errMissingContentSHA256 = errors.New("missing x-amz-content-sha256")
 )
 
 func parseAuthParams(s string) map[string]string {

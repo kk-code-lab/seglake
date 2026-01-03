@@ -571,6 +571,8 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 				writeErrorWithResource(w, http.StatusForbidden, "RequestTimeTooSkewed", "request time too skewed", requestID, r.URL.Path)
 			case errAuthMalformed:
 				writeErrorWithResource(w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "authorization header malformed", requestID, r.URL.Path)
+			case errMissingContentSHA256:
+				writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "missing required header for this request: x-amz-content-sha256", requestID, r.URL.Path)
 			default:
 				writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
 			}
