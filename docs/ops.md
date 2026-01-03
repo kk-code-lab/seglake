@@ -194,9 +194,9 @@ aws s3 ls s3://demo --endpoint-url http://demo.localhost:9000
 
 ## Smoke scripts (curl)
 
-The repo includes two smoke scripts for quick checks against a running server:
+The repo includes three smoke scripts for quick checks against a running server:
 - `scripts/curl_s3_smoke.sh` (basic S3 PUT/GET/HEAD/Range/conditions/CORS)
-- `scripts/curl_security_smoke.sh` (auth/validation error responses)
+- `scripts/curl_security_smoke.sh` (auth/validation error responses; includes a brief sleep to avoid auth rate limiting)
 - `scripts/curl_public_bucket_smoke.sh` (public bucket unsigned GET + signed setup)
 
 Example:
