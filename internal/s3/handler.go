@@ -956,13 +956,13 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID string, headOnly bool) {
 	versionID := r.URL.Query().Get("versionId")
 	var (
-		meta *meta.ObjectMeta
-		err  error
+		objMeta *meta.ObjectMeta
+		err     error
 	)
 	if versionID != "" {
-		meta, err = h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		objMeta, err = h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
 	} else {
-		meta, err = h.Meta.GetObjectMeta(ctx, bucket, key)
+		objMeta, err = h.Meta.GetObjectMeta(ctx, bucket, key)
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -972,36 +972,44 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	if strings.EqualFold(meta.State, "DAMAGED") {
+	if strings.EqualFold(objMeta.State, meta.VersionStateDeleteMarker) {
+		w.Header().Set("x-amz-delete-marker", "true")
+		if objMeta.VersionID != "" {
+			w.Header().Set("x-amz-version-id", objMeta.VersionID)
+		}
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID, r.URL.Path)
+		return
+	}
+	if strings.EqualFold(objMeta.State, meta.VersionStateDamaged) {
 		w.Header().Set("X-Error", "DamagedObject")
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID, r.URL.Path)
 		return
 	}
-	if strings.EqualFold(meta.State, "CONFLICT") {
+	if strings.EqualFold(objMeta.State, meta.VersionStateConflict) {
 		w.Header().Set("x-seglake-conflict", "true")
 	}
-	if meta.ETag != "" {
-		w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	if objMeta.ETag != "" {
+		w.Header().Set("ETag", `"`+objMeta.ETag+`"`)
 	}
-	if meta.VersionID != "" {
-		w.Header().Set("x-amz-version-id", meta.VersionID)
+	if objMeta.VersionID != "" {
+		w.Header().Set("x-amz-version-id", objMeta.VersionID)
 	}
-	if meta.ContentType != "" {
-		w.Header().Set("Content-Type", meta.ContentType)
+	if objMeta.ContentType != "" {
+		w.Header().Set("Content-Type", objMeta.ContentType)
 	}
-	if meta.LastModified != "" {
-		if t, err := time.Parse(time.RFC3339Nano, meta.LastModified); err == nil {
+	if objMeta.LastModified != "" {
+		if t, err := time.Parse(time.RFC3339Nano, objMeta.LastModified); err == nil {
 			w.Header().Set("Last-Modified", formatHTTPTime(t))
 		}
 	}
-	if h.checkPreconditions(w, r, meta, requestID, r.URL.Path) {
+	if h.checkPreconditions(w, r, objMeta, requestID, r.URL.Path) {
 		return
 	}
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader != "" {
-		ranges, ok := parseRanges(rangeHeader, meta.Size)
+		ranges, ok := parseRanges(rangeHeader, objMeta.Size)
 		if !ok || len(ranges) == 0 {
-			w.Header().Set("Content-Range", "bytes */"+intToString(meta.Size))
+			w.Header().Set("Content-Range", "bytes */"+intToString(objMeta.Size))
 			writeErrorWithResource(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "invalid range", requestID, r.URL.Path)
 			return
 		}
@@ -1009,18 +1017,18 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			start, length := ranges[0].start, ranges[0].length
 			if headOnly {
 				w.Header().Set("Content-Length", intToString(length))
-				w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
+				w.Header().Set("Content-Range", formatContentRange(start, length, objMeta.Size))
 				w.WriteHeader(http.StatusPartialContent)
 				return
 			}
-			reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
+			reader, _, err := h.Engine.GetRange(ctx, objMeta.VersionID, start, length)
 			if err != nil {
 				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 				return
 			}
 			defer func() { _ = reader.Close() }()
 			w.Header().Set("Content-Length", intToString(length))
-			w.Header().Set("Content-Range", formatContentRange(start, length, meta.Size))
+			w.Header().Set("Content-Range", formatContentRange(start, length, objMeta.Size))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = ioCopy(w, reader)
 			return
@@ -1035,8 +1043,8 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			start, length := br.start, br.length
 			_, _ = io.WriteString(w, "--"+boundary+"\r\n")
 			_, _ = io.WriteString(w, "Content-Type: application/octet-stream\r\n")
-			_, _ = io.WriteString(w, "Content-Range: "+formatContentRange(start, length, meta.Size)+"\r\n\r\n")
-			reader, _, err := h.Engine.GetRange(ctx, meta.VersionID, start, length)
+			_, _ = io.WriteString(w, "Content-Range: "+formatContentRange(start, length, objMeta.Size)+"\r\n\r\n")
+			reader, _, err := h.Engine.GetRange(ctx, objMeta.VersionID, start, length)
 			if err != nil {
 				return
 			}
@@ -1048,20 +1056,20 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 	if headOnly {
-		if meta.Size >= 0 {
-			w.Header().Set("Content-Length", intToString(meta.Size))
+		if objMeta.Size >= 0 {
+			w.Header().Set("Content-Length", intToString(objMeta.Size))
 		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	reader, _, err := h.Engine.Get(ctx, meta.VersionID)
+	reader, _, err := h.Engine.Get(ctx, objMeta.VersionID)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	defer func() { _ = reader.Close() }()
-	if meta.Size >= 0 {
-		w.Header().Set("Content-Length", intToString(meta.Size))
+	if objMeta.Size >= 0 {
+		w.Header().Set("Content-Length", intToString(objMeta.Size))
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = ioCopy(w, reader)
@@ -1104,7 +1112,11 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	if strings.EqualFold(srcMeta.State, "DAMAGED") {
+	if strings.EqualFold(srcMeta.State, meta.VersionStateDeleteMarker) {
+		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID, r.URL.Path)
+		return
+	}
+	if strings.EqualFold(srcMeta.State, meta.VersionStateDamaged) {
 		w.Header().Set("X-Error", "DamagedObject")
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID, r.URL.Path)
 		return
@@ -1199,8 +1211,17 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 	}
 	versionID := r.URL.Query().Get("versionId")
 	if versionID != "" {
+		metaVersion, err := h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
+				return
+			}
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+			return
+		}
 		var deleted bool
-		err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+		err = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 			var derr error
 			deleted, derr = h.Meta.DeleteObjectVersionTx(ctx, tx, bucket, key, versionID)
 			return derr
@@ -1213,19 +1234,25 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 			writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
 			return
 		}
+		if strings.EqualFold(metaVersion.State, meta.VersionStateDeleteMarker) {
+			w.Header().Set("x-amz-delete-marker", "true")
+		}
 		w.Header().Set("x-amz-version-id", versionID)
 	} else {
-		var deleted bool
+		var markerVersion string
 		err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 			var derr error
-			deleted, derr = h.Meta.DeleteObjectTx(ctx, tx, bucket, key)
+			markerVersion, derr = h.Meta.DeleteObjectTx(ctx, tx, bucket, key)
 			return derr
 		})
 		if err != nil {
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 			return
 		}
-		_ = deleted
+		if markerVersion != "" {
+			w.Header().Set("x-amz-delete-marker", "true")
+			w.Header().Set("x-amz-version-id", markerVersion)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -23,7 +23,8 @@ func TestOplogPutDelete(t *testing.T) {
 	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 123, "", ""); err != nil {
 		t.Fatalf("RecordPut: %v", err)
 	}
-	if _, err := store.DeleteObject(context.Background(), "bucket", "key"); err != nil {
+	deleteVersion, err := store.DeleteObject(context.Background(), "bucket", "key")
+	if err != nil {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 
@@ -40,8 +41,18 @@ func TestOplogPutDelete(t *testing.T) {
 	if entries[0].SiteID != "site-a" || entries[0].HLCTS == "" {
 		t.Fatalf("expected site/hlc, got site=%q hlc=%q", entries[0].SiteID, entries[0].HLCTS)
 	}
-	if entries[1].OpType != "delete" || entries[1].Bucket != "bucket" || entries[1].Key != "key" || entries[1].VersionID != "v1" {
+	if entries[1].OpType != "delete" || entries[1].Bucket != "bucket" || entries[1].Key != "key" || entries[1].VersionID == "" {
 		t.Fatalf("unexpected delete entry: %+v", entries[1])
+	}
+	if deleteVersion != "" && entries[1].VersionID != deleteVersion {
+		t.Fatalf("expected delete marker version %q, got %q", deleteVersion, entries[1].VersionID)
+	}
+	var payload oplogDeletePayload
+	if err := json.Unmarshal([]byte(entries[1].Payload), &payload); err != nil {
+		t.Fatalf("payload decode: %v", err)
+	}
+	if !payload.DeleteMarker {
+		t.Fatalf("expected delete marker payload")
 	}
 	if entries[1].SiteID != "site-a" || entries[1].HLCTS == "" {
 		t.Fatalf("expected site/hlc, got site=%q hlc=%q", entries[1].SiteID, entries[1].HLCTS)
@@ -137,6 +148,7 @@ func TestApplyOplogEntries(t *testing.T) {
 
 	deletePayload, err := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: true,
 	})
 	if err != nil {
 		t.Fatalf("payload: %v", err)
@@ -147,7 +159,7 @@ func TestApplyOplogEntries(t *testing.T) {
 		OpType:    "delete",
 		Bucket:    "bucket",
 		Key:       "key",
-		VersionID: "v1",
+		VersionID: "del1",
 		Payload:   string(deletePayload),
 	}
 	applied, err = store.ApplyOplogEntries(context.Background(), []OplogEntry{del, del})
@@ -157,8 +169,12 @@ func TestApplyOplogEntries(t *testing.T) {
 	if applied != 1 {
 		t.Fatalf("expected applied=1 for delete, got %d", applied)
 	}
-	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected object to be deleted")
+	meta, err = store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if meta.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker state, got %s", meta.State)
 	}
 }
 
@@ -265,6 +281,7 @@ func TestApplyOplogDeleteConflicts(t *testing.T) {
 	}
 	delPayload, err := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: true,
 	})
 	if err != nil {
 		t.Fatalf("payload: %v", err)
@@ -285,6 +302,7 @@ func TestApplyOplogDeleteConflicts(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			var metaObj *ObjectMeta
 			put := OplogEntry{
 				SiteID:    "site-a",
 				HLCTS:     tc.firstHLC,
@@ -294,20 +312,25 @@ func TestApplyOplogDeleteConflicts(t *testing.T) {
 				VersionID: "v1",
 				Payload:   tc.firstBody,
 			}
+			delVersion := "del1"
 			del := OplogEntry{
 				SiteID:    "site-b",
 				HLCTS:     tc.secondHLC,
 				OpType:    "delete",
 				Bucket:    "bucket",
 				Key:       "key",
-				VersionID: "v1",
+				VersionID: delVersion,
 				Payload:   string(delPayload),
 			}
 			if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{put, del}); err != nil {
 				t.Fatalf("ApplyOplogEntries: %v", err)
 			}
-			if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-				t.Fatalf("expected delete to win")
+			metaObj, err = store.GetObjectMeta(context.Background(), "bucket", "key")
+			if err != nil {
+				t.Fatalf("GetObjectMeta: %v", err)
+			}
+			if metaObj.VersionID != delVersion || metaObj.State != VersionStateDeleteMarker {
+				t.Fatalf("expected delete marker current, got version=%s state=%s", metaObj.VersionID, metaObj.State)
 			}
 			next := OplogEntry{
 				SiteID:    "site-c",
@@ -633,7 +656,7 @@ func TestApplyOplogReorderAndDuplicatesConverge(t *testing.T) {
 
 	putA := makePutEntry("site-a", "0000000000000000500-0000000001", "bucket", "key", "v1")
 	putB := makePutEntry("site-b", "0000000000000000501-0000000001", "bucket", "key", "v2")
-	del := makeDeleteEntry("site-b", "0000000000000000502-0000000001", "bucket", "key", "v1")
+	del := makeDeleteEntry("site-b", "0000000000000000502-0000000001", "bucket", "key", "del1")
 
 	if _, err := storeA.ApplyOplogEntries(context.Background(), []OplogEntry{del, putA, putA, putB}); err != nil {
 		t.Fatalf("ApplyOplogEntries A: %v", err)
@@ -644,11 +667,19 @@ func TestApplyOplogReorderAndDuplicatesConverge(t *testing.T) {
 	if _, err := storeB.ApplyOplogEntries(context.Background(), []OplogEntry{putA}); err != nil {
 		t.Fatalf("ApplyOplogEntries B dup: %v", err)
 	}
-	if _, err := storeA.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected delete to win")
+	objA, err := storeA.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta A: %v", err)
 	}
-	if _, err := storeB.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected delete to win")
+	if objA.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker current, got %s", objA.State)
+	}
+	objB, err := storeB.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta B: %v", err)
+	}
+	if objB.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker current, got %s", objB.State)
 	}
 }
 
@@ -740,6 +771,7 @@ func TestApplyOplogDeleteVsDelete(t *testing.T) {
 
 	delPayload, err := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: true,
 	})
 	if err != nil {
 		t.Fatalf("payload: %v", err)
@@ -750,7 +782,7 @@ func TestApplyOplogDeleteVsDelete(t *testing.T) {
 		OpType:    "delete",
 		Bucket:    "bucket",
 		Key:       "key",
-		VersionID: "v1",
+		VersionID: "del-a",
 		Payload:   string(delPayload),
 	}
 	del2 := OplogEntry{
@@ -759,14 +791,21 @@ func TestApplyOplogDeleteVsDelete(t *testing.T) {
 		OpType:    "delete",
 		Bucket:    "bucket",
 		Key:       "key",
-		VersionID: "v1",
+		VersionID: "del-z",
 		Payload:   string(delPayload),
 	}
 	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{del1, del2}); err != nil {
 		t.Fatalf("ApplyOplogEntries: %v", err)
 	}
-	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected object to remain deleted")
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker state, got %s", metaObj.State)
+	}
+	if metaObj.VersionID != "del-z" {
+		t.Fatalf("expected del-z to win, got %s", metaObj.VersionID)
 	}
 }
 
@@ -789,6 +828,7 @@ func TestApplyOplogDeleteThenPutOutOfOrder(t *testing.T) {
 	}
 	delPayload, err := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: true,
 	})
 	if err != nil {
 		t.Fatalf("payload: %v", err)
@@ -799,7 +839,7 @@ func TestApplyOplogDeleteThenPutOutOfOrder(t *testing.T) {
 		OpType:    "delete",
 		Bucket:    "bucket",
 		Key:       "key",
-		VersionID: "v1",
+		VersionID: "del1",
 		Payload:   string(delPayload),
 	}
 	put := OplogEntry{
@@ -814,8 +854,12 @@ func TestApplyOplogDeleteThenPutOutOfOrder(t *testing.T) {
 	if _, err := store.ApplyOplogEntries(context.Background(), []OplogEntry{del, put}); err != nil {
 		t.Fatalf("ApplyOplogEntries: %v", err)
 	}
-	if _, err := store.GetObjectMeta(context.Background(), "bucket", "key"); err == nil {
-		t.Fatalf("expected delete to win with higher HLC even if applied first")
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker current, got %s", metaObj.State)
 	}
 }
 
@@ -851,6 +895,7 @@ func makePutEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
 func makeDeleteEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
 	payload, _ := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: true,
 	})
 	return OplogEntry{
 		SiteID:    siteID,

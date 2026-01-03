@@ -2,7 +2,9 @@ package meta
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -18,6 +20,22 @@ type Store struct {
 	db     *sql.DB
 	hlc    *clock.HLC
 	siteID string
+}
+
+const (
+	VersionStateActive       = "ACTIVE"
+	VersionStateDeleted      = "DELETED"
+	VersionStateDeleteMarker = "DELETE_MARKER"
+	VersionStateDamaged      = "DAMAGED"
+	VersionStateConflict     = "CONFLICT"
+)
+
+func newVersionID() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
 }
 
 // APIKey describes stored credentials and policy metadata.
@@ -54,6 +72,7 @@ type oplogPutPayload struct {
 
 type oplogDeletePayload struct {
 	LastModified string `json:"last_modified_utc"`
+	DeleteMarker bool   `json:"delete_marker,omitempty"`
 }
 
 // ReplRemoteState describes replication watermarks per remote.
@@ -445,6 +464,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 18 {
+		if err = applyV18(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(18, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -819,6 +846,59 @@ func applyV17(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func applyV18(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `
+SELECT v.bucket, v.key
+FROM versions v
+LEFT JOIN objects_current o ON o.bucket=v.bucket AND o.key=v.key
+WHERE o.key IS NULL
+GROUP BY v.bucket, v.key`)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	clock := clock.New()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for rows.Next() {
+		var bucket string
+		var key string
+		if scanErr := rows.Scan(&bucket, &key); scanErr != nil {
+			return scanErr
+		}
+		versionID, idErr := newVersionID()
+		if idErr != nil {
+			return idErr
+		}
+		hlcTS := clock.Next()
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, '', 0, '', ?, ?, ?, 'DELETE_MARKER')`,
+			versionID, bucket, key, now, hlcTS, "migration"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO objects_current(bucket, key, version_id)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
+			bucket, key, versionID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO hlc_state(id, last_hlc, updated_at)
+VALUES(1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	last_hlc=CASE WHEN excluded.last_hlc > hlc_state.last_hlc THEN excluded.last_hlc ELSE hlc_state.last_hlc END,
+	updated_at=excluded.updated_at`, hlcTS, now); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // UpsertAPIKey inserts or updates an API key entry.
@@ -1872,6 +1952,58 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 				if lastModified == "" {
 					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
 				}
+				if payload.DeleteMarker {
+					if _, err := tx.Exec(`
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, '', 0, '', ?, ?, ?, 'DELETE_MARKER')
+ON CONFLICT(version_id) DO UPDATE SET
+	last_modified_utc=excluded.last_modified_utc,
+	hlc_ts=excluded.hlc_ts,
+	site_id=excluded.site_id,
+	state='DELETE_MARKER'`,
+						entry.VersionID, entry.Bucket, entry.Key, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+						return err
+					}
+					var currentVersion string
+					var currentHLC string
+					var currentSite string
+					err = tx.QueryRow(`
+SELECT o.version_id, COALESCE(v.hlc_ts,''), COALESCE(v.site_id,'')
+FROM objects_current o
+LEFT JOIN versions v ON o.version_id=v.version_id
+WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &currentHLC, &currentSite)
+					if err != nil && !errors.Is(err, sql.ErrNoRows) {
+						return err
+					}
+					if errors.Is(err, sql.ErrNoRows) {
+						latestHLC, latestSite, ok, err := latestVersionHLC(tx, entry.Bucket, entry.Key)
+						if err != nil {
+							return err
+						}
+						if ok && compareHLC(entry.HLCTS, entry.SiteID, latestHLC, latestSite) < 0 {
+							conflicts++
+							if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+								return err
+							}
+							break
+						}
+					}
+					if errors.Is(err, sql.ErrNoRows) || compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) > 0 {
+						if _, err := tx.Exec(`
+INSERT INTO objects_current(bucket, key, version_id)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
+							entry.Bucket, entry.Key, entry.VersionID); err != nil {
+							return err
+						}
+					} else if !errors.Is(err, sql.ErrNoRows) {
+						conflicts++
+						if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+							return err
+						}
+					}
+					break
+				}
 				res, err := tx.Exec(`
 UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?`,
 					entry.HLCTS, entry.SiteID, entry.VersionID)
@@ -1898,14 +2030,24 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return err
 				}
-				if !errors.Is(err, sql.ErrNoRows) {
-					if compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
-						if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+				if !errors.Is(err, sql.ErrNoRows) && currentVersion == entry.VersionID && compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
+					var nextVersion string
+					err = tx.QueryRow(`
+SELECT version_id
+FROM versions
+WHERE bucket=? AND key=? AND state<>'DELETED'
+ORDER BY hlc_ts DESC, site_id DESC
+LIMIT 1`, entry.Bucket, entry.Key).Scan(&nextVersion)
+					if err != nil {
+						if errors.Is(err, sql.ErrNoRows) {
+							if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+								return err
+							}
+						} else {
 							return err
 						}
 					} else {
-						conflicts++
-						if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+						if _, err := tx.Exec("UPDATE objects_current SET version_id=? WHERE bucket=? AND key=?", nextVersion, entry.Bucket, entry.Key); err != nil {
 							return err
 						}
 					}
@@ -2788,7 +2930,7 @@ func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, after
 SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
-WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\'`,
+WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND v.state<>'DELETE_MARKER'`,
 		"o.key", "v.version_id", bucket, pattern, afterKey, afterVersion, limit,
 	)
 	if err != nil {
@@ -3347,28 +3489,28 @@ func (s *Store) DeleteBucketTx(ctx context.Context, tx *sql.Tx, bucket string) e
 	return err
 }
 
-// DeleteObject removes the current object pointer and marks the version as deleted.
-func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (bool, error) {
+// DeleteObject creates a delete marker for the key and updates objects_current.
+func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (string, error) {
 	if bucket == "" || key == "" {
-		return false, errors.New("meta: bucket and key required")
+		return "", errors.New("meta: bucket and key required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer func() {
 		if err != nil {
 			_ = tx.Rollback()
 		}
 	}()
-	deleted, err := s.DeleteObjectTx(ctx, tx, bucket, key)
+	versionID, err := s.DeleteObjectTx(ctx, tx, bucket, key)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if err := tx.Commit(); err != nil {
-		return false, err
+		return "", err
 	}
-	return deleted, nil
+	return versionID, nil
 }
 
 // DeleteObjectVersion marks a specific version as deleted and updates objects_current if needed.
@@ -3395,35 +3537,66 @@ func (s *Store) DeleteObjectVersion(ctx context.Context, bucket, key, versionID 
 	return deleted, nil
 }
 
-// DeleteObjectTx removes the current object pointer and marks the version as deleted within the provided transaction.
-func (s *Store) DeleteObjectTx(ctx context.Context, tx *sql.Tx, bucket, key string) (bool, error) {
-	if bucket == "" || key == "" {
-		return false, errors.New("meta: bucket and key required")
+func (s *Store) recordDeleteMarkerTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID, lastModified string, writeOplog bool) error {
+	if bucket == "" || key == "" || versionID == "" {
+		return errors.New("meta: bucket, key, and version id required")
 	}
 	if tx == nil {
-		return false, errors.New("meta: tx required")
+		return errors.New("meta: tx required")
 	}
-	var versionID string
-	err := tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&versionID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
+	if lastModified == "" {
+		lastModified = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	hlcTS, siteID := s.nextHLC()
-	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, '', 0, '', ?, ?, ?, 'DELETE_MARKER')
+ON CONFLICT(version_id) DO UPDATE SET
+	last_modified_utc=excluded.last_modified_utc,
+	hlc_ts=excluded.hlc_ts,
+	site_id=excluded.site_id,
+	state='DELETE_MARKER'`,
+		versionID, bucket, key, lastModified, hlcTS, siteID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO objects_current(bucket, key, version_id)
+VALUES(?, ?, ?)
+ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
+		bucket, key, versionID); err != nil {
+		return err
+	}
+	if writeOplog {
+		deletePayload, err := json.Marshal(oplogDeletePayload{
+			LastModified: lastModified,
+			DeleteMarker: true,
+		})
+		if err != nil {
+			return err
+		}
+		if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteObjectTx creates a delete marker for the key within the provided transaction.
+func (s *Store) DeleteObjectTx(ctx context.Context, tx *sql.Tx, bucket, key string) (string, error) {
+	if bucket == "" || key == "" {
+		return "", errors.New("meta: bucket and key required")
+	}
+	if tx == nil {
+		return "", errors.New("meta: tx required")
+	}
+	versionID, err := newVersionID()
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
-		return false, err
+	if err := s.recordDeleteMarkerTx(ctx, tx, bucket, key, versionID, time.Now().UTC().Format(time.RFC3339Nano), true); err != nil {
+		return "", err
 	}
-	_, _ = tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID)
-	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
-		return false, err
-	}
-	return true, nil
+	return versionID, nil
 }
 
 // DeleteObjectVersionTx marks a specific version as deleted and updates objects_current if needed within the provided transaction.
@@ -3463,9 +3636,9 @@ WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
 		err = tx.QueryRowContext(ctx, `
 SELECT version_id
 FROM versions
-WHERE bucket=? AND key=? AND state='ACTIVE' AND version_id<>?
-ORDER BY last_modified_utc DESC
-LIMIT 1`, bucket, key, versionID).Scan(&nextVersion)
+WHERE bucket=? AND key=? AND state<>'DELETED'
+ORDER BY hlc_ts DESC, site_id DESC
+LIMIT 1`, bucket, key).Scan(&nextVersion)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				if _, err := tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {

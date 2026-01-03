@@ -212,10 +212,15 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `If-Modified-Since` → 304 `NotModified` when unchanged since the given time.
 - `If-Unmodified-Since` → 412 `PreconditionFailed` when modified after the given time.
 
-### 4.6 Conflict visibility (MVP)
+### 4.6 Versioning delete markers
+- `DELETE` without `versionId` creates a delete marker as the latest version.
+- `GET`/`HEAD` without `versionId` returns 404 when the latest version is a delete marker.
+- Responses include `x-amz-delete-marker: true` and `x-amz-version-id` for delete markers.
+
+### 4.7 Conflict visibility (MVP)
 - If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.
 
-### 4.7 Errors
+### 4.8 Errors
 - AWS-compatible XML (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
 - Examples validated in tests (e.g. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
   `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.
