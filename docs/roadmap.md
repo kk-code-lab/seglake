@@ -24,7 +24,6 @@ Tag legend (order used below):
 - [api] Support `If-Match: *` semantics for overwrite guard (only if object exists).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 - [api][integrity][ops] Add SSE-S3 (MVP+): PUT/GET/HEAD + `x-amz-server-side-encryption: AES256`, per-object DEK/EDEK, documented ETag semantics, presign header enforcement, and KEK re-wrap tooling for rotation.
-- [api] Add ListObjectVersions (minimal: `GET /<bucket>?versions` with standard paging and delete marker entries).
 
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).

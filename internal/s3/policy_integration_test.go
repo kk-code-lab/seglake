@@ -48,6 +48,9 @@ func newPolicyHandler(t *testing.T, policy string) *Handler {
 			SecretLookup:         store.LookupAPISecret,
 			AllowUnsignedPayload: true,
 		},
+		apiKeyUseLast: map[string]time.Time{
+			"ak": time.Now().UTC(),
+		},
 	}
 }
 

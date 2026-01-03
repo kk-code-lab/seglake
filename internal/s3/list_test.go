@@ -13,32 +13,12 @@ import (
 func TestListV2DelimiterUnit(t *testing.T) {
 	handler := newListTestHandler(t)
 
-	put := func(key string) {
-		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != 200 {
-			t.Fatalf("PUT status: %d", w.Code)
-		}
-	}
+	listPutObject(t, handler, "a/one.txt")
+	listPutObject(t, handler, "a/two.txt")
+	listPutObject(t, handler, "b/three.txt")
 
-	put("a/one.txt")
-	put("a/two.txt")
-	put("b/three.txt")
-
-	req := httptest.NewRequest("GET", "/bucket?list-type=2&prefix=a&delimiter=/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatalf("LIST status: %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "<CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes>") {
-		t.Fatalf("expected common prefix")
-	}
-	if strings.Contains(body, "<Key>a/one.txt</Key>") {
-		t.Fatalf("expected keys grouped by delimiter")
-	}
+	body := listAndReadBody(t, handler, "/bucket?list-type=2&prefix=a&delimiter=/", "LIST")
+	assertCommonPrefixGrouped(t, body, "a/")
 }
 
 func TestListV2DelimiterEmptyPrefix(t *testing.T) {
@@ -253,6 +233,179 @@ func TestPutGetBucketVersioning(t *testing.T) {
 	}
 	if !strings.Contains(getW.Body.String(), "<Status>Suspended</Status>") {
 		t.Fatalf("expected Suspended status")
+	}
+}
+
+func TestListVersionsIncludesDeleteMarker(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	put := func(key string) {
+		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader("data"))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("PUT status: %d", w.Code)
+		}
+	}
+
+	put("demo.txt")
+	put("demo.txt")
+
+	del := httptest.NewRequest("DELETE", "/bucket/demo.txt", nil)
+	delW := httptest.NewRecorder()
+	handler.ServeHTTP(delW, del)
+	if delW.Code != 204 {
+		t.Fatalf("DELETE status: %d", delW.Code)
+	}
+
+	req := httptest.NewRequest("GET", "/bucket?versions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST versions status: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<DeleteMarker>") {
+		t.Fatalf("expected delete marker entry")
+	}
+	if !strings.Contains(body, "<Version>") {
+		t.Fatalf("expected version entry")
+	}
+}
+
+func TestListVersionsNullVersionID(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	create := httptest.NewRequest("PUT", "/bucket", nil)
+	createW := httptest.NewRecorder()
+	handler.ServeHTTP(createW, create)
+	if createW.Code != 200 {
+		t.Fatalf("PUT bucket status: %d", createW.Code)
+	}
+
+	putBody := `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Suspended</Status></VersioningConfiguration>`
+	setReq := httptest.NewRequest("PUT", "/bucket?versioning", strings.NewReader(putBody))
+	setW := httptest.NewRecorder()
+	handler.ServeHTTP(setW, setReq)
+	if setW.Code != 200 {
+		t.Fatalf("PUT versioning status: %d", setW.Code)
+	}
+
+	put := httptest.NewRequest("PUT", "/bucket/null.txt", strings.NewReader("data"))
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, put)
+	if putW.Code != 200 {
+		t.Fatalf("PUT status: %d", putW.Code)
+	}
+
+	req := httptest.NewRequest("GET", "/bucket?versions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST versions status: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<VersionId>null</VersionId>") {
+		t.Fatalf("expected null version id")
+	}
+}
+
+func TestListVersionsDelimiter(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	listPutObject(t, handler, "a/one.txt")
+	listPutObject(t, handler, "a/two.txt")
+	listPutObject(t, handler, "b.txt")
+
+	body := listAndReadBody(t, handler, "/bucket?versions&prefix=a&delimiter=/", "LIST versions")
+	assertCommonPrefixGrouped(t, body, "a/")
+}
+
+func listPutObject(t *testing.T, handler *Handler, key string) {
+	t.Helper()
+	req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("PUT status: %d", w.Code)
+	}
+}
+
+func listAndReadBody(t *testing.T, handler *Handler, path, label string) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("%s status: %d", label, w.Code)
+	}
+	return w.Body.String()
+}
+
+func assertCommonPrefixGrouped(t *testing.T, body, prefix string) {
+	t.Helper()
+	if !strings.Contains(body, "<CommonPrefixes><Prefix>"+prefix+"</Prefix></CommonPrefixes>") {
+		t.Fatalf("expected common prefix")
+	}
+	if strings.Contains(body, "<Key>"+prefix+"one.txt</Key>") {
+		t.Fatalf("expected keys grouped by delimiter")
+	}
+}
+
+func TestListVersionsTruncates(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	put := func(key string) {
+		req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("PUT status: %d", w.Code)
+		}
+	}
+
+	put("a.txt")
+	put("b.txt")
+
+	req := httptest.NewRequest("GET", "/bucket?versions&max-keys=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("LIST versions status: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<IsTruncated>true</IsTruncated>") {
+		t.Fatalf("expected truncated response")
+	}
+	if !strings.Contains(body, "<NextKeyMarker>") {
+		t.Fatalf("expected next key marker")
+	}
+	if !strings.Contains(body, "<NextVersionIdMarker>") {
+		t.Fatalf("expected next version id marker")
+	}
+}
+
+func TestListVersionsUnversionedReturnsEmpty(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	create := httptest.NewRequest("PUT", "/bucket", nil)
+	create.Header.Set("x-seglake-versioning", "unversioned")
+	createW := httptest.NewRecorder()
+	handler.ServeHTTP(createW, create)
+	if createW.Code != 200 {
+		t.Fatalf("PUT bucket status: %d", createW.Code)
+	}
+
+	put := httptest.NewRequest("PUT", "/bucket/key.txt", strings.NewReader("data"))
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, put)
+	if putW.Code != 200 {
+		t.Fatalf("PUT status: %d", putW.Code)
+	}
+
+	body := listAndReadBody(t, handler, "/bucket?versions", "LIST versions")
+	if strings.Contains(body, "<Version>") || strings.Contains(body, "<DeleteMarker>") {
+		t.Fatalf("expected empty version listing")
 	}
 }
 

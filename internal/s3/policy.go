@@ -55,6 +55,7 @@ const (
 
 	policyActionListBuckets           = "listbuckets"
 	policyActionListBucket            = "listbucket"
+	policyActionListBucketVersions    = "listbucketversions"
 	policyActionGetBucketLocation     = "getbucketlocation"
 	policyActionGetBucketPolicy       = "getbucketpolicy"
 	policyActionPutBucketPolicy       = "putbucketpolicy"
@@ -84,6 +85,7 @@ var validPolicyActions = map[string]struct{}{
 	policyActionAll:                   {},
 	policyActionListBuckets:           {},
 	policyActionListBucket:            {},
+	policyActionListBucketVersions:    {},
 	policyActionGetBucketLocation:     {},
 	policyActionGetBucketPolicy:       {},
 	policyActionPutBucketPolicy:       {},
@@ -139,6 +141,7 @@ func ParsePolicy(raw string) (*Policy, error) {
 			Actions: []string{
 				policyActionListBuckets,
 				policyActionListBucket,
+				policyActionListBucketVersions,
 				policyActionGetBucketLocation,
 				policyActionGetBucketPolicy,
 				policyActionGetObject,
@@ -445,6 +448,8 @@ func policyActionForRequest(op string) string {
 		return policyActionPutBucketVersioning
 	case "list_v1", "list_v2":
 		return policyActionListBucket
+	case "list_versions":
+		return policyActionListBucketVersions
 	case "get":
 		return policyActionGetObject
 	case "head":
