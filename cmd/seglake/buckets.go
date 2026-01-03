@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 )
 
-func runBuckets(action, metaPath, bucket string, jsonOut bool) error {
+func runBuckets(action, metaPath, bucket, versioning string, jsonOut bool) error {
 	if metaPath == "" {
 		return errors.New("meta path required")
 	}
@@ -42,8 +43,14 @@ func runBuckets(action, metaPath, bucket string, jsonOut bool) error {
 		if err := s3.ValidateBucketName(bucket); err != nil {
 			return err
 		}
-		if err := store.CreateBucket(context.Background(), bucket); err != nil {
-			return err
+		if strings.TrimSpace(versioning) == "" {
+			if err := store.CreateBucket(context.Background(), bucket); err != nil {
+				return err
+			}
+		} else {
+			if err := store.CreateBucketWithVersioning(context.Background(), bucket, versioning); err != nil {
+				return err
+			}
 		}
 		if jsonOut {
 			return writeJSON(map[string]string{"status": "ok"})

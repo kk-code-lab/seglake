@@ -122,8 +122,21 @@ def bucket_list(cfg: Config) -> None:
     run(cmd)
 
 
-def bucket_create(cfg: Config, name: str) -> None:
-    run([cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "create", "-bucket", name])
+def bucket_create(cfg: Config, name: str, versioning: str | None) -> None:
+    cmd = [
+        cfg.seglake_bin,
+        "-mode",
+        "buckets",
+        "-data-dir",
+        cfg.data_dir,
+        "-bucket-action",
+        "create",
+        "-bucket",
+        name,
+    ]
+    if versioning:
+        cmd += ["-bucket-versioning", versioning]
+    run(cmd)
 
 
 def bucket_delete(cfg: Config, name: str) -> None:
@@ -498,6 +511,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     bucket_exists_p.add_argument("name")
     bucket_create_p = bucket_sub.add_parser("create")
     bucket_create_p.add_argument("name")
+    bucket_create_p.add_argument(
+        "--versioning",
+        choices=["enabled", "suspended", "disabled", "unversioned"],
+        help="Initial bucket versioning state (admin-only).",
+    )
     bucket_delete_p = bucket_sub.add_parser("delete")
     bucket_delete_p.add_argument("name")
 
@@ -582,7 +600,7 @@ def main(argv: list[str]) -> None:
         elif args.action == "exists":
             bucket_exists(cfg, args.name)
         elif args.action == "create":
-            bucket_create(cfg, args.name)
+            bucket_create(cfg, args.name, args.versioning)
         elif args.action == "delete":
             bucket_delete(cfg, args.name)
         else:

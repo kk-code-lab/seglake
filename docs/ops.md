@@ -386,7 +386,7 @@ Notes:
 Manage bucket entries with `-mode buckets` (metadata only, bypasses S3 API):
 ```
 ./build/seglake -mode buckets -bucket-action list
-./build/seglake -mode buckets -bucket-action create -bucket demo
+./build/seglake -mode buckets -bucket-action create -bucket demo [-bucket-versioning enabled|suspended|disabled|unversioned]
 ./build/seglake -mode buckets -bucket-action exists -bucket demo
 ./build/seglake -mode buckets -bucket-action delete -bucket demo
 ```
