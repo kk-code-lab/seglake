@@ -478,9 +478,17 @@ func TestS3E2EDeleteObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DELETE error: %v", err)
 	}
+	deleteMarker := delResp.Header.Get("x-amz-delete-marker")
+	deleteVersion := delResp.Header.Get("x-amz-version-id")
 	delResp.Body.Close()
 	if delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE status: %d", delResp.StatusCode)
+	}
+	if deleteMarker != "true" {
+		t.Fatalf("expected delete marker header, got %q", deleteMarker)
+	}
+	if deleteVersion == "" {
+		t.Fatalf("expected delete marker version id")
 	}
 
 	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/delete", nil)
@@ -491,6 +499,12 @@ func TestS3E2EDeleteObject(t *testing.T) {
 	getResp, err := http.DefaultClient.Do(getReq)
 	if err != nil {
 		t.Fatalf("GET error: %v", err)
+	}
+	if got := getResp.Header.Get("x-amz-delete-marker"); got != "true" {
+		t.Fatalf("expected delete marker header on GET, got %q", got)
+	}
+	if got := getResp.Header.Get("x-amz-version-id"); got == "" {
+		t.Fatalf("expected delete marker version id on GET")
 	}
 	getResp.Body.Close()
 	if getResp.StatusCode != http.StatusNotFound {
