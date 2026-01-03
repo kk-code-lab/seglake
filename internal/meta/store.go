@@ -3080,6 +3080,75 @@ WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND v.state<>'DELETE_MARKER'`,
 	})
 }
 
+// ListObjectVersions returns all versions (including delete markers) for a bucket with optional prefix and markers.
+func (s *Store) ListObjectVersions(ctx context.Context, bucket, prefix, keyMarker, versionIDMarker string, limit int) (out []ObjectMeta, err error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	pattern := escapeLike(prefix) + "%"
+	baseQuery := `
+SELECT key, version_id, etag, size, content_type, last_modified_utc, state, is_null, hlc_ts, site_id
+FROM versions
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state<>'DELETED'`
+	orderClause := " ORDER BY key ASC, hlc_ts DESC, site_id DESC, version_id DESC LIMIT ?"
+	args := []any{bucket, pattern}
+	query := baseQuery + orderClause
+
+	if keyMarker != "" && versionIDMarker != "" {
+		hlcTS, siteID, ok, err := s.lookupVersionMarker(ctx, bucket, keyMarker, versionIDMarker)
+		if err != nil {
+			return nil, err
+		}
+		if ok && hlcTS != "" {
+			query = baseQuery + `
+ AND (key > ? OR (key = ? AND (hlc_ts < ? OR (hlc_ts = ? AND (site_id < ? OR (site_id = ? AND version_id < ?))))))
+` + orderClause
+			args = append(args, keyMarker, keyMarker, hlcTS, hlcTS, siteID, siteID, versionIDMarker)
+		} else {
+			query = baseQuery + " AND key > ?" + orderClause
+			args = append(args, keyMarker)
+		}
+	} else if keyMarker != "" {
+		query = baseQuery + " AND key > ?" + orderClause
+		args = append(args, keyMarker)
+	}
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var meta ObjectMeta
+		var hlcTS string
+		var siteID string
+		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &hlcTS, &siteID); err != nil {
+			return err
+		}
+		out = append(out, meta)
+		return nil
+	})
+}
+
+func (s *Store) lookupVersionMarker(ctx context.Context, bucket, key, versionID string) (string, string, bool, error) {
+	if bucket == "" || key == "" || versionID == "" {
+		return "", "", false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT hlc_ts, site_id
+FROM versions
+WHERE bucket=? AND key=? AND version_id=?
+LIMIT 1`, bucket, key, versionID)
+	var hlcTS, siteID string
+	if err := row.Scan(&hlcTS, &siteID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	return hlcTS, siteID, true, nil
+}
+
 func escapeLike(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {

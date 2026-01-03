@@ -73,6 +73,8 @@ var awsActionToPolicy = map[string]string{
 	"listallmybuckets":        policyActionListBuckets,
 	"listbuckets":             policyActionListBuckets,
 	"listbucket":              policyActionListBucket,
+	"listbucketversions":      policyActionListBucketVersions,
+	"listobjectversions":      policyActionListBucketVersions,
 	"getbucketlocation":       policyActionGetBucketLocation,
 	"getbucketpolicy":         policyActionGetBucketPolicy,
 	"putbucketpolicy":         policyActionPutBucketPolicy,

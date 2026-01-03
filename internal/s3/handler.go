@@ -273,6 +273,7 @@ const (
 	bucketListV2
 	bucketListLocation
 	bucketListUploads
+	bucketListVersions
 	bucketGetPolicy
 	bucketPutPolicy
 	bucketDeletePolicy
@@ -303,6 +304,12 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 				return bucketListNone
 			}
 			return bucketListUploads
+		}
+		if r.URL.Query().Has("versions") {
+			if !hasBucketOnly && hostBucket == "" {
+				return bucketListNone
+			}
+			return bucketListVersions
 		}
 		if r.URL.Query().Has("versioning") {
 			if !hasBucketOnly && hostBucket == "" {
@@ -356,6 +363,9 @@ func isListV1Request(r *http.Request, hasBucketOnly bool) bool {
 	if r.URL.Query().Has("uploads") {
 		return false
 	}
+	if r.URL.Query().Has("versions") {
+		return false
+	}
 	return true
 }
 
@@ -385,6 +395,13 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 		return true
 	case bucketListUploads:
 		h.handleListMultipartUploads(ctx, w, r, bucketOnly, requestID)
+		return true
+	case bucketListVersions:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleListVersions(ctx, w, r, bucket, requestID)
 		return true
 	case bucketGetPolicy:
 		bucket := bucketOnly
@@ -1656,6 +1673,15 @@ func (h *Handler) opForRequest(r *http.Request) string {
 			case http.MethodPut:
 				return "put_bucket_versioning"
 			}
+		}
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Has("versions") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			return "list_versions"
+		}
+		if path == "" && h.hostBucket(r) != "" {
+			return "list_versions"
 		}
 	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
