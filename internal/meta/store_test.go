@@ -411,3 +411,107 @@ func TestDeleteObjectVersionPromotesPrevious(t *testing.T) {
 		t.Fatalf("expected v2 state DELETED, got %s", v2.State)
 	}
 }
+
+func TestMigrationV18AddsDeleteMarkersForOrphans(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS buckets (bucket TEXT PRIMARY KEY, created_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS versions (
+			version_id TEXT PRIMARY KEY,
+			bucket TEXT NOT NULL,
+			key TEXT NOT NULL,
+			etag TEXT,
+			size INTEGER NOT NULL,
+			content_type TEXT,
+			last_modified_utc TEXT NOT NULL,
+			hlc_ts TEXT,
+			site_id TEXT,
+			state TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS objects_current (
+			bucket TEXT NOT NULL,
+			key TEXT NOT NULL,
+			version_id TEXT NOT NULL,
+			PRIMARY KEY(bucket, key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS manifests (version_id TEXT PRIMARY KEY, path TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS segments (segment_id TEXT PRIMARY KEY, path TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, sealed_at TEXT, size INTEGER, footer_checksum BLOB)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (access_key TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, salt TEXT NOT NULL, enabled INTEGER NOT NULL, created_at TEXT NOT NULL, label TEXT, last_used_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS api_key_bucket_allow (access_key TEXT NOT NULL, bucket TEXT NOT NULL, PRIMARY KEY(access_key, bucket))`,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS multipart_uploads (upload_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, key TEXT NOT NULL, created_at TEXT NOT NULL, state TEXT NOT NULL, content_type TEXT)`,
+		`CREATE TABLE IF NOT EXISTS multipart_parts (upload_id TEXT NOT NULL, part_number INTEGER NOT NULL, version_id TEXT NOT NULL, etag TEXT NOT NULL, size INTEGER NOT NULL, last_modified_utc TEXT NOT NULL, PRIMARY KEY(upload_id, part_number))`,
+		`CREATE TABLE IF NOT EXISTS bucket_policies (bucket TEXT PRIMARY KEY, policy TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS oplog (id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, hlc_ts TEXT NOT NULL, op_type TEXT NOT NULL, bucket TEXT NOT NULL, key TEXT NOT NULL, version_id TEXT, payload TEXT, bytes INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS repl_state (id INTEGER PRIMARY KEY CHECK (id = 1), updated_at TEXT NOT NULL, last_pull_hlc TEXT NOT NULL DEFAULT '', last_push_hlc TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE IF NOT EXISTS repl_state_remote (remote TEXT PRIMARY KEY, updated_at TEXT NOT NULL, last_pull_hlc TEXT NOT NULL DEFAULT '', last_push_hlc TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE IF NOT EXISTS repl_metrics (id INTEGER PRIMARY KEY CHECK (id = 1), updated_at TEXT NOT NULL, conflict_count INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS hlc_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_hlc TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.Exec(stmt); err != nil {
+			t.Fatalf("ddl: %v", err)
+		}
+	}
+	_, err = tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(17, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("schema_migrations: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = tx.Exec(`INSERT INTO buckets(bucket, created_at) VALUES(?, ?)`, "b", now)
+	if err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	_, err = tx.Exec(`INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`, "v1", "b", "k1", "etag", 1, "", now, "0000000000000000001-0000000001", "legacy")
+	if err != nil {
+		t.Fatalf("insert v1: %v", err)
+	}
+	_, err = tx.Exec(`INSERT INTO objects_current(bucket, key, version_id) VALUES(?, ?, ?)`, "b", "k1", "v1")
+	if err != nil {
+		t.Fatalf("objects_current k1: %v", err)
+	}
+	_, err = tx.Exec(`INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`, "v2", "b", "k2", "etag2", 1, "", now, "0000000000000000002-0000000001", "legacy")
+	if err != nil {
+		t.Fatalf("insert v2: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	meta1, err := store.GetObjectMeta(context.Background(), "b", "k1")
+	if err != nil {
+		t.Fatalf("GetObjectMeta k1: %v", err)
+	}
+	if meta1.VersionID != "v1" {
+		t.Fatalf("expected k1 current v1, got %s", meta1.VersionID)
+	}
+
+	meta2, err := store.GetObjectMeta(context.Background(), "b", "k2")
+	if err != nil {
+		t.Fatalf("GetObjectMeta k2: %v", err)
+	}
+	if meta2.State != VersionStateDeleteMarker {
+		t.Fatalf("expected delete marker for k2, got %s", meta2.State)
+	}
+}
