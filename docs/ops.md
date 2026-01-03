@@ -430,6 +430,10 @@ Example (public read-only bucket):
 curl http://localhost:9000/public/hello.txt
 ```
 
+Bucket versioning:
+- `PUT /<bucket>?versioning` supports `Enabled` and `Suspended` (AWS-compatible XML body).
+- Create an unversioned bucket by sending `x-seglake-versioning: unversioned` on `PUT /<bucket>`.
+
 Policies:
 - `rw` (default): full access.
 - `ro` / `read-only`: blocks PUT/POST/DELETE.

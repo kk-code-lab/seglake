@@ -144,7 +144,10 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `GET /<bucket>?policy` — GetBucketPolicy.
 - `PUT /<bucket>?policy` — PutBucketPolicy.
 - `DELETE /<bucket>?policy` — DeleteBucketPolicy.
+- `GET /<bucket>?versioning` — GetBucketVersioning.
+- `PUT /<bucket>?versioning` — PutBucketVersioning.
 - `PUT /<bucket>` — CreateBucket (idempotent).
+  - Nonstandard: `x-seglake-versioning: unversioned|enabled` sets the initial bucket versioning state (default: `enabled`).
 - `PUT /<bucket>/<key>` — PUT object.
 - `GET /<bucket>/<key>` — GET object.
 - `HEAD /<bucket>/<key>` — HEAD object.
@@ -178,7 +181,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
-- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
+- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketVersioning, PutBucketVersioning, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).
 - `X-Forwarded-For` is used only for trusted proxies (`-trusted-proxies`).
 - Auth failure rate limiting per IP and per access key.
@@ -212,15 +215,23 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `If-Modified-Since` → 304 `NotModified` when unchanged since the given time.
 - `If-Unmodified-Since` → 412 `PreconditionFailed` when modified after the given time.
 
-### 4.6 Versioning delete markers
+### 4.6 Bucket versioning
+- `GET /<bucket>?versioning` returns XML with `<Status>Enabled|Suspended</Status>`; unversioned buckets return an empty configuration.
+- `PUT /<bucket>?versioning` accepts XML `<VersioningConfiguration><Status>Enabled|Suspended</Status></VersioningConfiguration>`.
+- States: `enabled` (default), `suspended`, `disabled` (unversioned). Only `enabled`/`suspended` are settable via `PUT ?versioning`.
+- `disabled` buckets are created via `x-seglake-versioning: unversioned` and cannot be reverted to unversioned once enabled/suspended.
+- In `suspended`: new writes are tracked as the null version (`x-amz-version-id: null`), and `versionId=null` targets the null version.
+- In `disabled`: version ids are not exposed; deletes remove the current object without creating a delete marker.
+
+### 4.7 Versioning delete markers
 - `DELETE` without `versionId` creates a delete marker as the latest version.
 - `GET`/`HEAD` without `versionId` returns 404 when the latest version is a delete marker.
 - Responses include `x-amz-delete-marker: true` and `x-amz-version-id` for delete markers.
 
-### 4.7 Conflict visibility (MVP)
+### 4.8 Conflict visibility (MVP)
 - If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.
 
-### 4.8 Errors
+### 4.9 Errors
 - AWS-compatible XML (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).
 - Examples validated in tests (e.g. `SignatureDoesNotMatch`, `RequestTimeTooSkewed`,
   `XAmzContentSHA256Mismatch`): `internal/s3/e2e_test.go`.

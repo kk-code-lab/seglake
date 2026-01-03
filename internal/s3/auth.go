@@ -277,10 +277,10 @@ func (c *AuthConfig) secretFor(ctx context.Context, accessKey string) (string, e
 }
 
 var (
-	errSignatureMismatch = errors.New("signature mismatch")
-	errAccessDenied      = errors.New("access denied")
-	errTimeSkew          = errors.New("request time too skewed")
-	errAuthMalformed     = errors.New("authorization header malformed")
+	errSignatureMismatch    = errors.New("signature mismatch")
+	errAccessDenied         = errors.New("access denied")
+	errTimeSkew             = errors.New("request time too skewed")
+	errAuthMalformed        = errors.New("authorization header malformed")
 	errMissingContentSHA256 = errors.New("missing x-amz-content-sha256")
 )
 

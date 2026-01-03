@@ -316,6 +316,11 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	}
 
 	multiETag := multipartETag(ordered)
+	versioningState, err := h.bucketVersioningState(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
 	_, result, err := h.Engine.PutManifestWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, totalSize, multiETag, chunks, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 		if h.Meta == nil {
 			return errors.New("meta store not configured")
@@ -337,6 +342,11 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	w.Header().Set("ETag", `"`+multiETag+`"`)
 	if result != nil {
 		_ = result
+	}
+	if result != nil {
+		if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
+			w.Header().Set("x-amz-version-id", versionID)
+		}
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)

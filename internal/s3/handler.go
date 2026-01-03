@@ -163,7 +163,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !hasBucketKey {
 		if r.Method == http.MethodPut {
 			if hasBucketOnly {
-				h.handleCreateBucket(r.Context(), mw, bucketOnly, requestID, r.URL.Path)
+				h.handleCreateBucket(r.Context(), mw, r, bucketOnly, requestID, r.URL.Path)
 				return
 			}
 		}
@@ -276,6 +276,8 @@ const (
 	bucketGetPolicy
 	bucketPutPolicy
 	bucketDeletePolicy
+	bucketGetVersioning
+	bucketPutVersioning
 	bucketHead
 )
 
@@ -302,6 +304,12 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			}
 			return bucketListUploads
 		}
+		if r.URL.Query().Has("versioning") {
+			if !hasBucketOnly && hostBucket == "" {
+				return bucketListNone
+			}
+			return bucketGetVersioning
+		}
 		if r.URL.Query().Has("policy") {
 			if !hasBucketOnly && hostBucket == "" {
 				return bucketListNone
@@ -322,6 +330,14 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			return bucketPutPolicy
 		case http.MethodDelete:
 			return bucketDeletePolicy
+		}
+	}
+	if r.URL.Query().Has("versioning") {
+		if !hasBucketOnly && hostBucket == "" {
+			return bucketListNone
+		}
+		if r.Method == http.MethodPut {
+			return bucketPutVersioning
 		}
 	}
 	return bucketListNone
@@ -390,6 +406,20 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 			bucket = hostBucket
 		}
 		h.handleDeleteBucketPolicy(ctx, w, r, bucket, requestID)
+		return true
+	case bucketGetVersioning:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleGetBucketVersioning(ctx, w, r, bucket, requestID)
+		return true
+	case bucketPutVersioning:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handlePutBucketVersioning(ctx, w, r, bucket, requestID)
 		return true
 	case bucketHead:
 		bucket := bucketOnly
@@ -921,6 +951,11 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	versioningState, err := h.bucketVersioningState(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
 	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	if err != nil {
 		switch {
@@ -946,8 +981,8 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if result.ETag != "" {
 		w.Header().Set("ETag", `"`+result.ETag+`"`)
 	}
-	if result.VersionID != "" {
-		w.Header().Set("x-amz-version-id", result.VersionID)
+	if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
+		w.Header().Set("x-amz-version-id", versionID)
 	}
 	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
@@ -959,8 +994,17 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 		objMeta *meta.ObjectMeta
 		err     error
 	)
+	versioningState, stateErr := h.bucketVersioningState(ctx, bucket)
+	if stateErr != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", stateErr.Error(), requestID, r.URL.Path)
+		return
+	}
 	if versionID != "" {
-		objMeta, err = h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		if versionID == "null" && isNullVersioningState(versioningState) {
+			objMeta, err = h.Meta.GetNullObjectVersion(ctx, bucket, key)
+		} else {
+			objMeta, err = h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		}
 	} else {
 		objMeta, err = h.Meta.GetObjectMeta(ctx, bucket, key)
 	}
@@ -974,8 +1018,8 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if strings.EqualFold(objMeta.State, meta.VersionStateDeleteMarker) {
 		w.Header().Set("x-amz-delete-marker", "true")
-		if objMeta.VersionID != "" {
-			w.Header().Set("x-amz-version-id", objMeta.VersionID)
+		if versionID, ok := versionIDHeaderForMeta(versioningState, objMeta); ok {
+			w.Header().Set("x-amz-version-id", versionID)
 		}
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchKey", "key not found", requestID, r.URL.Path)
 		return
@@ -991,8 +1035,8 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	if objMeta.ETag != "" {
 		w.Header().Set("ETag", `"`+objMeta.ETag+`"`)
 	}
-	if objMeta.VersionID != "" {
-		w.Header().Set("x-amz-version-id", objMeta.VersionID)
+	if versionID, ok := versionIDHeaderForMeta(versioningState, objMeta); ok {
+		w.Header().Set("x-amz-version-id", versionID)
 	}
 	if objMeta.ContentType != "" {
 		w.Header().Set("Content-Type", objMeta.ContentType)
@@ -1129,6 +1173,11 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = reader.Close() }()
 
 	contentType := srcMeta.ContentType
+	versioningState, err := h.bucketVersioningState(ctx, bucket)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
+		return
+	}
 	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
@@ -1141,8 +1190,10 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	if result != nil && result.ETag != "" {
 		w.Header().Set("ETag", `"`+result.ETag+`"`)
 	}
-	if result != nil && result.VersionID != "" {
-		w.Header().Set("x-amz-version-id", result.VersionID)
+	if result != nil {
+		if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
+			w.Header().Set("x-amz-version-id", versionID)
+		}
 	}
 	resp := copyObjectResult{
 		ETag:         `"` + result.ETag + `"`,
@@ -1209,9 +1260,24 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, resource)
 		return
 	}
+	versioningState, stateErr := h.bucketVersioningState(ctx, bucket)
+	if stateErr != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", stateErr.Error(), requestID, resource)
+		return
+	}
 	versionID := r.URL.Query().Get("versionId")
 	if versionID != "" {
-		metaVersion, err := h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		requestedNull := versionID == "null" && isNullVersioningState(versioningState)
+		if versionID == "null" && !requestedNull {
+			writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
+			return
+		}
+		metaVersion, err := func() (*meta.ObjectMeta, error) {
+			if requestedNull {
+				return h.Meta.GetNullObjectVersion(ctx, bucket, key)
+			}
+			return h.Meta.GetObjectVersion(ctx, bucket, key, versionID)
+		}()
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
@@ -1220,15 +1286,32 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 			return
 		}
+		if requestedNull {
+			versionID = metaVersion.VersionID
+		}
 		var deleted bool
-		err = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
-			var derr error
-			deleted, derr = h.Meta.DeleteObjectVersionTx(ctx, tx, bucket, key, versionID)
-			return derr
-		})
-		if err != nil {
-			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
-			return
+		if requestedNull && versioningState == meta.BucketVersioningDisabled {
+			var deletedVersion string
+			err = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+				var derr error
+				deletedVersion, derr = h.Meta.DeleteObjectUnversionedTx(ctx, tx, bucket, key)
+				return derr
+			})
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+				return
+			}
+			deleted = deletedVersion != ""
+		} else {
+			err = h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+				var derr error
+				deleted, derr = h.Meta.DeleteObjectVersionTx(ctx, tx, bucket, key, versionID)
+				return derr
+			})
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+				return
+			}
 		}
 		if !deleted {
 			writeErrorWithResource(w, http.StatusNotFound, "NoSuchVersion", "version not found", requestID, resource)
@@ -1237,21 +1320,36 @@ func (h *Handler) handleDeleteObject(ctx context.Context, w http.ResponseWriter,
 		if strings.EqualFold(metaVersion.State, meta.VersionStateDeleteMarker) {
 			w.Header().Set("x-amz-delete-marker", "true")
 		}
-		w.Header().Set("x-amz-version-id", versionID)
-	} else {
-		var markerVersion string
-		err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
-			var derr error
-			markerVersion, derr = h.Meta.DeleteObjectTx(ctx, tx, bucket, key)
-			return derr
-		})
-		if err != nil {
-			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
-			return
+		if requestedNull {
+			w.Header().Set("x-amz-version-id", "null")
+		} else {
+			w.Header().Set("x-amz-version-id", versionID)
 		}
-		if markerVersion != "" {
-			w.Header().Set("x-amz-delete-marker", "true")
-			w.Header().Set("x-amz-version-id", markerVersion)
+	} else {
+		if versioningState == meta.BucketVersioningDisabled {
+			err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+				_, derr := h.Meta.DeleteObjectUnversionedTx(ctx, tx, bucket, key)
+				return derr
+			})
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+				return
+			}
+		} else {
+			var markerVersion string
+			err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+				var derr error
+				markerVersion, derr = h.Meta.DeleteObjectTx(ctx, tx, bucket, key)
+				return derr
+			})
+			if err != nil {
+				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+				return
+			}
+			if markerVersion != "" {
+				w.Header().Set("x-amz-delete-marker", "true")
+				w.Header().Set("x-amz-version-id", markerVersion)
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1365,13 +1463,35 @@ func (h *Handler) corsMaxAge() int {
 	return 86400
 }
 
-func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter, bucket, requestID, resource string) {
+func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, requestID, resource string) {
 	if h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "meta not initialized", requestID, resource)
 		return
 	}
 	if err := ValidateBucketName(bucket); err != nil {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidBucketName", "invalid bucket name", requestID, resource)
+		return
+	}
+	versioningHeader := ""
+	if r != nil {
+		versioningHeader = r.Header.Get("x-seglake-versioning")
+	}
+	if strings.TrimSpace(versioningHeader) != "" {
+		state, ok := parseCreateBucketVersioningHeader(versioningHeader)
+		if !ok {
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid x-seglake-versioning header", requestID, resource)
+			return
+		}
+		if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
+			if h.Meta == nil {
+				return errors.New("meta store not configured")
+			}
+			return h.Meta.CreateBucketWithVersioningTx(ctx, tx, bucket, state)
+		}); err != nil {
+			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
@@ -1519,6 +1639,25 @@ func (h *Handler) opForRequest(r *http.Request) string {
 			}
 		}
 	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodPut) && r.URL.Query().Has("versioning") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_versioning"
+			case http.MethodPut:
+				return "put_bucket_versioning"
+			}
+		}
+		if path == "" && h.hostBucket(r) != "" {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_versioning"
+			case http.MethodPut:
+				return "put_bucket_versioning"
+			}
+		}
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
 		return "list_v2"
 	}
@@ -1573,7 +1712,7 @@ func (h *Handler) opForRequest(r *http.Request) string {
 func isWriteOp(op string) bool {
 	switch op {
 	case "put", "delete", "delete_bucket", "copy",
-		"put_bucket_policy", "delete_bucket_policy",
+		"put_bucket_policy", "delete_bucket_policy", "put_bucket_versioning",
 		"mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort",
 		"repl_oplog_apply":
 		return true
