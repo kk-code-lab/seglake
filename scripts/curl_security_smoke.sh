@@ -115,6 +115,9 @@ req "Invalid Content-MD5 (expect 400)" PUT "/demo/badmd5" "" \
   -H "Content-MD5: not-base64" \
   --data-binary @/etc/hosts
 
+# Reset auth limiter window to avoid SlowDown on the final check.
+sleep 1
+
 # Meta stats without auth -> 403 (when auth enabled)
 req "Meta stats without auth (expect 403)" GET "/v1/meta/stats" ""
 
