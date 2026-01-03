@@ -169,6 +169,62 @@ curl_req OPTIONS "/$bucket/$object_key" "" "" \
   "Access-Control-Request-Method: PUT" \
   "Access-Control-Request-Headers: authorization,content-md5,x-amz-date,x-amz-content-sha256"
 
+# Multipart: init, oversize part rejection, abort
+amz_date=$(date -u +%Y%m%dT%H%M%SZ)
+auth=$(sign POST "/$bucket/mpu-limit" "uploads" "$amz_date")
+init_body_file="/tmp/curl_mpu_init_body.out"
+init_code=$(curl -sS -m 5 -o "$init_body_file" -w "%{http_code}" -X POST "$endpoint/$bucket/mpu-limit?uploads" \
+  -H "Host: $host" \
+  -H "x-amz-content-sha256: $payload_hash" \
+  -H "x-amz-date: $amz_date" \
+  -H "Authorization: $auth")
+init_code=$(printf "%s" "$init_code" | tr -d '\r\n')
+init_body=$(cat "$init_body_file")
+upload_id=$(python3 - <<'PY' "$init_body_file"
+import re, sys
+path = sys.argv[1]
+data = open(path, "r", encoding="utf-8", errors="ignore").read()
+m = re.search(r"<UploadId>([^<]+)</UploadId>", data)
+print(m.group(1) if m else "")
+PY
+)
+if [ -n "$upload_id" ]; then
+  saved_payload_hash="$payload_hash"
+  payload_hash="STREAMING-UNSIGNED-PAYLOAD"
+  amz_date=$(date -u +%Y%m%dT%H%M%SZ)
+  auth=$(sign PUT "/$bucket/mpu-limit" "partNumber=1&uploadId=$upload_id" "$amz_date")
+  echo ""
+  echo "==> MPU oversize part (expect 413)"
+  curl -sS -m 5 -D - -o /dev/null -X PUT "$endpoint/$bucket/mpu-limit?partNumber=1&uploadId=$upload_id" \
+    -H "Host: $host" \
+    -H "x-amz-content-sha256: $payload_hash" \
+    -H "x-amz-date: $amz_date" \
+    -H "Authorization: $auth" \
+    -H "Content-Encoding: aws-chunked" \
+    -H "X-Amz-Decoded-Content-Length: $((5*1024*1024*1024+1))" \
+    --data-binary $'0\r\n\r\n'
+  payload_hash="$saved_payload_hash"
+
+  amz_date=$(date -u +%Y%m%dT%H%M%SZ)
+  auth=$(sign DELETE "/$bucket/mpu-limit" "uploadId=$upload_id" "$amz_date")
+  curl -sS -m 5 -o /dev/null -X DELETE "$endpoint/$bucket/mpu-limit?uploadId=$upload_id" \
+    -H "Host: $host" \
+    -H "x-amz-content-sha256: $payload_hash" \
+    -H "x-amz-date: $amz_date" \
+    -H "Authorization: $auth"
+else
+  echo ""
+  echo "==> MPU init failed; skipping oversize part check"
+  if [ -n "$init_body" ]; then
+    echo "-- init response --"
+    echo "$init_body" | head -c 200; echo
+  fi
+  if [ -n "$init_code" ]; then
+    echo "-- init status --"
+    echo "$init_code"
+  fi
+fi
+
 # DELETE objects
 curl_req DELETE "/$bucket/$object_key" "" ""
 curl_req DELETE "/$bucket/bad.md" "" ""
