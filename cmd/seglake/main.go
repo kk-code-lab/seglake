@@ -179,6 +179,7 @@ type bucketsOptions struct {
 	rebuildMeta string
 	action      string
 	bucket      string
+	versioning string
 	jsonOut     bool
 }
 
@@ -383,7 +384,7 @@ func main() {
 			}
 		}
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
-		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.jsonOut); err != nil {
+		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.versioning, opts.jsonOut); err != nil {
 			exitError("buckets", err)
 		}
 	case global.mode == "maintenance":
@@ -657,6 +658,7 @@ func newBucketsFlagSet() (*flag.FlagSet, *bucketsOptions) {
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
 	fs.StringVar(&opts.action, "bucket-action", "list", "Bucket action: list|create|delete|exists")
 	fs.StringVar(&opts.bucket, "bucket", "", "Bucket name for bucket-action")
+	fs.StringVar(&opts.versioning, "bucket-versioning", "", "Bucket versioning for create: enabled|suspended|disabled|unversioned")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
 	return fs, opts
 }

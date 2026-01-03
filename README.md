@@ -131,6 +131,7 @@ Helper CLI: `scripts/segctl`
 
 Quick examples:
 - `scripts/segctl bucket list`
+- `scripts/segctl bucket create demo --versioning unversioned`
 - `scripts/segctl key list`
 - `scripts/segctl bucket-policy get`
 
