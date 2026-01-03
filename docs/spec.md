@@ -168,6 +168,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
   - `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` (signed chunks + signed trailers),
   - `STREAMING-UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` (unsigned).
 - `UNSIGNED-PAYLOAD` allowed by default; can be disabled via `-allow-unsigned-payload=false`.
+- Authorization header requests require `X-Amz-Content-Sha256` and a matching signed header entry.
 - Request time skew: default ±5 min (fixed; no flag).
 - Region `us` normalized to `us-east-1`.
 - Required signed headers: `host` and `x-amz-date`.

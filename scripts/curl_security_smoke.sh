@@ -64,6 +64,14 @@ req "No auth GET (expect 403)" GET "/demo" ""
 # Malformed Authorization -> 400 AuthorizationHeaderMalformed
 req "Malformed Authorization (expect 400)" GET "/" "" -H "Authorization: AWS ak:deadbeef"
 
+# Missing x-amz-content-sha256 -> 400 InvalidRequest
+amz_date=$(date -u +%Y%m%dT%H%M%SZ)
+auth_no_sha="AWS4-HMAC-SHA256 Credential=${access}/${amz_date:0:8}/${region}/${service}/aws4_request,SignedHeaders=host;x-amz-date,Signature=deadbeef"
+req "Missing x-amz-content-sha256 (expect 400)" GET "/" "" \
+  -H "Host: $host" \
+  -H "x-amz-date: $amz_date" \
+  -H "Authorization: $auth_no_sha"
+
 # Invalid signature -> 403 SignatureDoesNotMatch
 amz_date=$(date -u +%Y%m%dT%H%M%SZ)
 invalid_auth="AWS4-HMAC-SHA256 Credential=${access}/${amz_date:0:8}/${region}/${service}/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=deadbeef"
