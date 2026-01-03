@@ -55,7 +55,11 @@ req() {
   [ -n "$query" ] && url+="?$query"
   echo ""
   echo "==> $label"
-  curl -sS -m 5 -D - -o /dev/null -X "$method" "$url" "${headers[@]}"
+  if [ "${#headers[@]}" -gt 0 ]; then
+    curl -sS -m 5 -D - -o /dev/null -X "$method" "$url" "${headers[@]}"
+  else
+    curl -sS -m 5 -D - -o /dev/null -X "$method" "$url"
+  fi
 }
 
 # No auth -> 403 AccessDenied
