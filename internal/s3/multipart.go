@@ -57,6 +57,12 @@ type listPartContent struct {
 	LastModified string `xml:"LastModified"`
 }
 
+const (
+	minPartSize   int64 = 5 << 20
+	maxPartSize   int64 = 5 << 30
+	maxPartNumber       = 10000
+)
+
 func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
@@ -109,6 +115,14 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
 	}
+	if streamingMode != streamingNone && hasDecoded && decodedLen > maxPartSize {
+		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		return
+	}
+	if hasLength && contentLength > maxPartSize {
+		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		return
+	}
 	if h.MaxObjectSize > 0 {
 		switch {
 		case streamingMode != streamingNone && hasDecoded && decodedLen > h.MaxObjectSize:
@@ -119,8 +133,12 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 			return
 		}
 	}
-	if h.MaxObjectSize > 0 && !hasLength {
-		reader = newSizeLimitReader(reader, h.MaxObjectSize)
+	if !hasLength {
+		maxLimit := maxPartSize
+		if h.MaxObjectSize > 0 && h.MaxObjectSize < maxLimit {
+			maxLimit = h.MaxObjectSize
+		}
+		reader = newSizeLimitReader(reader, maxLimit)
 	}
 	expectedMD5, err := parseContentMD5(r.Header.Get("Content-MD5"))
 	if err != nil {
@@ -340,7 +358,7 @@ func (h *Handler) handleAbortMultipart(ctx context.Context, w http.ResponseWrite
 
 func parsePartNumber(raw string) (int, bool) {
 	v, err := strconv.Atoi(raw)
-	if err != nil || v <= 0 {
+	if err != nil || v <= 0 || v > maxPartNumber {
 		return 0, false
 	}
 	return v, true
@@ -354,13 +372,17 @@ func normalizeETag(etag string) string {
 }
 
 func validatePartSizes(parts []meta.MultipartPart) error {
-	const minPartSize = 5 << 20
 	if len(parts) == 0 {
 		return errors.New("no parts")
 	}
 	for i := 0; i < len(parts)-1; i++ {
 		if parts[i].Size < minPartSize {
 			return errors.New("part too small")
+		}
+	}
+	for i := 0; i < len(parts); i++ {
+		if parts[i].Size > maxPartSize {
+			return errors.New("part too large")
 		}
 	}
 	return nil

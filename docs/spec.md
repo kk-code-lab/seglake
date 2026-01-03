@@ -272,6 +272,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - ListObjects max-keys: 1000.
 - ListMultipartUploads max-uploads: 1000.
 - Multipart min part size: 5 MiB except the last.
+- Multipart max part size: 5 GiB.
+- Multipart max parts per upload: 10,000.
 - Object size limit: `-max-object-size` (default 5 GiB, 0 = unlimited).
 
 ## 6.1) Ops / TLS / tooling
