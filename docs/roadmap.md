@@ -23,9 +23,11 @@ Tag legend (order used below):
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Support `If-Match: *` semantics for overwrite guard (only if object exists).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
+- [api][integrity][ops] Add SSE-S3 (MVP+): PUT/GET/HEAD + `x-amz-server-side-encryption: AES256`, per-object DEK/EDEK, documented ETag semantics, presign header enforcement, and KEK re-wrap tooling for rotation.
 
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
 - [perf][research] Evaluate variant C further under higher concurrency and on production-like hardware.
 - [perf][research] Consider read-path optimizations if virtual manifests increase read latency in real workloads.
 - [perf][research] Reduce barrier pressure by combining meta updates in fewer transactions.
+- [api][research] Evaluate SSE-C (client-provided keys) feasibility and operational risks.
