@@ -30,6 +30,33 @@ const (
 	VersionStateConflict     = "CONFLICT"
 )
 
+const (
+	BucketVersioningEnabled   = "enabled"
+	BucketVersioningSuspended = "suspended"
+	BucketVersioningDisabled  = "disabled"
+)
+
+func normalizeBucketVersioningState(raw string) (string, bool) {
+	state := strings.ToLower(strings.TrimSpace(raw))
+	switch state {
+	case "enabled":
+		return BucketVersioningEnabled, true
+	case "suspended":
+		return BucketVersioningSuspended, true
+	case "disabled", "unversioned":
+		return BucketVersioningDisabled, true
+	default:
+		return "", false
+	}
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 func newVersionID() (string, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
@@ -472,6 +499,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 19 {
+		if err = applyV19(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(19, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -479,7 +514,8 @@ func applyV1(ctx context.Context, tx *sql.Tx) error {
 	ddl := []string{
 		`CREATE TABLE IF NOT EXISTS buckets (
 			bucket TEXT PRIMARY KEY,
-			created_at TEXT NOT NULL
+			created_at TEXT NOT NULL,
+			versioning_state TEXT NOT NULL DEFAULT 'enabled'
 		)`,
 		`CREATE TABLE IF NOT EXISTS versions (
 			version_id TEXT PRIMARY KEY,
@@ -491,6 +527,7 @@ func applyV1(ctx context.Context, tx *sql.Tx) error {
 			last_modified_utc TEXT NOT NULL,
 			hlc_ts TEXT,
 			site_id TEXT,
+			is_null INTEGER NOT NULL DEFAULT 0,
 			state TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS versions_bucket_key_idx ON versions(bucket, key)`,
@@ -899,6 +936,68 @@ ON CONFLICT(id) DO UPDATE SET
 		}
 	}
 	return rows.Err()
+}
+
+func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	if tx == nil {
+		return false, errors.New("meta: tx required")
+	}
+	if table == "" || column == "" {
+		return false, errors.New("meta: table and column required")
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			colType    string
+			notNull    int
+			dfltValue  sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func applyV19(ctx context.Context, tx *sql.Tx) error {
+	hasVersioningState, err := columnExists(ctx, tx, "buckets", "versioning_state")
+	if err != nil {
+		return err
+	}
+	if !hasVersioningState {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE buckets ADD COLUMN versioning_state TEXT NOT NULL DEFAULT 'enabled'"); err != nil {
+			return err
+		}
+	}
+	hasIsNull, err := columnExists(ctx, tx, "versions", "is_null")
+	if err != nil {
+		return err
+	}
+	if !hasIsNull {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE versions ADD COLUMN is_null INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE buckets SET versioning_state='enabled' WHERE versioning_state IS NULL OR versioning_state=''"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE versions SET is_null=0 WHERE is_null IS NULL"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // UpsertAPIKey inserts or updates an API key entry.
@@ -1555,10 +1654,20 @@ func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, version
 	if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, lastModified); err != nil {
 		return err
 	}
+	versioningState, err := s.bucketVersioningStateTx(tx, bucket)
+	if err != nil {
+		return err
+	}
+	isNull := versioningState == BucketVersioningSuspended || versioningState == BucketVersioningDisabled
+	if isNull {
+		if _, err := tx.Exec("UPDATE versions SET state='DELETED' WHERE bucket=? AND key=? AND is_null=1 AND state<>'DELETED'", bucket, key); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`
-INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-		versionID, bucket, key, etag, size, contentType, lastModified, hlcTS, siteID); err != nil {
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+		versionID, bucket, key, etag, size, contentType, lastModified, hlcTS, siteID, boolToInt(isNull)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -1855,6 +1964,11 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 					return err
 				}
+				versioningState, err := s.bucketVersioningStateTx(tx, entry.Bucket)
+				if err != nil {
+					return err
+				}
+				isNull := versioningState == BucketVersioningSuspended || versioningState == BucketVersioningDisabled
 				var payload oplogPutPayload
 				if entry.Payload != "" {
 					if entry.OpType == "mpu_complete" {
@@ -1879,8 +1993,8 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				}
 				if entry.OpType == "mpu_complete" {
 					if _, err := tx.Exec(`
-INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
 ON CONFLICT(version_id) DO UPDATE SET
 	etag=excluded.etag,
 	size=excluded.size,
@@ -1889,21 +2003,21 @@ ON CONFLICT(version_id) DO UPDATE SET
 	hlc_ts=excluded.hlc_ts,
 	site_id=excluded.site_id,
 	state='ACTIVE'`,
-						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull)); err != nil {
 						return err
 					}
 				} else {
 					if _, err := tx.Exec(`
-INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID); err != nil {
+INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull)); err != nil {
 						return err
 					}
 				}
 				var currentVersion string
 				var currentHLC string
 				var currentSite string
-				err := tx.QueryRow(`
+				err = tx.QueryRow(`
 SELECT o.version_id, COALESCE(v.hlc_ts,''), COALESCE(v.site_id,'')
 FROM objects_current o
 LEFT JOIN versions v ON o.version_id=v.version_id
@@ -2809,6 +2923,7 @@ type ObjectMeta struct {
 	ContentType  string
 	LastModified string
 	State        string
+	IsNull       bool
 }
 
 // ConflictMeta describes a conflicting object version.
@@ -2824,13 +2939,13 @@ type ConflictMeta struct {
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT v.version_id, v.etag, v.size, v.content_type, v.last_modified_utc, v.state
+SELECT v.version_id, v.etag, v.size, v.content_type, v.last_modified_utc, v.state, v.is_null
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key=?`, bucket, key)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -2908,12 +3023,31 @@ func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID str
 		return nil, errors.New("meta: bucket, key, and version id required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT version_id, etag, size, content_type, last_modified_utc, state
+SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null
 FROM versions
 WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
+// GetNullObjectVersion returns the latest non-deleted null version for a key.
+func (s *Store) GetNullObjectVersion(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
+	if bucket == "" || key == "" {
+		return nil, errors.New("meta: bucket and key required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null
+FROM versions
+WHERE bucket=? AND key=? AND is_null=1 AND state<>'DELETED'
+ORDER BY hlc_ts DESC, site_id DESC
+LIMIT 1`, bucket, key)
+	var meta ObjectMeta
+	meta.Key = key
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -3439,6 +3573,30 @@ func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
+// CreateBucketWithVersioning inserts a bucket entry with an initial versioning state.
+func (s *Store) CreateBucketWithVersioning(ctx context.Context, bucket, versioningState string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	state, ok := normalizeBucketVersioningState(versioningState)
+	if !ok {
+		return errors.New("meta: invalid versioning state")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := s.CreateBucketWithVersioningTx(ctx, tx, bucket, state); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // CreateBucketTx inserts a bucket entry within the provided transaction.
 func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) error {
 	if bucket == "" {
@@ -3450,6 +3608,83 @@ func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) e
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
 	return err
+}
+
+// CreateBucketWithVersioningTx inserts a bucket entry with an initial versioning state within a transaction.
+func (s *Store) CreateBucketWithVersioningTx(ctx context.Context, tx *sql.Tx, bucket, versioningState string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	if tx == nil {
+		return errors.New("meta: tx required")
+	}
+	state, ok := normalizeBucketVersioningState(versioningState)
+	if !ok {
+		return errors.New("meta: invalid versioning state")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at, versioning_state) VALUES(?, ?, ?)", bucket, now, state)
+	return err
+}
+
+// GetBucketVersioningState returns the versioning state for a bucket.
+func (s *Store) GetBucketVersioningState(ctx context.Context, bucket string) (string, error) {
+	if bucket == "" {
+		return "", errors.New("meta: bucket required")
+	}
+	var state string
+	err := s.db.QueryRowContext(ctx, "SELECT versioning_state FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&state)
+	if err != nil {
+		return "", err
+	}
+	if normalized, ok := normalizeBucketVersioningState(state); ok {
+		return normalized, nil
+	}
+	return BucketVersioningEnabled, nil
+}
+
+// SetBucketVersioningState updates the versioning state for a bucket.
+func (s *Store) SetBucketVersioningState(ctx context.Context, bucket, versioningState string) error {
+	if bucket == "" {
+		return errors.New("meta: bucket required")
+	}
+	state, ok := normalizeBucketVersioningState(versioningState)
+	if !ok {
+		return errors.New("meta: invalid versioning state")
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE buckets SET versioning_state=? WHERE bucket=?", state, bucket)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) bucketVersioningStateTx(tx *sql.Tx, bucket string) (string, error) {
+	if tx == nil {
+		return "", errors.New("meta: tx required")
+	}
+	if bucket == "" {
+		return "", errors.New("meta: bucket required")
+	}
+	var state string
+	err := tx.QueryRow("SELECT versioning_state FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&state)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BucketVersioningEnabled, nil
+		}
+		return "", err
+	}
+	if normalized, ok := normalizeBucketVersioningState(state); ok {
+		return normalized, nil
+	}
+	return BucketVersioningEnabled, nil
 }
 
 // BucketHasObjects checks whether a bucket has any visible objects or delete markers.
@@ -3615,6 +3850,38 @@ func (s *Store) DeleteObjectTx(ctx context.Context, tx *sql.Tx, bucket, key stri
 		return "", err
 	}
 	if err := s.recordDeleteMarkerTx(ctx, tx, bucket, key, versionID, time.Now().UTC().Format(time.RFC3339Nano), true); err != nil {
+		return "", err
+	}
+	return versionID, nil
+}
+
+// DeleteObjectUnversionedTx deletes the current object without creating a delete marker.
+func (s *Store) DeleteObjectUnversionedTx(ctx context.Context, tx *sql.Tx, bucket, key string) (string, error) {
+	if bucket == "" || key == "" {
+		return "", errors.New("meta: bucket and key required")
+	}
+	if tx == nil {
+		return "", errors.New("meta: tx required")
+	}
+	var versionID string
+	if err := tx.QueryRowContext(ctx, "SELECT version_id FROM objects_current WHERE bucket=? AND key=?", bucket, key).Scan(&versionID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	hlcTS, siteID := s.nextHLC()
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE versions SET state='DELETED', hlc_ts=?, site_id=? WHERE version_id=?", hlcTS, siteID, versionID); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM objects_current WHERE bucket=? AND key=?", bucket, key); err != nil {
+		return "", err
+	}
+	if err := s.recordOplogTx(tx, hlcTS, "delete", bucket, key, versionID, string(deletePayload)); err != nil {
 		return "", err
 	}
 	return versionID, nil

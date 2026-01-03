@@ -77,6 +77,8 @@ var awsActionToPolicy = map[string]string{
 	"getbucketpolicy":         policyActionGetBucketPolicy,
 	"putbucketpolicy":         policyActionPutBucketPolicy,
 	"deletebucketpolicy":      policyActionDeleteBucketPolicy,
+	"getbucketversioning":     policyActionGetBucketVersioning,
+	"putbucketversioning":     policyActionPutBucketVersioning,
 	"getobject":               policyActionGetObject,
 	"headobject":              policyActionHeadObject,
 	"putobject":               policyActionPutObject,

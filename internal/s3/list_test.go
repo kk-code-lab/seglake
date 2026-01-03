@@ -207,6 +207,55 @@ func TestCreateBucket(t *testing.T) {
 	}
 }
 
+func TestCreateBucketWithVersioningHeader(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	req := httptest.NewRequest("PUT", "/demo", nil)
+	req.Header.Set("x-seglake-versioning", "unversioned")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("PUT status: %d", w.Code)
+	}
+	state, err := handler.Meta.GetBucketVersioningState(req.Context(), "demo")
+	if err != nil {
+		t.Fatalf("GetBucketVersioningState: %v", err)
+	}
+	if state != meta.BucketVersioningDisabled {
+		t.Fatalf("expected disabled, got %s", state)
+	}
+}
+
+func TestPutGetBucketVersioning(t *testing.T) {
+	handler := newListTestHandler(t)
+
+	create := httptest.NewRequest("PUT", "/demo", nil)
+	createW := httptest.NewRecorder()
+	handler.ServeHTTP(createW, create)
+	if createW.Code != 200 {
+		t.Fatalf("PUT status: %d", createW.Code)
+	}
+
+	putBody := `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Suspended</Status></VersioningConfiguration>`
+	put := httptest.NewRequest("PUT", "/demo?versioning", strings.NewReader(putBody))
+	put.Header.Set("Content-Type", "application/xml")
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, put)
+	if putW.Code != 200 {
+		t.Fatalf("PUT versioning status: %d", putW.Code)
+	}
+
+	get := httptest.NewRequest("GET", "/demo?versioning", nil)
+	getW := httptest.NewRecorder()
+	handler.ServeHTTP(getW, get)
+	if getW.Code != 200 {
+		t.Fatalf("GET versioning status: %d", getW.Code)
+	}
+	if !strings.Contains(getW.Body.String(), "<Status>Suspended</Status>") {
+		t.Fatalf("expected Suspended status")
+	}
+}
+
 func newListTestHandler(t *testing.T) *Handler {
 	t.Helper()
 	dir := t.TempDir()

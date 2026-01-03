@@ -59,6 +59,8 @@ const (
 	policyActionGetBucketPolicy       = "getbucketpolicy"
 	policyActionPutBucketPolicy       = "putbucketpolicy"
 	policyActionDeleteBucketPolicy    = "deletebucketpolicy"
+	policyActionGetBucketVersioning   = "getbucketversioning"
+	policyActionPutBucketVersioning   = "putbucketversioning"
 	policyActionGetObject             = "getobject"
 	policyActionHeadObject            = "headobject"
 	policyActionPutObject             = "putobject"
@@ -86,6 +88,8 @@ var validPolicyActions = map[string]struct{}{
 	policyActionGetBucketPolicy:       {},
 	policyActionPutBucketPolicy:       {},
 	policyActionDeleteBucketPolicy:    {},
+	policyActionGetBucketVersioning:   {},
+	policyActionPutBucketVersioning:   {},
 	policyActionGetObject:             {},
 	policyActionHeadObject:            {},
 	policyActionPutObject:             {},
@@ -435,6 +439,10 @@ func policyActionForRequest(op string) string {
 		return policyActionPutBucketPolicy
 	case "delete_bucket_policy":
 		return policyActionDeleteBucketPolicy
+	case "get_bucket_versioning":
+		return policyActionGetBucketVersioning
+	case "put_bucket_versioning":
+		return policyActionPutBucketVersioning
 	case "list_v1", "list_v2":
 		return policyActionListBucket
 	case "get":

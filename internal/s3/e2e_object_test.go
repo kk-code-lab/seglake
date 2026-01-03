@@ -512,6 +512,223 @@ func TestS3E2EDeleteObject(t *testing.T) {
 	}
 }
 
+func TestS3E2EUnversionedBucketDeleteNoMarker(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket-unversioned", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	createReq.Header.Set("x-seglake-versioning", "unversioned")
+	signRequest(createReq, "test", "testsecret", "us-east-1")
+	createResp, err := http.DefaultClient.Do(createReq)
+	if err != nil {
+		t.Fatalf("PUT bucket error: %v", err)
+	}
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT bucket status: %d", createResp.StatusCode)
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket-unversioned/key", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	if got := putResp.Header.Get("x-amz-version-id"); got != "" {
+		t.Fatalf("expected no version id, got %q", got)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, server.URL+"/bucket-unversioned/key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delReq, "test", "testsecret", "us-east-1")
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE error: %v", err)
+	}
+	if got := delResp.Header.Get("x-amz-delete-marker"); got != "" {
+		t.Fatalf("expected no delete marker header, got %q", got)
+	}
+	if got := delResp.Header.Get("x-amz-version-id"); got != "" {
+		t.Fatalf("expected no version id, got %q", got)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status: %d", delResp.StatusCode)
+	}
+
+	getReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket-unversioned/key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	if got := getResp.Header.Get("x-amz-delete-marker"); got != "" {
+		t.Fatalf("expected no delete marker header on GET, got %q", got)
+	}
+	if got := getResp.Header.Get("x-amz-version-id"); got != "" {
+		t.Fatalf("expected no version id on GET, got %q", got)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET status: %d", getResp.StatusCode)
+	}
+}
+
+func TestS3E2ESuspendedBucketNullVersion(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket-suspended", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(createReq, "test", "testsecret", "us-east-1")
+	createResp, err := http.DefaultClient.Do(createReq)
+	if err != nil {
+		t.Fatalf("PUT bucket error: %v", err)
+	}
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT bucket status: %d", createResp.StatusCode)
+	}
+
+	putBody := `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Suspended</Status></VersioningConfiguration>`
+	setReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket-suspended?versioning", strings.NewReader(putBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	setReq.Header.Set("Content-Type", "application/xml")
+	signRequest(setReq, "test", "testsecret", "us-east-1")
+	setResp, err := http.DefaultClient.Do(setReq)
+	if err != nil {
+		t.Fatalf("PUT versioning error: %v", err)
+	}
+	setResp.Body.Close()
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT versioning status: %d", setResp.StatusCode)
+	}
+
+	putReq, err := http.NewRequest(http.MethodPut, server.URL+"/bucket-suspended/key", strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	if got := putResp.Header.Get("x-amz-version-id"); got != "null" {
+		t.Fatalf("expected null version id, got %q", got)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	getNullReq, err := http.NewRequest(http.MethodGet, server.URL+"/bucket-suspended/key?versionId=null", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(getNullReq, "test", "testsecret", "us-east-1")
+	getNullResp, err := http.DefaultClient.Do(getNullReq)
+	if err != nil {
+		t.Fatalf("GET null error: %v", err)
+	}
+	getNullResp.Body.Close()
+	if getNullResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET null status: %d", getNullResp.StatusCode)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, server.URL+"/bucket-suspended/key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(delReq, "test", "testsecret", "us-east-1")
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE error: %v", err)
+	}
+	if got := delResp.Header.Get("x-amz-delete-marker"); got != "true" {
+		t.Fatalf("expected delete marker header, got %q", got)
+	}
+	if got := delResp.Header.Get("x-amz-version-id"); got == "" {
+		t.Fatalf("expected delete marker version id")
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status: %d", delResp.StatusCode)
+	}
+}
+
 func TestS3E2ECopyObject(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
