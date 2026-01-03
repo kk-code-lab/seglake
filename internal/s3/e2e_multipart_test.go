@@ -147,6 +147,150 @@ func TestS3E2EMultipart(t *testing.T) {
 	}
 }
 
+func TestS3E2EMultipartRejectsOversizedPart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	initReq, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/large?uploads", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(initReq, "test", "testsecret", "us-east-1")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		t.Fatalf("init error: %v", err)
+	}
+	body, _ := io.ReadAll(initResp.Body)
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("init status: %d", initResp.StatusCode)
+	}
+	var initResult initiateMultipartResult
+	if err := xml.Unmarshal(body, &initResult); err != nil {
+		t.Fatalf("init decode: %v", err)
+	}
+
+	putURL := server.URL + "/bucket/large?partNumber=1&uploadId=" + initResult.UploadID
+	payloadHash := "STREAMING-UNSIGNED-PAYLOAD"
+	chunkBody := strings.NewReader("0\r\n\r\n")
+	req, err := http.NewRequest(http.MethodPut, putURL, io.NopCloser(chunkBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Encoding", "aws-chunked")
+	req.Header.Set("X-Amz-Decoded-Content-Length", strconv.FormatInt(maxPartSize+1, 10))
+	req.ContentLength = int64(len("0\r\n\r\n"))
+	signRequestWithPayloadHashAndTime(req, "test", "testsecret", "us-east-1", payloadHash, time.Now().UTC())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT part error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("EntityTooLarge")) {
+		t.Fatalf("expected EntityTooLarge")
+	}
+}
+
+func TestS3E2EMultipartRejectsPartNumberTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	initReq, err := http.NewRequest(http.MethodPost, server.URL+"/bucket/parts?uploads", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequest(initReq, "test", "testsecret", "us-east-1")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		t.Fatalf("init error: %v", err)
+	}
+	body, _ := io.ReadAll(initResp.Body)
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("init status: %d", initResp.StatusCode)
+	}
+	var initResult initiateMultipartResult
+	if err := xml.Unmarshal(body, &initResult); err != nil {
+		t.Fatalf("init decode: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/bucket/parts?partNumber=10001&uploadId="+initResult.UploadID, strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestWithPayloadHashAndTime(req, "test", "testsecret", "us-east-1", "UNSIGNED-PAYLOAD", time.Now().UTC())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT part error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("InvalidArgument")) {
+		t.Fatalf("expected InvalidArgument")
+	}
+}
+
 func TestS3E2EListMultipartUploads(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

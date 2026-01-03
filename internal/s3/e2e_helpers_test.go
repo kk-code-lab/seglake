@@ -100,6 +100,41 @@ func signRequestWithPayloadHash(r *http.Request, accessKey, secretKey, region, p
 	r.Header.Set("Authorization", auth)
 }
 
+func signRequestWithPayloadHashAndTime(r *http.Request, accessKey, secretKey, region, payloadHash string, now time.Time) {
+	amzDate := now.UTC().Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	r.Header.Set("Host", r.URL.Host)
+
+	canonicalHeaders, signedHeaders := canonicalHeadersForRequest(r)
+	canonicalRequest := strings.Join([]string{
+		r.Method,
+		canonicalURI(r),
+		canonicalQueryFromURL(r.URL),
+		canonicalHeaders,
+		strings.Join(signedHeaders, ";"),
+		payloadHash,
+	}, "\n")
+
+	hash := sha256.Sum256([]byte(canonicalRequest))
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hash[:]),
+	}, "\n")
+
+	signingKey := deriveSigningKey(secretKey, dateScope, region, "s3")
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=" + accessKey + "/" + scope + "," +
+		"SignedHeaders=" + strings.Join(signedHeaders, ";") + "," +
+		"Signature=" + signature
+	r.Header.Set("Authorization", auth)
+}
+
 func canonicalHeadersForRequest(r *http.Request) (string, []string) {
 	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 	var b strings.Builder
