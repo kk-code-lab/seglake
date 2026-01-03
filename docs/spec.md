@@ -72,6 +72,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
+- SSE: not supported yet; planned SSE-S3 (server-managed keys).
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
