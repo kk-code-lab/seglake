@@ -64,6 +64,18 @@ func TestSigV4RejectsUnsignedPayloadWhenDisallowed(t *testing.T) {
 	}
 }
 
+func TestSigV4RejectsMissingContentSHA256Header(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://example.com/bucket/key", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	signRequestWithoutPayloadHash(req, "test", "testsecret", "us-east-1")
+	auth := &AuthConfig{AccessKey: "test", SecretKey: "testsecret", Region: "us-east-1", AllowUnsignedPayload: true}
+	if err := auth.VerifyRequest(req); err != errMissingContentSHA256 {
+		t.Fatalf("expected missing content sha256, got %v", err)
+	}
+}
+
 func TestSigV4RejectsPresignFutureSkew(t *testing.T) {
 	rawURL := "http://example.com/bucket/key"
 	u, err := url.Parse(rawURL)
@@ -171,6 +183,38 @@ func signRequestWithService(r *http.Request, accessKey, secretKey, region, servi
 		hash,
 	)
 	signingKey := deriveSigningKey(secretKey, dateScope, region, service)
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=" + accessKey + "/" + scope + "," +
+		"SignedHeaders=" + stringsJoin(signedHeaders, ";") + "," +
+		"Signature=" + signature
+	r.Header.Set("Authorization", auth)
+}
+
+func signRequestWithoutPayloadHash(r *http.Request, accessKey, secretKey, region string) {
+	amzDate := time.Now().UTC().Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("Host", r.URL.Host)
+
+	canonicalHeaders, signedHeaders := canonicalHeadersForRequestWith(r, []string{"host", "x-amz-date"})
+	canonicalRequest := stringsJoinLines(
+		r.Method,
+		canonicalURI(r),
+		canonicalQuery(r),
+		canonicalHeaders,
+		stringsJoin(signedHeaders, ";"),
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	)
+	hash := sha256SumHex(canonicalRequest)
+	scope := dateScope + "/" + region + "/s3/aws4_request"
+	stringToSign := stringsJoinLines(
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hash,
+	)
+	signingKey := deriveSigningKey(secretKey, dateScope, region, "s3")
 	signature := hmacSHA256Hex(signingKey, stringToSign)
 	auth := "AWS4-HMAC-SHA256 " +
 		"Credential=" + accessKey + "/" + scope + "," +

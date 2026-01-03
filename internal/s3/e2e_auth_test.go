@@ -4,6 +4,8 @@ package s3
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -529,6 +531,89 @@ func TestS3E2EPayloadHashMismatch(t *testing.T) {
 	goodResp.Body.Close()
 	if goodResp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT status: %d", goodResp.StatusCode)
+	}
+}
+
+func TestS3E2EMissingContentSHA256(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/bucket/missing-sha", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	amzDate := time.Now().UTC().Format("20060102T150405Z")
+	dateScope := amzDate[:8]
+	req.Header.Set("X-Amz-Date", amzDate)
+	req.Header.Set("Host", req.URL.Host)
+
+	canonicalHeaders := "host:" + req.Host + "\n" + "x-amz-date:" + amzDate + "\n"
+	canonicalRequest := strings.Join([]string{
+		req.Method,
+		canonicalURI(req),
+		canonicalQueryFromURL(req.URL),
+		canonicalHeaders,
+		"host;x-amz-date",
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}, "\n")
+	hash := sha256.Sum256([]byte(canonicalRequest))
+	scope := dateScope + "/us-east-1/s3/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hex.EncodeToString(hash[:]),
+	}, "\n")
+	signingKey := deriveSigningKey("testsecret", dateScope, "us-east-1", "s3")
+	signature := hmacSHA256Hex(signingKey, stringToSign)
+	auth := "AWS4-HMAC-SHA256 " +
+		"Credential=test/" + scope + "," +
+		"SignedHeaders=host;x-amz-date," +
+		"Signature=" + signature
+	req.Header.Set("Authorization", auth)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET status: %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("InvalidRequest")) {
+		t.Fatalf("expected InvalidRequest error")
+	}
+	if !bytes.Contains(body, []byte("x-amz-content-sha256")) {
+		t.Fatalf("expected missing header message")
 	}
 }
 
