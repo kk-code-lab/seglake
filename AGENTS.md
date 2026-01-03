@@ -24,6 +24,11 @@
 - Keep expensive tests gated; add focused tests when behavior changes.
 - Real-HTTP tests must use the `e2e` build tag and run via `make test-e2e` (or `make test-all`); untagged tests should use in-process handlers.
 - Smoke (awscli): `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 ls --endpoint-url http://localhost:9000`.
+- Guideposts (non-prescriptive):
+  - S3/API behavior changes → `go test ./internal/s3`, and run e2e when externally visible.
+  - Storage/format/manifest/chunking changes → `go test ./internal/storage/...`.
+  - Metadata schema/migrations → `go test ./internal/meta/...` and update/extend migration tests.
+  - Durability/crash/ops flows → consider tagged harnesses as needed.
 
 ## Commit & Pull Request Guidelines
 
@@ -42,8 +47,12 @@
 - Implement in small, reviewable steps; keep changes localized.
 - Add/adjust tests alongside behavior changes; prefer unit + targeted e2e when needed.
 - Run quick, focused tests during development; finish with `make check` and any required e2e.
-- Validate manually (smoke) when the change affects external behavior or APIs.
+- Validate manually (smoke) when the change affects external behavior or APIs; prefer existing scripts in `scripts/` and awscli examples in `docs/ops.md`.
 - Update docs/specs/roadmap if behavior or surface area changes.
+- For e2e coverage: ensure tests use `//go:build e2e` and `TestS3E2E*` naming so `make test-e2e` picks them up.
+- For format/storage/metadata changes (segments/manifests/SQLite schema): update `docs/spec.md` and note compatibility/migration expectations.
+- For auth/policy/limits/ops endpoint changes: review/update `docs/security/threat-model.md` and `docs/ops.md`.
+- Remember `make check` requires `golangci-lint` installed.
 - Note and fix flakes/regressions; avoid leaving background goroutines or temp files behind.
 
 ## Workflow Variants
