@@ -3452,13 +3452,34 @@ func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) e
 	return err
 }
 
-// BucketHasObjects checks whether a bucket has any current objects.
+// BucketHasObjects checks whether a bucket has any visible objects or delete markers.
 func (s *Store) BucketHasObjects(ctx context.Context, bucket string) (bool, error) {
 	if bucket == "" {
 		return false, errors.New("meta: bucket required")
 	}
 	var any int
 	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM objects_current WHERE bucket=? LIMIT 1", bucket).Scan(&any)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// BucketHasLiveObjects checks whether a bucket has any non-delete-marker current objects.
+func (s *Store) BucketHasLiveObjects(ctx context.Context, bucket string) (bool, error) {
+	if bucket == "" {
+		return false, errors.New("meta: bucket required")
+	}
+	var any int
+	err := s.db.QueryRowContext(ctx, `
+SELECT 1
+FROM objects_current o
+JOIN versions v ON v.version_id = o.version_id
+WHERE o.bucket=? AND v.state<>'DELETE_MARKER'
+LIMIT 1`, bucket).Scan(&any)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil

@@ -1271,7 +1271,7 @@ func (h *Handler) handleDeleteBucket(ctx context.Context, w http.ResponseWriter,
 		writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucket", "bucket not found", requestID, resource)
 		return
 	}
-	hasObjects, err := h.Meta.BucketHasObjects(ctx, bucket)
+	hasObjects, err := h.Meta.BucketHasLiveObjects(ctx, bucket)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
