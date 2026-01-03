@@ -34,3 +34,21 @@
 - Docs map: `docs/spec.md` (API/behavior), `docs/ops.md` (ops/runbook), `docs/optimization.md` (perf), `docs/roadmap.md`, `docs/security/threat-model.md`.
 - If changes affect security/ops surface or controls, update `docs/security/threat-model.md`. If unsure, consult it.
 - Scripts: `scripts/` (smoke, security checks).
+
+## Baseline Workflow
+
+- Align on scope and compatibility expectations before coding; capture decisions explicitly.
+- Scan relevant code/docs/tests to anchor changes in existing patterns.
+- Implement in small, reviewable steps; keep changes localized.
+- Add/adjust tests alongside behavior changes; prefer unit + targeted e2e when needed.
+- Run quick, focused tests during development; finish with `make check` and any required e2e.
+- Validate manually (smoke) when the change affects external behavior or APIs.
+- Update docs/specs/roadmap if behavior or surface area changes.
+- Note and fix flakes/regressions; avoid leaving background goroutines or temp files behind.
+
+## Workflow Variants
+
+- Spec-first / RFC: start with a short RFC (problem, goals, non-goals, API/behavior, migration); code after approval.
+- Test-first: write reproduction + assertions first, then implement; prefer for bugfixes/regressions.
+- Spike → harden: quick prototype to de-risk, then implement cleanly; discard spike artifacts.
+- Ops/Security-first: assess threat-model/ops impact and update docs before coding.
