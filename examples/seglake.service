@@ -6,15 +6,14 @@ After=network.target
 User=seglake
 Group=seglake
 WorkingDirectory=/var/lib/seglake
-EnvironmentFile=/etc/seglake/secrets.env
 Environment=SEGLAKE_ADDR=127.0.0.1:9000
 Environment=SEGLAKE_DATA_DIR=/var/lib/seglake
 Environment=SEGLAKE_REGION=us-east-1
 Environment=SEGLAKE_PUBLIC_BUCKETS=public
 Environment=SEGLAKE_TRUSTED_PROXIES=127.0.0.1/32,::1/128
 Environment=SEGLAKE_VIRTUAL_HOSTED=false
-# Prefer env vars over flags to avoid secrets in process listings.
-ExecStart=/opt/seglake/build/seglake -mode server
+# Prefer secrets-file over env vars to avoid secrets in process listings.
+ExecStart=/opt/seglake/build/seglake -mode server -secrets-file /etc/seglake/secrets.env
 Restart=always
 RestartSec=2
 

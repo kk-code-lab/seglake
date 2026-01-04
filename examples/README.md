@@ -4,7 +4,7 @@ This folder contains deployment snippets you can adapt to your environment.
 
 ## systemd (Ubuntu)
 - `seglake.service` runs seglake bound to localhost and enables public bucket access.
-- Configure secrets in `/etc/seglake/secrets.env` and update the binary path as needed.
+- Configure secrets in `/etc/seglake/secrets.env` (loaded via `-secrets-file`) and update the binary path as needed.
 
 Create user and directories:
 ```
