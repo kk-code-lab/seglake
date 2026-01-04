@@ -22,7 +22,6 @@ Tag legend (order used below):
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [ops] Add optional local-only ops channel (Unix socket) for automation without HTTP ops auth; keep `/v1/ops/run` as fallback and document Windows limitations.
-- [api] Support `If-Match: *` semantics for overwrite guard (only if object exists).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 - [api][integrity][ops] Add SSE-S3 (MVP+): PUT/GET/HEAD + `x-amz-server-side-encryption: AES256`, per-object DEK/EDEK, documented ETag semantics, presign header enforcement, and KEK re-wrap tooling for rotation.
 
