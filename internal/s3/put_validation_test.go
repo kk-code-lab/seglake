@@ -98,12 +98,46 @@ func TestPutRequiresIfMatchOnOverwrite(t *testing.T) {
 		t.Fatalf("expected 412, got %d", w3.Code)
 	}
 
+	star := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("star"))
+	star.Header.Set("If-Match", "*")
+	wStar := httptest.NewRecorder()
+	h.ServeHTTP(wStar, star)
+	if wStar.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wStar.Code)
+	}
+
 	ok := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("fourth"))
 	ok.Header.Set("If-Match", etag)
 	w4 := httptest.NewRecorder()
 	h.ServeHTTP(w4, ok)
 	if w4.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w4.Code)
+	}
+}
+
+func TestPutRequiresIfMatchSkipsDeleteMarker(t *testing.T) {
+	h := newTestHandler(t)
+	h.RequireIfMatchBuckets = map[string]struct{}{"bucket": {}}
+
+	req := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("first"))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial PUT status: %d", w.Code)
+	}
+
+	del := httptest.NewRequest(http.MethodDelete, "/bucket/key", nil)
+	wDel := httptest.NewRecorder()
+	h.ServeHTTP(wDel, del)
+	if wDel.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status: %d", wDel.Code)
+	}
+
+	overwrite := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("second"))
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, overwrite)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w2.Code)
 	}
 }
 

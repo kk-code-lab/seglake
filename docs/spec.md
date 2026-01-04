@@ -178,6 +178,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Replay protection: signature cache within TTL window (default disabled; enable via `-replay-ttl`; logs by default, blocks only with `-replay-block`).
 - Replay cache size limit: bounded in-memory cache (default cap; configurable via `-replay-cache-max`).
 - Optional overwrite guard: `-require-if-match-buckets` enforces `If-Match` on overwrites (use `*` for all buckets).
+- `If-Match: *` can be used as an overwrite guard (write only if the object exists); delete markers are treated as not found.
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.

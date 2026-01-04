@@ -1225,10 +1225,11 @@ func (h *Handler) enforceIfMatch(ctx context.Context, w http.ResponseWriter, r *
 	if h == nil || h.Meta == nil {
 		return true
 	}
-	if !h.requiresIfMatch(bucket) {
+	ifMatch := r.Header.Get("If-Match")
+	requires := h.requiresIfMatch(bucket)
+	if !requires && ifMatch == "" {
 		return true
 	}
-	ifMatch := r.Header.Get("If-Match")
 	metaObj, err := h.Meta.GetObjectMeta(ctx, bucket, key)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1236,12 +1237,26 @@ func (h *Handler) enforceIfMatch(ctx context.Context, w http.ResponseWriter, r *
 				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match failed", requestID, r.URL.Path)
 				return false
 			}
+			if requires {
+				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match required", requestID, r.URL.Path)
+				return false
+			}
 			return true
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return false
 	}
+	if strings.EqualFold(metaObj.State, meta.VersionStateDeleteMarker) {
+		if ifMatch != "" {
+			writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match failed", requestID, r.URL.Path)
+			return false
+		}
+		return true
+	}
 	if ifMatch == "" {
+		if !requires {
+			return true
+		}
 		writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match required", requestID, r.URL.Path)
 		return false
 	}
