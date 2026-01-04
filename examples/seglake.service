@@ -13,11 +13,11 @@ Environment=SEGLAKE_REGION=us-east-1
 Environment=SEGLAKE_PUBLIC_BUCKETS=public
 Environment=SEGLAKE_TRUSTED_PROXIES=127.0.0.1/32,::1/128
 Environment=SEGLAKE_VIRTUAL_HOSTED=false
+# Bool flags must use --flag=false (no space) when disabling.
+# Each continued line requires a trailing '\' for systemd.
+# Prefer env vars over flags to avoid secrets in process listings.
 ExecStart=/opt/seglake/build/seglake \
-  # Bool flags must use --flag=false (no space) when disabling.
-  # Each continued line requires a trailing '\' for systemd.
   -mode server \
-  # Prefer env vars over flags to avoid secrets in process listings.
 Restart=always
 RestartSec=2
 
