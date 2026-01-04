@@ -13,7 +13,7 @@ Threat model: `docs/security/threat-model.md`.
 - Use separate API keys per app/service and restrict buckets via allow-list + policies.
 - Keep a GC/MPU GC schedule and review reclaim reports before delete modes.
 - Validate replication health (repl-validate) and plan for conflict review workflows.
- - Keep compatibility-first defaults unless you have validated client behavior; enable hardening knobs intentionally.
+- Keep compatibility-first defaults unless you have validated client behavior; enable hardening knobs intentionally.
 
 Recommended limits (baseline):
 - Max object size (app): 5 GiB via `-max-object-size`.
