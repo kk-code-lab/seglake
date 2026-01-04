@@ -58,13 +58,20 @@ func envOrDefault(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
+	if value, ok := secretEnv[key]; ok {
+		return value
+	}
 	return fallback
 }
 
 func envBoolOrDefault(key string, fallback bool) bool {
 	value, ok := os.LookupEnv(key)
 	if !ok {
-		return fallback
+		if secretValue, ok := secretEnv[key]; ok {
+			value = secretValue
+		} else {
+			return fallback
+		}
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
@@ -79,6 +86,7 @@ type globalArgs struct {
 	showVersion bool
 	help        bool
 	assumeYes   bool
+	secretsFile string
 }
 
 type serverOptions struct {
@@ -238,6 +246,12 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if global.secretsFile != "" {
+		if err := loadSecretsFile(global.secretsFile); err != nil {
+			fmt.Fprintf(os.Stderr, "seglake: secrets file: %v\n", err)
+			os.Exit(2)
+		}
 	}
 	if global.showVersion {
 		fmt.Printf("seglake %s (commit %s)\n", app.Version, app.BuildCommit)
@@ -445,6 +459,16 @@ func parseGlobalArgs(args []string) (globalArgs, []string, error) {
 			out.mode = args[i+1]
 			i++
 			continue
+		case strings.HasPrefix(arg, "-secrets-file="):
+			out.secretsFile = strings.TrimPrefix(arg, "-secrets-file=")
+			continue
+		case arg == "-secrets-file":
+			if i+1 >= len(args) {
+				return out, nil, errors.New("secrets-file requires a value")
+			}
+			out.secretsFile = args[i+1]
+			i++
+			continue
 		}
 		if value, ok, err := parseBoolFlag(arg, "-mode-help"); ok {
 			if err != nil {
@@ -491,6 +515,42 @@ func parseGlobalArgs(args []string) (globalArgs, []string, error) {
 		remaining = append(remaining, arg)
 	}
 	return out, remaining, nil
+}
+
+var secretEnv = map[string]string{}
+
+func loadSecretsFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid line %d", i+1)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			return fmt.Errorf("invalid line %d", i+1)
+		}
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		if _, ok := os.LookupEnv(key); ok {
+			continue
+		}
+		secretEnv[key] = value
+	}
+	return nil
 }
 
 func parseBoolFlag(arg, name string) (bool, bool, error) {
@@ -944,7 +1004,7 @@ func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, s
 
 func printGlobalHelp() {
 	fmt.Println("Usage: seglake -mode <mode> [flags]")
-	fmt.Println("Global flags: -mode, -mode-help, -yes, -version, -v, -h, --help")
+	fmt.Println("Global flags: -mode, -mode-help, -secrets-file, -yes, -version, -v, -h, --help")
 	fmt.Println("Modes:")
 	for _, mode := range []string{
 		"server",

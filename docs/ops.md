@@ -120,7 +120,7 @@ Hardening knobs (opt-in, may break some clients):
 
 ## Environment variables (12-factor)
 
-CLI flags override env vars; env vars override defaults.
+CLI flags override env vars; env vars override defaults. `-secrets-file` loads KEY=VALUE pairs that act like env defaults without exporting them to the process environment.
 
 Server flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir`
