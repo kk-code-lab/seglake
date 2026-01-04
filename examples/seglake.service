@@ -7,18 +7,17 @@ User=seglake
 Group=seglake
 WorkingDirectory=/var/lib/seglake
 EnvironmentFile=/etc/seglake/secrets.env
+Environment=SEGLAKE_ADDR=127.0.0.1:9000
+Environment=SEGLAKE_DATA_DIR=/var/lib/seglake
+Environment=SEGLAKE_REGION=us-east-1
+Environment=SEGLAKE_PUBLIC_BUCKETS=public
+Environment=SEGLAKE_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+Environment=SEGLAKE_VIRTUAL_HOSTED=false
 ExecStart=/opt/seglake/build/seglake \
   # Bool flags must use --flag=false (no space) when disabling.
   # Each continued line requires a trailing '\' for systemd.
   -mode server \
-  --addr 127.0.0.1:9000 \
-  --data-dir /var/lib/seglake \
-  --access-key ${SEGLAKE_ACCESS_KEY} \
-  --secret-key ${SEGLAKE_SECRET_KEY} \
-  --region us-east-1 \
-  --public-buckets public \
-  --trusted-proxies 127.0.0.1/32,::1/128 \
-  --virtual-hosted=false
+  # Prefer env vars over flags to avoid secrets in process listings.
 Restart=always
 RestartSec=2
 
