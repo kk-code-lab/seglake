@@ -105,9 +105,13 @@ func TestPutRequiresIfMatchOnOverwrite(t *testing.T) {
 	if wStar.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", wStar.Code)
 	}
+	starETag := wStar.Header().Get("ETag")
+	if starETag == "" {
+		t.Fatalf("expected star ETag")
+	}
 
 	ok := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("fourth"))
-	ok.Header.Set("If-Match", etag)
+	ok.Header.Set("If-Match", starETag)
 	w4 := httptest.NewRecorder()
 	h.ServeHTTP(w4, ok)
 	if w4.Code != http.StatusOK {
