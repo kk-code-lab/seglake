@@ -321,6 +321,7 @@ Ops over HTTP (server-side):
 - CLI automatically uses this path when it detects a running server + `quiesced` (or you can set `-ops-url`).
 - If API keys are configured on the server, pass `-ops-access-key` / `-ops-secret-key` (SigV4 presign).
 - `/v1/ops/run` requires a key with policy `ops`; `rw` is not sufficient. Exception: the server ops key set via `-ops-access-key/-ops-secret-key` (env `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY`) is treated as `ops` for `/v1/ops/run` (defaults to the main access/secret if unset).
+- If `-ops-access-key/-ops-secret-key` are not explicitly set, they fall back to `-access-key/-secret-key` (or `SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY`) rather than creating a separate credential.
 
 Example (create ops key + run gc-run):
 ```
