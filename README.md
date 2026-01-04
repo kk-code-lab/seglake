@@ -5,6 +5,24 @@ Implementation: append‑only segments + object manifests + metadata in SQLite (
 
 ---
 
+## Why Seglake
+
+Seglake is a minimal, correctness‑first S3‑compatible object store for single‑node deployments and local testing.
+
+**Why it exists:**
+- **Predictable durability:** data is appended to segments, fsynced, then manifests + metadata are committed via SQLite WAL before ACK.
+- **Auditable on‑disk format:** append‑only segments + standalone manifests make storage easy to inspect, validate, and recover.
+- **Small operational surface:** no cluster quorum, no distributed consensus — fewer moving parts.
+- **S3‑compatible core:** PUT/GET/HEAD, list v1/v2, range GET (incl. multi‑range), multipart upload, versioning.
+
+**Trade‑offs:**
+- Not a distributed system: no built‑in HA or geo‑replication.
+- Designed for correctness and simplicity, not maximum throughput or elastic scale.
+
+If you need a transparent, robust S3 backend for local/edge/on‑prem setups, Seglake is built for that niche.
+
+---
+
 ## Key features
 
 - S3 API: PUT/GET/HEAD, ListObjects V1/V2, ListBuckets, Range GET (single and multi‑range)
