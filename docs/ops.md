@@ -320,7 +320,7 @@ Notes:
 Ops over HTTP (server-side):
 - When the server is running and maintenance is `quiesced`, unsafe ops run via `POST /v1/ops/run`.
 - CLI automatically uses this path when it detects a running server + `quiesced` (or you can set `-ops-url`).
-- If API keys are configured on the server, pass `-ops-access-key` / `-ops-secret-key` (SigV4 presign).
+- If API keys are configured on the server, pass `-ops-access-key` / `-ops-secret-key` (SigV4 presign). The ops CLI reads `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY` by default, falling back to `SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY` if unset.
 - `/v1/ops/run` requires a key with policy `ops`; `rw` is not sufficient. Exception: the server ops key set via `-ops-access-key/-ops-secret-key` (env `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY`) is treated as `ops` for `/v1/ops/run` (defaults to the main access/secret if unset).
 - If `-ops-access-key/-ops-secret-key` are not explicitly set, they fall back to `-access-key/-secret-key` (or `SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY`) rather than creating a separate credential.
 
