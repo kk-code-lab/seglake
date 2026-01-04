@@ -18,6 +18,7 @@ type maintenanceOptions struct {
 	dataDir string
 	action  string
 	jsonOut bool
+	noWait  bool
 }
 
 func newMaintenanceFlagSet() (*flag.FlagSet, *maintenanceOptions) {
@@ -26,6 +27,7 @@ func newMaintenanceFlagSet() (*flag.FlagSet, *maintenanceOptions) {
 	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
 	fs.StringVar(&opts.action, "maintenance-action", "status", "Maintenance action: status|enable|disable")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output maintenance status as JSON")
+	fs.BoolVar(&opts.noWait, "maintenance-no-wait", false, "Do not wait for quiesced/off when enabling/disabling maintenance")
 	return fs, opts
 }
 
@@ -70,6 +72,20 @@ func runMaintenance(opts *maintenanceOptions) error {
 	if err != nil {
 		return err
 	}
+	if running && !opts.noWait {
+		switch action {
+		case "enable":
+			state, err = waitForMaintenanceQuiesced(store)
+			if err != nil {
+				return err
+			}
+		case "disable":
+			state, err = waitForMaintenanceOff(store)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	writeInflight := int64(0)
 	statsState := ""
 	statsUpdatedAt := ""
@@ -100,6 +116,46 @@ func runMaintenance(opts *maintenanceOptions) error {
 	fmt.Printf("maintenance=%s running=%t addr=%s write_inflight=%d server_state=%s server_state_updated=%s\n",
 		state.State, running, addr, writeInflight, statsState, statsUpdatedAt)
 	return nil
+}
+
+func waitForMaintenanceQuiesced(store *meta.Store) (meta.MaintenanceState, error) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := store.MaintenanceState(context.Background())
+		if err != nil {
+			return state, err
+		}
+		switch state.State {
+		case "quiesced":
+			return state, nil
+		case "entering":
+			<-ticker.C
+			continue
+		default:
+			return state, fmt.Errorf("maintenance enable interrupted (state=%s)", state.State)
+		}
+	}
+}
+
+func waitForMaintenanceOff(store *meta.Store) (meta.MaintenanceState, error) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := store.MaintenanceState(context.Background())
+		if err != nil {
+			return state, err
+		}
+		switch state.State {
+		case "off":
+			return state, nil
+		case "exiting":
+			<-ticker.C
+			continue
+		default:
+			return state, fmt.Errorf("maintenance disable interrupted (state=%s)", state.State)
+		}
+	}
 }
 
 type maintenanceStatsResponse struct {

@@ -305,6 +305,7 @@ Notes:
 - States: `off` → `entering` → `quiesced` (writes drained) → `exiting` → `off`.
 - Applies to S3 and replication write endpoints (writes only).
 - Read-only operations continue to work.
+- `maintenance-action enable` waits for `quiesced` and `disable` waits for `off` when a server is running (use `-maintenance-no-wait` to return immediately).
 - Unsafe ops allowed without a live prompt when maintenance is `quiesced`: `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`.
 - `maintenance status` reports `write_inflight` when the server is running.
 - `/v1/meta/stats` includes `maintenance_state`, `maintenance_updated_at`, `write_inflight`, and `maintenance_transitions`.
@@ -337,6 +338,12 @@ export SEGLAKE_OPS_ACCESS_KEY=ops
 export SEGLAKE_OPS_SECRET_KEY=opsecret
 ./build/seglake -mode maintenance -maintenance-action enable
 ./build/seglake -mode gc-run -gc-force
+```
+
+Example (skip waiting on enable/disable):
+```
+./build/seglake -mode maintenance -maintenance-action enable -maintenance-no-wait
+./build/seglake -mode maintenance -maintenance-action disable -maintenance-no-wait
 ```
 
 ## GC/MPU guardrails

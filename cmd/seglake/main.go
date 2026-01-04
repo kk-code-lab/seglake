@@ -179,7 +179,7 @@ type bucketsOptions struct {
 	rebuildMeta string
 	action      string
 	bucket      string
-	versioning string
+	versioning  string
 	jsonOut     bool
 }
 
