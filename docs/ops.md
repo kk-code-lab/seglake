@@ -41,6 +41,8 @@ For consistent backups, avoid copying the data directory while writes are in fli
 
 If you must back up live data without maintenance, be aware of potential meta/data skew. Restores may require `rebuild-index`, and missing chunks can surface as read errors.
 
+Even in maintenance mode, using `snapshot` is recommended because it captures `meta.db` together with WAL/SHM in a safe, consistent bundle and reduces operator error when copying metadata by hand.
+
 Example (systemd drop-in idea):
 ```
 ExecStartPre=/opt/seglake/build/seglake -mode maintenance -maintenance-action enable -data-dir /var/lib/seglake
