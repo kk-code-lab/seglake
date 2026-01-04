@@ -1237,10 +1237,6 @@ func (h *Handler) enforceIfMatch(ctx context.Context, w http.ResponseWriter, r *
 				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match failed", requestID, r.URL.Path)
 				return false
 			}
-			if requires {
-				writeErrorWithResource(w, http.StatusPreconditionFailed, "PreconditionFailed", "if-match required", requestID, r.URL.Path)
-				return false
-			}
 			return true
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
