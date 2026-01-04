@@ -30,6 +30,24 @@ Secrets handling (ops runbook expectations):
 - Rotate secrets on a fixed schedule (e.g., every 90 days) and on incident.
 - Audit access to secrets and remove unused keys.
 
+## Online backups (recommended flow)
+
+For consistent backups, avoid copying the data directory while writes are in flight. The safe pattern is:
+
+1) Enable maintenance (write-quiesce).
+2) Run `snapshot` (copies `meta.db` + WAL/SHM).
+3) Backup the data directory (segments + manifests + snapshot output).
+4) Disable maintenance.
+
+If you must back up live data without maintenance, be aware of potential meta/data skew. Restores may require `rebuild-index`, and missing chunks can surface as read errors.
+
+Example (systemd drop-in idea):
+```
+ExecStartPre=/opt/seglake/build/seglake -mode maintenance -maintenance-action enable -data-dir /var/lib/seglake
+ExecStartPre=/opt/seglake/build/seglake -mode snapshot -data-dir /var/lib/seglake -snapshot-dir /var/lib/seglake/snapshots/snapshot-$(date -u +%Y%m%dT%H%M%SZ)
+ExecStartPost=/opt/seglake/build/seglake -mode maintenance -maintenance-action disable -data-dir /var/lib/seglake
+```
+
 ## TLS reverse proxy checklist
 
 1) Terminate TLS in a reverse proxy (nginx, Caddy, Envoy).
