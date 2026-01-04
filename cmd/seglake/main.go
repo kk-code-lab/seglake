@@ -563,7 +563,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.tlsKey, "tls-key", envOrDefault("SEGLAKE_TLS_KEY", ""), "TLS private key path (PEM, env SEGLAKE_TLS_KEY)")
 	fs.StringVar(&opts.trustedProxies, "trusted-proxies", "", "Comma-separated CIDR ranges trusted for X-Forwarded-For")
 	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_OPS_ACCESS_KEY", envOrDefault("SEGLAKE_ACCESS_KEY", "")), "Ops API access key (env SEGLAKE_OPS_ACCESS_KEY)")
-	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_OPS_SECRET_KEY", envOrDefault("SEGLAKE_SECRET_KEY", "")), "Ops API secret key (env SEGLAKE_OPS_SECRET_KEY)")
+	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_OPS_SECRET_KEY", envOrDefault("SEGLAKE_SECRET_KEY", "")), "Ops API secret key (env SEGLAKE_OPS_SECRET_KEY, defaults to main secret if unset)")
 	fs.StringVar(&opts.siteID, "site-id", "local", "Site identifier for replication (HLC/oplog)")
 	fs.DurationVar(&opts.syncInterval, "sync-interval", 100*time.Millisecond, "Write barrier interval")
 	fs.Int64Var(&opts.syncBytes, "sync-bytes", 128<<20, "Write barrier byte threshold")
