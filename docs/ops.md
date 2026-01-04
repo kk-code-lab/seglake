@@ -50,6 +50,11 @@ ExecStartPre=/opt/seglake/build/seglake -mode snapshot -data-dir /var/lib/seglak
 ExecStartPost=/opt/seglake/build/seglake -mode maintenance -maintenance-action disable -data-dir /var/lib/seglake
 ```
 
+Restore checklist (typical):
+1) Restore the data directory (segments/manifests) and a snapshot directory.
+2) Copy snapshot `meta.db` + `meta.db-wal` + `meta.db-shm` into the data dir.
+3) Start the server. If metadata looks inconsistent, run `rebuild-index`.
+
 ## TLS reverse proxy checklist
 
 1) Terminate TLS in a reverse proxy (nginx, Caddy, Envoy).
