@@ -97,6 +97,43 @@ func (r *Report) addWarning(msg string) {
 	}
 }
 
+// DBIntegrityCheck runs PRAGMA integrity_check on meta.db.
+func DBIntegrityCheck(metaPath string) (*Report, error) {
+	report := newReport("db-integrity-check")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+	lines, err := store.IntegrityCheck(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) == 1 && lines[0] == "ok" {
+		report.FinishedAt = time.Now().UTC()
+		return report, nil
+	}
+	report.Errors = len(lines)
+	report.ErrorSample = append(report.ErrorSample, lines...)
+	report.FinishedAt = time.Now().UTC()
+	return report, nil
+}
+
+// DBReindex rebuilds SQLite indices for meta.db.
+func DBReindex(metaPath, table string) (*Report, error) {
+	report := newReport("db-reindex")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Reindex(context.Background(), table); err != nil {
+		return nil, err
+	}
+	report.FinishedAt = time.Now().UTC()
+	return report, nil
+}
+
 // Status collects basic counts about storage state.
 func Status(layout fs.Layout) (*Report, error) {
 	report := newReport("status")

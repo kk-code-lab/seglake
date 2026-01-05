@@ -18,6 +18,7 @@ type opsRunRequest struct {
 	SnapshotDir       string  `json:"snapshot_dir,omitempty"`
 	RebuildMeta       string  `json:"rebuild_meta,omitempty"`
 	ReplCompareDir    string  `json:"repl_compare_dir,omitempty"`
+	DBReindexTable    string  `json:"db_reindex_table,omitempty"`
 	FsckAllManifests  bool    `json:"fsck_all_manifests,omitempty"`
 	ScrubAllManifests bool    `json:"scrub_all_manifests,omitempty"`
 	GCMinAgeNanos     int64   `json:"gc_min_age_nanos,omitempty"`
@@ -80,7 +81,7 @@ func (h *Handler) handleOpsRun(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	gcMinAge := time.Duration(req.GCMinAgeNanos)
 	mpuTTL := time.Duration(req.MPUTTLNanos)
-	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, mpuTTL, req.MPUForce, gcGuard, mpuGuard)
+	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, mpuTTL, req.MPUForce, gcGuard, mpuGuard, req.DBReindexTable)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
@@ -94,14 +95,14 @@ func (h *Handler) handleOpsRun(ctx context.Context, w http.ResponseWriter, r *ht
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
 	}
 }
 
-func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails) (*ops.Report, error) {
+func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string) (*ops.Report, error) {
 	var (
 		report *ops.Report
 		err    error
@@ -170,6 +171,10 @@ func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCom
 			snapshotDir = filepath.Join(filepath.Dir(layout.Root), "support", "bundle-"+fmtTime())
 		}
 		report, err = ops.SupportBundle(layout, metaPath, snapshotDir)
+	case "db-integrity-check":
+		report, err = ops.DBIntegrityCheck(metaPath)
+	case "db-reindex":
+		report, err = ops.DBReindex(metaPath, dbReindexTable)
 	default:
 		return nil, fmt.Errorf("unknown mode %q", mode)
 	}
