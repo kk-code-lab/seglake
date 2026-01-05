@@ -10,7 +10,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/s3"
 )
 
-func runBuckets(action, metaPath, bucket, versioning string, jsonOut bool) error {
+func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut bool) error {
 	if metaPath == "" {
 		return errors.New("meta path required")
 	}
@@ -72,12 +72,18 @@ func runBuckets(action, metaPath, bucket, versioning string, jsonOut bool) error
 			fmt.Println("ok")
 			return nil
 		}
-		hasObjects, err := store.BucketHasObjects(context.Background(), bucket)
-		if err != nil {
-			return err
-		}
-		if hasObjects {
-			return errors.New("bucket not empty")
+		if force {
+			if err := deleteBucketObjects(context.Background(), store, bucket); err != nil {
+				return err
+			}
+		} else {
+			hasObjects, err := store.BucketHasObjects(context.Background(), bucket)
+			if err != nil {
+				return err
+			}
+			if hasObjects {
+				return errors.New("bucket not empty")
+			}
 		}
 		if err := store.DeleteBucket(context.Background(), bucket); err != nil {
 			return err
@@ -102,5 +108,37 @@ func runBuckets(action, metaPath, bucket, versioning string, jsonOut bool) error
 		return nil
 	default:
 		return fmt.Errorf("unknown bucket-action %q", action)
+	}
+}
+
+func deleteBucketObjects(ctx context.Context, store *meta.Store, bucket string) error {
+	versioningState, err := store.GetBucketVersioningState(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	afterKey := ""
+	afterVersion := ""
+	for {
+		objects, err := store.ListObjects(ctx, bucket, "", afterKey, afterVersion, 1000)
+		if err != nil {
+			return err
+		}
+		if len(objects) == 0 {
+			return nil
+		}
+		for _, obj := range objects {
+			if versioningState == meta.BucketVersioningDisabled {
+				if _, err := store.DeleteObjectUnversioned(ctx, bucket, obj.Key); err != nil {
+					return err
+				}
+			} else {
+				if _, err := store.DeleteObject(ctx, bucket, obj.Key); err != nil {
+					return err
+				}
+			}
+		}
+		last := objects[len(objects)-1]
+		afterKey = last.Key
+		afterVersion = last.VersionID
 	}
 }

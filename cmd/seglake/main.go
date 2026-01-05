@@ -188,6 +188,7 @@ type bucketsOptions struct {
 	action      string
 	bucket      string
 	versioning  string
+	force       bool
 	jsonOut     bool
 }
 
@@ -398,7 +399,7 @@ func main() {
 			}
 		}
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
-		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.versioning, opts.jsonOut); err != nil {
+		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.versioning, opts.force, opts.jsonOut); err != nil {
 			exitError("buckets", err)
 		}
 	case global.mode == "maintenance":
@@ -719,6 +720,7 @@ func newBucketsFlagSet() (*flag.FlagSet, *bucketsOptions) {
 	fs.StringVar(&opts.action, "bucket-action", "list", "Bucket action: list|create|delete|exists")
 	fs.StringVar(&opts.bucket, "bucket", "", "Bucket name for bucket-action")
 	fs.StringVar(&opts.versioning, "bucket-versioning", "", "Bucket versioning for create: enabled|suspended|disabled|unversioned")
+	fs.BoolVar(&opts.force, "bucket-force", false, "Force delete bucket by deleting live objects first")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
 	return fs, opts
 }
