@@ -3838,6 +3838,30 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) (string, e
 	return versionID, nil
 }
 
+// DeleteObjectUnversioned deletes the current object without creating a delete marker.
+func (s *Store) DeleteObjectUnversioned(ctx context.Context, bucket, key string) (string, error) {
+	if bucket == "" || key == "" {
+		return "", errors.New("meta: bucket and key required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	versionID, err := s.DeleteObjectUnversionedTx(ctx, tx, bucket, key)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return versionID, nil
+}
+
 // DeleteObjectVersion marks a specific version as deleted and updates objects_current if needed.
 func (s *Store) DeleteObjectVersion(ctx context.Context, bucket, key, versionID string) (bool, error) {
 	if bucket == "" || key == "" || versionID == "" {

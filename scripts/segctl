@@ -139,8 +139,11 @@ def bucket_create(cfg: Config, name: str, versioning: str | None) -> None:
     run(cmd)
 
 
-def bucket_delete(cfg: Config, name: str) -> None:
-    run([cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "delete", "-bucket", name])
+def bucket_delete(cfg: Config, name: str, force: bool) -> None:
+    cmd = [cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "delete", "-bucket", name]
+    if force:
+        cmd.append("-bucket-force")
+    run(cmd)
 
 def bucket_exists(cfg: Config, name: str) -> None:
     cmd = [cfg.seglake_bin, "-mode", "buckets", "-data-dir", cfg.data_dir, "-bucket-action", "exists", "-bucket", name]
@@ -518,6 +521,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     bucket_delete_p = bucket_sub.add_parser("delete")
     bucket_delete_p.add_argument("name")
+    bucket_delete_p.add_argument("--force", action="store_true", help="Delete live objects before deleting bucket")
 
     key = subparsers.add_parser("key")
     key_sub = key.add_subparsers(dest="action", required=True)
@@ -602,7 +606,7 @@ def main(argv: list[str]) -> None:
         elif args.action == "create":
             bucket_create(cfg, args.name, args.versioning)
         elif args.action == "delete":
-            bucket_delete(cfg, args.name)
+            bucket_delete(cfg, args.name, args.force)
         else:
             die(f"unknown bucket action: {args.action}")
         return

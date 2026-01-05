@@ -340,6 +340,7 @@ Notes:
   - `scripts/segctl maintenance status|enable|disable`
   - `scripts/segctl ops <mode> -- <flags>`
     - example: `scripts/segctl ops gc-run -- -gc-force`
+  - `scripts/segctl bucket delete <bucket> --force` (deletes live objects first; delete markers remain)
   - `scripts/segctl stats --endpoint http://127.0.0.1:9000 --access test --secret testsecret`
 
 Ops over HTTP (server-side):

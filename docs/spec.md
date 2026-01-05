@@ -154,6 +154,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `DELETE /<bucket>/<key>` — DELETE object (idempotent).
   - `?versionId=...` — GET/HEAD/DELETE a specific version (returns `x-amz-version-id`).
 - `DELETE /<bucket>` — DELETE bucket (only if empty; delete markers do not count as objects).
+  - Buckets with only delete markers can be deleted.
 - `PUT /<bucket>/<key>` + `x-amz-copy-source` — CopyObject (full copy).
 - Multipart:
   - `POST /<bucket>/<key>?uploads` — Initiate.
