@@ -342,6 +342,8 @@ Notes:
     - example: `scripts/segctl ops gc-run -- -gc-force`
   - `scripts/segctl bucket delete <bucket> --force` (deletes live objects first; delete markers remain)
   - `scripts/segctl stats --endpoint http://127.0.0.1:9000 --access test --secret testsecret`
+  - `segctl` blocks local admin commands when a live server heartbeat is detected; use `--yes` to override.
+  - `scripts/segctl db integrity-check` / `scripts/segctl db reindex [--table api_keys]`
 
 Ops over HTTP (server-side):
 - When the server is running and maintenance is `quiesced`, unsafe ops run via `POST /v1/ops/run`.

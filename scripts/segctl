@@ -5,8 +5,11 @@ import argparse
 import datetime
 import hashlib
 import hmac
+import json
 import os
+import re
 import secrets
+import sqlite3
 import subprocess
 import sys
 import urllib.parse
@@ -19,6 +22,7 @@ class Config:
     data_dir: str
     seglake_bin: str
     json_out: bool
+    assume_yes: bool
 
 
 def die(message: str, code: int = 1) -> None:
@@ -46,6 +50,93 @@ def require_data_dir(data_dir: str) -> None:
         die("data dir required")
     if not os.path.isdir(data_dir):
         die(f"data dir not found: {data_dir}")
+
+
+def read_heartbeat_status(data_dir: str) -> tuple[bool, str, str, int]:
+    path = os.path.join(data_dir, ".seglake.lock")
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return False, "", "", 0
+    except OSError as exc:
+        die(f"failed to stat heartbeat: {exc}")
+    fresh = (datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromtimestamp(stat.st_mtime, datetime.timezone.utc)).total_seconds() <= 15
+    if not fresh:
+        return False, "", "", 0
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except OSError:
+        return True, "", "", 0
+    except json.JSONDecodeError:
+        return True, "", "", 0
+    pid = int(payload.get("pid", 0) or 0)
+    addr = str(payload.get("addr", "") or "")
+    heartbeat = str(payload.get("heartbeat_at", "") or "")
+    return True, addr, heartbeat, pid
+
+
+def confirm_not_live(cfg: Config, label: str) -> None:
+    fresh, addr, heartbeat, pid = read_heartbeat_status(cfg.data_dir)
+    if not fresh:
+        return
+    if cfg.assume_yes:
+        return
+    details = []
+    if pid:
+        details.append(f"pid={pid}")
+    if addr:
+        details.append(f"addr={addr}")
+    if heartbeat:
+        details.append(f"heartbeat={heartbeat}")
+    detail_text = f" ({', '.join(details)})" if details else ""
+    die(f"{label} refused: server appears to be running{detail_text}; stop seglake or re-run with --yes")
+
+
+def meta_db_path(cfg: Config) -> str:
+    return os.path.join(cfg.data_dir, "meta.db")
+
+
+def db_integrity_check(cfg: Config) -> None:
+    path = meta_db_path(cfg)
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.Error as exc:
+        die(f"failed to open meta.db: {exc}")
+    try:
+        rows = conn.execute("PRAGMA integrity_check;").fetchall()
+    except sqlite3.Error as exc:
+        die(f"integrity_check failed: {exc}")
+    finally:
+        conn.close()
+    output = [row[0] for row in rows if row]
+    if output == ["ok"]:
+        print("ok")
+        return
+    for line in output:
+        print(line)
+    raise SystemExit(2)
+
+
+def db_reindex(cfg: Config, table: str | None) -> None:
+    path = meta_db_path(cfg)
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.Error as exc:
+        die(f"failed to open meta.db: {exc}")
+    try:
+        if table:
+            if not re.match(r"^[A-Za-z0-9_]+$", table):
+                die("invalid table name for reindex")
+            conn.execute(f"REINDEX {table};")
+        else:
+            conn.execute("REINDEX;")
+        conn.commit()
+    except sqlite3.Error as exc:
+        die(f"reindex failed: {exc}")
+    finally:
+        conn.close()
+    print("ok")
 
 
 def run(cmd: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -497,6 +588,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     global_parser.add_argument("--data-dir", default=os.getenv("SEGLAKE_DATA_DIR", "./data"))
     global_parser.add_argument("--bin", dest="bin_path", default=os.getenv("SEGLAKE_BIN", ""))
     global_parser.add_argument("--json", dest="json_out", action="store_true")
+    global_parser.add_argument("--yes", dest="assume_yes", action="store_true", help="Proceed even if server appears to be running")
     globals_ns, rest = global_parser.parse_known_args(argv)
 
     parser = argparse.ArgumentParser(
@@ -585,20 +677,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     stats_cmd.add_argument("--region", default=os.getenv("SEGLAKE_REGION", "us-east-1"))
     stats_cmd.add_argument("--expires", type=int, default=60)
 
+    db_cmd = subparsers.add_parser("db")
+    db_sub = db_cmd.add_subparsers(dest="action", required=True)
+    db_sub.add_parser("integrity-check")
+    db_reindex_p = db_sub.add_parser("reindex")
+    db_reindex_p.add_argument("--table", default=None, help="Reindex only this table/index")
+
     args = parser.parse_args(rest)
     args.data_dir = globals_ns.data_dir
     args.bin_path = globals_ns.bin_path
     args.json_out = globals_ns.json_out
+    args.assume_yes = globals_ns.assume_yes
     return args
 
 
 def main(argv: list[str]) -> None:
     args = parse_args(argv)
     seglake_bin = resolve_bin(args.bin_path or None)
-    cfg = Config(data_dir=args.data_dir, seglake_bin=seglake_bin, json_out=args.json_out)
+    cfg = Config(data_dir=args.data_dir, seglake_bin=seglake_bin, json_out=args.json_out, assume_yes=args.assume_yes)
 
     if args.resource == "bucket":
         require_data_dir(cfg.data_dir)
+        confirm_not_live(cfg, "bucket")
         if args.action == "list":
             bucket_list(cfg)
         elif args.action == "exists":
@@ -613,6 +713,7 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "key":
         require_data_dir(cfg.data_dir)
+        confirm_not_live(cfg, "key")
         if args.action == "list":
             key_list(cfg)
         elif args.action == "create":
@@ -651,6 +752,7 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "bucket-policy":
         require_data_dir(cfg.data_dir)
+        confirm_not_live(cfg, "bucket-policy")
         if args.action == "get":
             bucket_policy_get(cfg, args.bucket)
         elif args.action == "set":
@@ -663,6 +765,7 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "maintenance":
         require_data_dir(cfg.data_dir)
+        confirm_not_live(cfg, "maintenance")
         if args.action in ("status", "enable", "disable"):
             maintenance_action(cfg, args.action)
         else:
@@ -676,6 +779,17 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "stats":
         stats_fetch(cfg, args.endpoint, args.access, args.secret, args.region, args.expires)
+        return
+
+    if args.resource == "db":
+        require_data_dir(cfg.data_dir)
+        confirm_not_live(cfg, "db")
+        if args.action == "integrity-check":
+            db_integrity_check(cfg)
+        elif args.action == "reindex":
+            db_reindex(cfg, args.table)
+        else:
+            die(f"unknown db action: {args.action}")
         return
 
     die(f"unknown resource: {args.resource}")
