@@ -23,6 +23,7 @@ type opsRunRequest struct {
 	SnapshotDir       string  `json:"snapshot_dir,omitempty"`
 	RebuildMeta       string  `json:"rebuild_meta,omitempty"`
 	ReplCompareDir    string  `json:"repl_compare_dir,omitempty"`
+	DBReindexTable    string  `json:"db_reindex_table,omitempty"`
 	FsckAllManifests  bool    `json:"fsck_all_manifests,omitempty"`
 	ScrubAllManifests bool    `json:"scrub_all_manifests,omitempty"`
 	GCMinAgeNanos     int64   `json:"gc_min_age_nanos,omitempty"`
@@ -62,6 +63,7 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 			SnapshotDir:       opts.snapshotDir,
 			RebuildMeta:       opts.rebuildMeta,
 			ReplCompareDir:    opts.replCompareDir,
+			DBReindexTable:    opts.dbReindexTable,
 			FsckAllManifests:  opts.fsckAllManifests,
 			ScrubAllManifests: opts.scrubAllManifests,
 			GCMinAgeNanos:     int64(opts.gcMinAge),
@@ -97,7 +99,7 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		MaxUploads:         opts.mpuMaxUploads,
 		MaxReclaimedBytes:  opts.mpuMaxReclaim,
 	}
-	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.jsonOut)
+	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut)
 }
 
 func runOpsRemote(url string, req opsRunRequest, jsonOut bool, accessKey, secretKey, region string) error {
@@ -178,7 +180,7 @@ func normalizeOpsURL(addr string) string {
 	return addr + "/v1/ops/run"
 }
 
-func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -248,11 +250,31 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
 		}
 		report, err = ops.SupportBundle(layout, metaPath, snapshotDir)
+	case "db-integrity-check":
+		report, err = ops.DBIntegrityCheck(metaPath)
+	case "db-reindex":
+		report, err = ops.DBReindex(metaPath, dbReindexTable)
 	default:
 		return fmt.Errorf("unknown mode %q", mode)
 	}
 	if err != nil {
 		return err
+	}
+	if !jsonOut {
+		switch report.Mode {
+		case "db-integrity-check":
+			if report.Errors == 0 {
+				fmt.Println("ok")
+				return nil
+			}
+			for _, line := range report.ErrorSample {
+				fmt.Println(line)
+			}
+			return fmt.Errorf("db integrity check failed")
+		case "db-reindex":
+			fmt.Println("ok")
+			return nil
+		}
 	}
 	if jsonOut {
 		return writeJSONReport(report)
@@ -328,6 +350,10 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
+	case "db-integrity-check":
+		fmt.Println("Mode db-integrity-check: runs PRAGMA integrity_check on meta.db.")
+	case "db-reindex":
+		fmt.Println("Mode db-reindex: rebuilds SQLite indices in meta.db.")
 	case "keys":
 		fmt.Println("Mode keys: manage API keys and bucket allowlists.")
 	case "bucket-policy":

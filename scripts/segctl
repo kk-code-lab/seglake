@@ -7,9 +7,7 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import secrets
-import sqlite3
 import subprocess
 import sys
 import urllib.parse
@@ -93,50 +91,20 @@ def confirm_not_live(cfg: Config, label: str) -> None:
     die(f"{label} refused: server appears to be running{detail_text}; stop seglake or re-run with --yes")
 
 
-def meta_db_path(cfg: Config) -> str:
-    return os.path.join(cfg.data_dir, "meta.db")
-
-
 def db_integrity_check(cfg: Config) -> None:
-    path = meta_db_path(cfg)
-    try:
-        conn = sqlite3.connect(path)
-    except sqlite3.Error as exc:
-        die(f"failed to open meta.db: {exc}")
-    try:
-        rows = conn.execute("PRAGMA integrity_check;").fetchall()
-    except sqlite3.Error as exc:
-        die(f"integrity_check failed: {exc}")
-    finally:
-        conn.close()
-    output = [row[0] for row in rows if row]
-    if output == ["ok"]:
-        print("ok")
-        return
-    for line in output:
-        print(line)
-    raise SystemExit(2)
+    cmd = [cfg.seglake_bin, "-mode", "db-integrity-check", "-data-dir", cfg.data_dir]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
 
 
 def db_reindex(cfg: Config, table: str | None) -> None:
-    path = meta_db_path(cfg)
-    try:
-        conn = sqlite3.connect(path)
-    except sqlite3.Error as exc:
-        die(f"failed to open meta.db: {exc}")
-    try:
-        if table:
-            if not re.match(r"^[A-Za-z0-9_]+$", table):
-                die("invalid table name for reindex")
-            conn.execute(f"REINDEX {table};")
-        else:
-            conn.execute("REINDEX;")
-        conn.commit()
-    except sqlite3.Error as exc:
-        die(f"reindex failed: {exc}")
-    finally:
-        conn.close()
-    print("ok")
+    cmd = [cfg.seglake_bin, "-mode", "db-reindex", "-data-dir", cfg.data_dir]
+    if table:
+        cmd += ["-db-reindex-table", table]
+    if cfg.json_out:
+        cmd.append("-json")
+    run(cmd)
 
 
 def run(cmd: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:

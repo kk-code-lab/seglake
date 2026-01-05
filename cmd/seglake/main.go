@@ -152,6 +152,7 @@ type opsOptions struct {
 	mpuWarnReclaim    int64
 	mpuMaxUploads     int
 	mpuMaxReclaim     int64
+	dbReindexTable    string
 	jsonOut           bool
 	opsURL            string
 	opsAccessKey      string
@@ -679,6 +680,7 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.Int64Var(&opts.mpuWarnReclaim, "mpu-warn-reclaim-bytes", 10<<30, "MPU GC warn when candidate bytes exceed this count (0 disables)")
 	fs.IntVar(&opts.mpuMaxUploads, "mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
+	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
 	return fs, opts
 }
@@ -777,7 +779,7 @@ func newReplBootstrapFlagSet() (*flag.FlagSet, *replBootstrapOptions) {
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false

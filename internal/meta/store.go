@@ -316,6 +316,53 @@ func (s *Store) Flush() error {
 	return err
 }
 
+// IntegrityCheck runs SQLite integrity_check and returns all result rows.
+func (s *Store) IntegrityCheck(ctx context.Context) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "PRAGMA integrity_check")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return nil, err
+		}
+		out = append(out, line)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Reindex rebuilds SQLite indices, optionally limited to a specific table/index.
+func (s *Store) Reindex(ctx context.Context, table string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if table == "" {
+		_, err := s.db.ExecContext(ctx, "REINDEX")
+		return err
+	}
+	for _, r := range table {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_':
+		default:
+			return errors.New("meta: invalid reindex target")
+		}
+	}
+	_, err := s.db.ExecContext(ctx, "REINDEX "+table)
+	return err
+}
+
 func (s *Store) applyPragmas(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
 		return err

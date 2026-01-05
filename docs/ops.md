@@ -303,7 +303,7 @@ Unsafe (prompt required):
 
 | Mode | Note |
 | --- | --- |
-| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `repl-pull`, `repl-push`, `repl-bootstrap` | Writes or rewrites data/metadata; use maintenance window. |
+| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `repl-pull`, `repl-push`, `repl-bootstrap`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
 
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
