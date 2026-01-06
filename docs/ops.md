@@ -158,7 +158,7 @@ Server flags:
 - `SEGLAKE_TLS_KEY` → `-tls-key`
 
 Ops/maintenance flags:
-- `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`)
+- `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
 
 ## awscli examples (SigV4)
 
@@ -347,9 +347,8 @@ Notes:
 
 Admin over Unix socket (server-side):
 - When the server is running, admin commands that modify SQLite (ops, keys, buckets, bucket-policy, maintenance, repl) run via a local-only Unix socket.
-- Socket path: `data/.seglake-admin.sock`
-- Token path (required): `data/.seglake-admin.token` (0600). CLI reads the token and sends `X-Seglake-Admin-Token`.
-- `/v1/ops/run` is removed; `-ops-url` is no longer supported.
+- Socket path: `data/.seglake-admin.sock` (relative to `-data-dir`).
+- Token path (required): `data/.seglake-admin.token` (relative to `-data-dir`, 0600). CLI reads the token and sends `X-Seglake-Admin-Token`.
 - Windows limitation: Unix sockets are not available; local admin channel is unavailable there.
 
 Example (maintenance + gc-run via admin socket):
