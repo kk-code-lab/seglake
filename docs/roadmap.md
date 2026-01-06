@@ -21,7 +21,6 @@ Tag legend (order used below):
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
-- [ops] Add local-only admin channel (Unix socket) for ops/maintenance/keys/buckets/repl; remove `/v1/ops/run` and document Windows limitations.
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 - [api][integrity][ops] Add SSE-S3 (MVP+): PUT/GET/HEAD + `x-amz-server-side-encryption: AES256`, per-object DEK/EDEK, documented ETag semantics, presign header enforcement, and KEK re-wrap tooling for rotation.
 
