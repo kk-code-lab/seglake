@@ -80,7 +80,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `/v1/meta/stats` with basic counters + traffic and latency.
 - `/v1/meta/conflicts` lists conflicting versions (JSON).
 - Request-id in logs and responses.
-- Admin ops channel: local-only Unix socket (`.seglake-admin.sock`) with required token (`.seglake-admin.token`) for ops/maintenance/keys/buckets/bucket-policy/repl; `/v1/ops/run` removed.
+- Admin ops channel: local-only Unix socket (`.seglake-admin.sock`) with required token (`.seglake-admin.token`) for ops/maintenance/keys/buckets/bucket-policy/repl.
 
 ---
 
