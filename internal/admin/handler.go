@@ -28,6 +28,14 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h == nil {
+		writeAdminError(w, http.StatusInternalServerError, "storage not initialized")
+		return
+	}
+	LoggingMiddleware(http.HandlerFunc(h.dispatch)).ServeHTTP(w, r)
+}
+
+func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.Meta == nil || h.Engine == nil {
 		writeAdminError(w, http.StatusInternalServerError, "storage not initialized")
 		return
