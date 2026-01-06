@@ -94,15 +94,6 @@ func TestE2EMaintenanceOpsFlow(t *testing.T) {
 		t.Fatalf("blocked PUT status=%d err=%v", resp.StatusCode, err)
 	}
 
-	opsReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/ops/run", bytes.NewReader([]byte(`{"mode":"gc-run","gc_force":true}`)))
-	if err != nil {
-		t.Fatalf("NewRequest ops: %v", err)
-	}
-	signRequest(opsReq, "ops", "opsecret", "us-east-1")
-	if resp, err := http.DefaultClient.Do(opsReq); err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("ops run status=%d err=%v", resp.StatusCode, err)
-	}
-
 	if _, err := store.SetMaintenanceState(context.Background(), "exiting"); err != nil {
 		t.Fatalf("SetMaintenanceState exiting: %v", err)
 	}

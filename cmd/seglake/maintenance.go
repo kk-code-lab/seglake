@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 )
@@ -37,6 +38,24 @@ func runMaintenance(opts *maintenanceOptions) error {
 	}
 	if err := requireDataDir(opts.dataDir); err != nil {
 		return err
+	}
+	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
+		return err
+	} else if ok {
+		req := admin.MaintenanceRequest{
+			Action: opts.action,
+			NoWait: opts.noWait,
+		}
+		var resp admin.MaintenanceResponse
+		if err := client.postJSON("/admin/maintenance", req, &resp); err != nil {
+			return err
+		}
+		if opts.jsonOut {
+			return writeJSON(resp)
+		}
+		fmt.Printf("maintenance=%s updated_at=%s running=%t addr=%s write_inflight=%d server_state=%s server_state_updated=%s\n",
+			resp.Maintenance, resp.MaintenanceUpdated, resp.Running, resp.Addr, resp.WriteInflight, resp.ServerState, resp.ServerStateUpdatedAt)
+		return nil
 	}
 	store, err := meta.Open(filepath.Join(opts.dataDir, "meta.db"))
 	if err != nil {

@@ -1,6 +1,7 @@
-package main
+package repl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
+	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/segment"
 )
 
 func TestReplPullRetriesChunk(t *testing.T) {
@@ -33,6 +36,7 @@ func TestReplPullRetriesChunk(t *testing.T) {
 	}
 
 	var chunkCalls int32
+	manBytes := mustManifestBytes(t, "bucket", "key", "v1", "seg-test", []byte("data"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/oplog":
@@ -48,16 +52,8 @@ func TestReplPullRetriesChunk(t *testing.T) {
 				LastHLC: "0000000000000000002-0000000001",
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/replication/oplog":
-			resp := replOplogApplyResponse{
-				Applied: 1,
-				MissingChunks: []replMissingChunk{{
-					SegmentID: "seg-test",
-					Offset:    0,
-					Length:    4,
-				}},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/manifest":
+			_, _ = w.Write(manBytes)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/chunk":
 			if atomic.AddInt32(&chunkCalls, 1) == 1 {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -117,6 +113,7 @@ func TestReplPullRetryDeadline(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
+	manBytes := mustManifestBytes(t, "bucket", "key", "v1", "seg-test", []byte("data"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/oplog":
@@ -132,16 +129,8 @@ func TestReplPullRetryDeadline(t *testing.T) {
 				LastHLC: "0000000000000000002-0000000001",
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/replication/oplog":
-			resp := replOplogApplyResponse{
-				Applied: 1,
-				MissingChunks: []replMissingChunk{{
-					SegmentID: "seg-test",
-					Offset:    0,
-					Length:    4,
-				}},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/manifest":
+			_, _ = w.Write(manBytes)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/replication/chunk":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("fail"))
@@ -166,4 +155,27 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatalf("parse url: %v", err)
 	}
 	return parsed
+}
+
+func mustManifestBytes(t *testing.T, bucket, key, versionID, segmentID string, data []byte) []byte {
+	t.Helper()
+	hash := segment.HashChunk(data)
+	man := &manifest.Manifest{
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Size:      int64(len(data)),
+		Chunks: []manifest.ChunkRef{{
+			Index:     0,
+			Hash:      hash,
+			SegmentID: segmentID,
+			Offset:    0,
+			Len:       uint32(len(data)),
+		}},
+	}
+	buf := &bytes.Buffer{}
+	if err := (&manifest.BinaryCodec{}).Encode(buf, man); err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	return buf.Bytes()
 }

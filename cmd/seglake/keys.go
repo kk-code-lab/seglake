@@ -4,14 +4,61 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 )
 
 func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enabled bool, inflight int64, jsonOut bool) error {
+	if client, ok, err := adminClientIfRunning(filepath.Dir(metaPath)); err != nil {
+		return err
+	} else if ok {
+		req := admin.KeysRequest{
+			Action:    action,
+			AccessKey: accessKey,
+			SecretKey: secretKey,
+			Policy:    policy,
+			Bucket:    bucket,
+			Inflight:  inflight,
+		}
+		if action == "create" {
+			req.Enabled = &enabled
+		}
+		switch action {
+		case "list":
+			var keys []meta.APIKey
+			if err := client.postJSON("/admin/keys", req, &keys); err != nil {
+				return err
+			}
+			return formatKeysList(keys, jsonOut)
+		case "list-buckets":
+			var buckets []string
+			if err := client.postJSON("/admin/keys", req, &buckets); err != nil {
+				return err
+			}
+			return formatKeyBuckets(buckets, jsonOut)
+		case "list-buckets-all":
+			var keyBuckets map[string][]string
+			if err := client.postJSON("/admin/keys", req, &keyBuckets); err != nil {
+				return err
+			}
+			return formatAllKeyBuckets(keyBuckets, jsonOut)
+		default:
+			var resp map[string]string
+			if err := client.postJSON("/admin/keys", req, &resp); err != nil {
+				return err
+			}
+			if jsonOut {
+				return writeJSON(resp)
+			}
+			fmt.Println("ok")
+			return nil
+		}
+	}
 	if metaPath == "" {
 		return errors.New("meta path required")
 	}
@@ -27,20 +74,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		if err != nil {
 			return err
 		}
-		if jsonOut {
-			if keys == nil {
-				keys = []meta.APIKey{}
-			}
-			return writeJSON(keys)
-		}
-		for _, key := range keys {
-			state := "disabled"
-			if key.Enabled {
-				state = "enabled"
-			}
-			fmt.Printf("access_key=%s state=%s policy=%s inflight=%d last_used=%s\n", key.AccessKey, state, key.Policy, key.InflightLimit, key.LastUsedAt)
-		}
-		return nil
+		return formatKeysList(keys, jsonOut)
 	case "create":
 		if accessKey == "" || secretKey == "" {
 			return errors.New("key-access and key-secret required")
@@ -88,41 +122,13 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		if err != nil {
 			return err
 		}
-		if jsonOut {
-			if buckets == nil {
-				buckets = []string{}
-			}
-			return writeJSON(buckets)
-		}
-		for _, name := range buckets {
-			fmt.Println(name)
-		}
-		return nil
+		return formatKeyBuckets(buckets, jsonOut)
 	case "list-buckets-all":
 		keyBuckets, err := store.ListAllKeyBuckets(context.Background())
 		if err != nil {
 			return err
 		}
-		if jsonOut {
-			if keyBuckets == nil {
-				keyBuckets = map[string][]string{}
-			}
-			return writeJSON(keyBuckets)
-		}
-		accessKeys := make([]string, 0, len(keyBuckets))
-		for access := range keyBuckets {
-			accessKeys = append(accessKeys, access)
-		}
-		sort.Strings(accessKeys)
-		for _, access := range accessKeys {
-			buckets := keyBuckets[access]
-			if len(buckets) == 0 {
-				fmt.Printf("access_key=%s buckets=\n", access)
-				continue
-			}
-			fmt.Printf("access_key=%s buckets=%s\n", access, strings.Join(buckets, ","))
-		}
-		return nil
+		return formatAllKeyBuckets(keyBuckets, jsonOut)
 	case "enable":
 		if accessKey == "" {
 			return errors.New("key-access required")
@@ -177,4 +183,57 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 	default:
 		return fmt.Errorf("unknown keys-action %q", action)
 	}
+}
+
+func formatKeysList(keys []meta.APIKey, jsonOut bool) error {
+	if jsonOut {
+		if keys == nil {
+			keys = []meta.APIKey{}
+		}
+		return writeJSON(keys)
+	}
+	for _, key := range keys {
+		state := "disabled"
+		if key.Enabled {
+			state = "enabled"
+		}
+		fmt.Printf("access_key=%s state=%s policy=%s inflight=%d last_used=%s\n", key.AccessKey, state, key.Policy, key.InflightLimit, key.LastUsedAt)
+	}
+	return nil
+}
+
+func formatKeyBuckets(buckets []string, jsonOut bool) error {
+	if jsonOut {
+		if buckets == nil {
+			buckets = []string{}
+		}
+		return writeJSON(buckets)
+	}
+	for _, name := range buckets {
+		fmt.Println(name)
+	}
+	return nil
+}
+
+func formatAllKeyBuckets(keyBuckets map[string][]string, jsonOut bool) error {
+	if jsonOut {
+		if keyBuckets == nil {
+			keyBuckets = map[string][]string{}
+		}
+		return writeJSON(keyBuckets)
+	}
+	accessKeys := make([]string, 0, len(keyBuckets))
+	for access := range keyBuckets {
+		accessKeys = append(accessKeys, access)
+	}
+	sort.Strings(accessKeys)
+	for _, access := range accessKeys {
+		buckets := keyBuckets[access]
+		if len(buckets) == 0 {
+			fmt.Printf("access_key=%s buckets=\n", access)
+			continue
+		}
+		fmt.Printf("access_key=%s buckets=%s\n", access, strings.Join(buckets, ","))
+	}
+	return nil
 }

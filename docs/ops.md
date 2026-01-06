@@ -299,11 +299,11 @@ Safe (no prompt):
 | --- | --- |
 | `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
 
-Unsafe (prompt required):
+Unsafe (prompt required, maintenance quiesced):
 
 | Mode | Note |
 | --- | --- |
-| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `repl-pull`, `repl-push`, `repl-bootstrap`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
+| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
 
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
@@ -342,30 +342,21 @@ Notes:
     - example: `scripts/segctl ops gc-run -- -gc-force`
   - `scripts/segctl bucket delete <bucket> --force` (deletes live objects first; delete markers remain)
   - `scripts/segctl stats --endpoint http://127.0.0.1:9000 --access test --secret testsecret`
-  - `segctl` blocks local admin commands when a live server heartbeat is detected; use `--yes` to override.
+  - `segctl` uses the admin socket when a live server heartbeat is detected.
   - `scripts/segctl db integrity-check` / `scripts/segctl db reindex [--table api_keys]`
 
-Ops over HTTP (server-side):
-- When the server is running and maintenance is `quiesced`, unsafe ops run via `POST /v1/ops/run`.
-- CLI automatically uses this path when it detects a running server + `quiesced` (or you can set `-ops-url`).
-- If API keys are configured on the server, pass `-ops-access-key` / `-ops-secret-key` (SigV4 presign). The ops CLI reads `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY` by default, falling back to `SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY` if unset.
-- `/v1/ops/run` requires a key with policy `ops`; `rw` is not sufficient. Exception: the server ops key set via `-ops-access-key/-ops-secret-key` (env `SEGLAKE_OPS_ACCESS_KEY/SEGLAKE_OPS_SECRET_KEY`) is treated as `ops` for `/v1/ops/run` (defaults to the main access/secret if unset).
-- If `-ops-access-key/-ops-secret-key` are not explicitly set, they fall back to `-access-key/-secret-key` (or `SEGLAKE_ACCESS_KEY/SEGLAKE_SECRET_KEY`) rather than creating a separate credential.
+Admin over Unix socket (server-side):
+- When the server is running, admin commands that modify SQLite (ops, keys, buckets, bucket-policy, maintenance, repl) run via a local-only Unix socket.
+- Socket path: `data/.seglake-admin.sock`
+- Token path (required): `data/.seglake-admin.token` (0600). CLI reads the token and sends `X-Seglake-Admin-Token`.
+- `/v1/ops/run` is removed; `-ops-url` is no longer supported.
+- Windows limitation: Unix sockets are not available; local admin channel is unavailable there.
 
-Example (create ops key + run gc-run):
+Example (maintenance + gc-run via admin socket):
 ```
-./build/seglake -mode keys -keys-action create -key-access=ops -key-secret=opsecret -key-policy=ops
-./build/seglake -mode maintenance -maintenance-action enable
-./build/seglake -mode gc-run -gc-force -ops-access-key=ops -ops-secret-key=opsecret
-./build/seglake -mode maintenance -maintenance-action disable
-```
-
-Example (server ops key via env):
-```
-export SEGLAKE_OPS_ACCESS_KEY=ops
-export SEGLAKE_OPS_SECRET_KEY=opsecret
 ./build/seglake -mode maintenance -maintenance-action enable
 ./build/seglake -mode gc-run -gc-force
+./build/seglake -mode maintenance -maintenance-action disable
 ```
 
 Example (skip waiting on enable/disable):

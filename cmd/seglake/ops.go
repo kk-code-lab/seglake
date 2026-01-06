@@ -1,64 +1,26 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/ops"
-	"github.com/kk-code-lab/seglake/internal/s3"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
-
-type opsRunRequest struct {
-	Mode              string  `json:"mode"`
-	SnapshotDir       string  `json:"snapshot_dir,omitempty"`
-	RebuildMeta       string  `json:"rebuild_meta,omitempty"`
-	ReplCompareDir    string  `json:"repl_compare_dir,omitempty"`
-	DBReindexTable    string  `json:"db_reindex_table,omitempty"`
-	FsckAllManifests  bool    `json:"fsck_all_manifests,omitempty"`
-	ScrubAllManifests bool    `json:"scrub_all_manifests,omitempty"`
-	GCMinAgeNanos     int64   `json:"gc_min_age_nanos,omitempty"`
-	GCForce           bool    `json:"gc_force,omitempty"`
-	GCWarnSegments    int     `json:"gc_warn_segments,omitempty"`
-	GCWarnReclaim     int64   `json:"gc_warn_reclaim_bytes,omitempty"`
-	GCMaxSegments     int     `json:"gc_max_segments,omitempty"`
-	GCMaxReclaim      int64   `json:"gc_max_reclaim_bytes,omitempty"`
-	GCLiveThreshold   float64 `json:"gc_live_threshold,omitempty"`
-	GCRewritePlanFile string  `json:"gc_rewrite_plan,omitempty"`
-	GCRewriteFromPlan string  `json:"gc_rewrite_from_plan,omitempty"`
-	GCRewriteBps      int64   `json:"gc_rewrite_bps,omitempty"`
-	GCPauseFile       string  `json:"gc_pause_file,omitempty"`
-	MPUTTLNanos       int64   `json:"mpu_ttl_nanos,omitempty"`
-	MPUForce          bool    `json:"mpu_force,omitempty"`
-	MPUWarnUploads    int     `json:"mpu_warn_uploads,omitempty"`
-	MPUWarnReclaim    int64   `json:"mpu_warn_reclaim_bytes,omitempty"`
-	MPUMaxUploads     int     `json:"mpu_max_uploads,omitempty"`
-	MPUMaxReclaim     int64   `json:"mpu_max_reclaim_bytes,omitempty"`
-}
 
 func runOpsWithMode(mode string, opts *opsOptions) error {
 	if opts == nil {
 		return fmt.Errorf("ops options required")
 	}
-	remoteURL := ""
-	if isOpsRemoteEligible(mode, opts.dataDir) {
-		if opts.opsURL != "" {
-			remoteURL = normalizeOpsURL(opts.opsURL)
-		} else if addr, ok := heartbeatAddr(opts.dataDir); ok {
-			remoteURL = normalizeOpsURL(addr)
-		}
-	}
-	if remoteURL != "" {
-		req := opsRunRequest{
+	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
+		return err
+	} else if ok {
+		req := admin.OpsRunRequest{
 			Mode:              mode,
 			SnapshotDir:       opts.snapshotDir,
 			RebuildMeta:       opts.rebuildMeta,
@@ -84,7 +46,15 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 			MPUMaxUploads:     opts.mpuMaxUploads,
 			MPUMaxReclaim:     opts.mpuMaxReclaim,
 		}
-		return runOpsRemote(remoteURL, req, opts.jsonOut, opts.opsAccessKey, opts.opsSecretKey, opts.opsRegion)
+		var report ops.Report
+		if err := client.postJSON("/admin/ops/run", req, &report); err != nil {
+			return err
+		}
+		if opts.jsonOut {
+			return writeJSON(&report)
+		}
+		fmt.Printf("%s\n", formatReport(&report))
+		return nil
 	}
 	metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
 	gcGuard := ops.GCGuardrails{
@@ -100,84 +70,6 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		MaxReclaimedBytes:  opts.mpuMaxReclaim,
 	}
 	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut)
-}
-
-func runOpsRemote(url string, req opsRunRequest, jsonOut bool, accessKey, secretKey, region string) error {
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	if accessKey != "" || secretKey != "" {
-		if region == "" {
-			region = "us-east-1"
-		}
-		auth := &s3.AuthConfig{AccessKey: accessKey, SecretKey: secretKey, Region: region}
-		if signed, err := auth.Presign(http.MethodPost, url, 5*time.Minute); err == nil {
-			url = signed
-		} else {
-			return err
-		}
-	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		if len(body) > 0 {
-			return fmt.Errorf("ops remote failed: %s", strings.TrimSpace(string(body)))
-		}
-		return fmt.Errorf("ops remote failed: %s", resp.Status)
-	}
-	var report ops.Report
-	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
-		return err
-	}
-	if jsonOut {
-		return writeJSON(&report)
-	}
-	fmt.Printf("%s\n", formatReport(&report))
-	return nil
-}
-
-func isOpsRemoteEligible(mode, dataDir string) bool {
-	if dataDir == "" {
-		return false
-	}
-	state, err := maintenanceState(dataDir)
-	if err != nil || state != "quiesced" {
-		return false
-	}
-	_, ok := heartbeatAddr(dataDir)
-	return ok
-}
-
-func heartbeatAddr(dataDir string) (string, bool) {
-	status, err := readHeartbeatStatus(dataDir)
-	if err != nil || !status.Fresh {
-		return "", false
-	}
-	if status.HasData && status.Data.Addr != "" {
-		return status.Data.Addr, true
-	}
-	return "", false
-}
-
-func normalizeOpsURL(addr string) string {
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return ""
-	}
-	if !strings.Contains(addr, "://") {
-		if strings.HasPrefix(addr, ":") {
-			addr = "http://127.0.0.1" + addr
-		} else {
-			addr = "http://" + addr
-		}
-	}
-	addr = strings.TrimSuffix(addr, "/")
-	return addr + "/v1/ops/run"
 }
 
 func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool) error {

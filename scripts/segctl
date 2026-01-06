@@ -666,7 +666,6 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "bucket":
         require_data_dir(cfg.data_dir)
-        confirm_not_live(cfg, "bucket")
         if args.action == "list":
             bucket_list(cfg)
         elif args.action == "exists":
@@ -681,7 +680,6 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "key":
         require_data_dir(cfg.data_dir)
-        confirm_not_live(cfg, "key")
         if args.action == "list":
             key_list(cfg)
         elif args.action == "create":
@@ -720,7 +718,6 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "bucket-policy":
         require_data_dir(cfg.data_dir)
-        confirm_not_live(cfg, "bucket-policy")
         if args.action == "get":
             bucket_policy_get(cfg, args.bucket)
         elif args.action == "set":
@@ -733,7 +730,6 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "maintenance":
         require_data_dir(cfg.data_dir)
-        confirm_not_live(cfg, "maintenance")
         if args.action in ("status", "enable", "disable"):
             maintenance_action(cfg, args.action)
         else:
@@ -751,7 +747,6 @@ def main(argv: list[str]) -> None:
 
     if args.resource == "db":
         require_data_dir(cfg.data_dir)
-        confirm_not_live(cfg, "db")
         if args.action == "integrity-check":
             db_integrity_check(cfg)
         elif args.action == "reindex":

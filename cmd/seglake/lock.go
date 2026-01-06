@@ -25,12 +25,14 @@ const (
 )
 
 type serverHeartbeat struct {
-	PID         int       `json:"pid"`
-	Addr        string    `json:"addr"`
-	StartedAt   time.Time `json:"started_at"`
-	HeartbeatAt time.Time `json:"heartbeat_at"`
-	Version     string    `json:"version"`
-	Commit      string    `json:"commit"`
+	PID            int       `json:"pid"`
+	Addr           string    `json:"addr"`
+	AdminSocket    string    `json:"admin_socket"`
+	AdminTokenPath string    `json:"admin_token_path"`
+	StartedAt      time.Time `json:"started_at"`
+	HeartbeatAt    time.Time `json:"heartbeat_at"`
+	Version        string    `json:"version"`
+	Commit         string    `json:"commit"`
 }
 
 type heartbeatStatus struct {
@@ -42,12 +44,14 @@ type heartbeatStatus struct {
 }
 
 type serverLock struct {
-	path     string
-	started  time.Time
-	addr     string
-	stop     chan struct{}
-	done     chan struct{}
-	interval time.Duration
+	path           string
+	started        time.Time
+	addr           string
+	adminSocket    string
+	adminTokenPath string
+	stop           chan struct{}
+	done           chan struct{}
+	interval       time.Duration
 }
 
 func lockPath(dataDir string) string {
@@ -75,7 +79,7 @@ func readHeartbeatStatus(dataDir string) (heartbeatStatus, error) {
 	return status, nil
 }
 
-func acquireServerLock(dataDir, addr string) (*serverLock, error) {
+func acquireServerLock(dataDir, addr, adminSocketPath, adminTokenPath string) (*serverLock, error) {
 	if err := ensureDataDir(dataDir); err != nil {
 		return nil, err
 	}
@@ -99,12 +103,14 @@ func acquireServerLock(dataDir, addr string) (*serverLock, error) {
 	}
 	_ = lockFile.Close()
 	lock := &serverLock{
-		path:     path,
-		started:  time.Now().UTC(),
-		addr:     addr,
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
-		interval: heartbeatInterval,
+		path:           path,
+		started:        time.Now().UTC(),
+		addr:           addr,
+		adminSocket:    adminSocketPath,
+		adminTokenPath: adminTokenPath,
+		stop:           make(chan struct{}),
+		done:           make(chan struct{}),
+		interval:       heartbeatInterval,
 	}
 	if err := lock.writeHeartbeat(); err != nil {
 		_ = os.Remove(path)
@@ -135,12 +141,14 @@ func (l *serverLock) writeHeartbeat() error {
 		return nil
 	}
 	payload := serverHeartbeat{
-		PID:         os.Getpid(),
-		Addr:        l.addr,
-		StartedAt:   l.started,
-		HeartbeatAt: time.Now().UTC(),
-		Version:     app.Version,
-		Commit:      app.BuildCommit,
+		PID:            os.Getpid(),
+		Addr:           l.addr,
+		AdminSocket:    l.adminSocket,
+		AdminTokenPath: l.adminTokenPath,
+		StartedAt:      l.started,
+		HeartbeatAt:    time.Now().UTC(),
+		Version:        app.Version,
+		Commit:         app.BuildCommit,
 	}
 	data, err := json.Marshal(&payload)
 	if err != nil {
@@ -201,6 +209,9 @@ func confirmLiveMode(dataDir, mode string, assumeYes bool) error {
 	if !isUnsafeLiveMode(mode) {
 		return nil
 	}
+	if hasAdminChannel(dataDir, status) {
+		return nil
+	}
 	if allowsUnsafeInMaintenance(mode) {
 		if state, err := maintenanceState(dataDir); err == nil && state == "quiesced" {
 			return nil
@@ -233,6 +244,31 @@ func confirmLiveMode(dataDir, mode string, assumeYes bool) error {
 	default:
 		return errors.New("aborted by user")
 	}
+}
+
+func hasAdminChannel(dataDir string, status heartbeatStatus) bool {
+	if !status.Fresh {
+		return false
+	}
+	socketPath := ""
+	tokenPath := ""
+	if status.HasData {
+		socketPath = status.Data.AdminSocket
+		tokenPath = status.Data.AdminTokenPath
+	}
+	if socketPath == "" {
+		socketPath = defaultAdminSocketPath(dataDir)
+	}
+	if tokenPath == "" {
+		tokenPath = defaultAdminTokenPath(dataDir)
+	}
+	if _, err := os.Stat(socketPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(tokenPath); err != nil {
+		return false
+	}
+	return true
 }
 
 func maintenanceState(dataDir string) (string, error) {

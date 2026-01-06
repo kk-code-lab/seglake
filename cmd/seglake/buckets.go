@@ -4,13 +4,49 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
+	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 )
 
 func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut bool) error {
+	if client, ok, err := adminClientIfRunning(filepath.Dir(metaPath)); err != nil {
+		return err
+	} else if ok {
+		req := admin.BucketsRequest{
+			Action:     action,
+			Bucket:     bucket,
+			Versioning: versioning,
+			Force:      force,
+		}
+		switch action {
+		case "list":
+			var buckets []string
+			if err := client.postJSON("/admin/buckets", req, &buckets); err != nil {
+				return err
+			}
+			return formatBucketsList(buckets, jsonOut)
+		case "exists":
+			var resp map[string]bool
+			if err := client.postJSON("/admin/buckets", req, &resp); err != nil {
+				return err
+			}
+			return formatBucketExists(resp, jsonOut)
+		default:
+			var resp map[string]string
+			if err := client.postJSON("/admin/buckets", req, &resp); err != nil {
+				return err
+			}
+			if jsonOut {
+				return writeJSON(resp)
+			}
+			fmt.Println("ok")
+			return nil
+		}
+	}
 	if metaPath == "" {
 		return errors.New("meta path required")
 	}
@@ -26,16 +62,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		if err != nil {
 			return err
 		}
-		if jsonOut {
-			if buckets == nil {
-				buckets = []string{}
-			}
-			return writeJSON(buckets)
-		}
-		for _, name := range buckets {
-			fmt.Println(name)
-		}
-		return nil
+		return formatBucketsList(buckets, jsonOut)
 	case "create":
 		if bucket == "" {
 			return errors.New("bucket required")
@@ -101,14 +128,35 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		if err != nil {
 			return err
 		}
-		if jsonOut {
-			return writeJSON(map[string]bool{"exists": exists})
-		}
-		fmt.Println(exists)
-		return nil
+		return formatBucketExists(map[string]bool{"exists": exists}, jsonOut)
 	default:
 		return fmt.Errorf("unknown bucket-action %q", action)
 	}
+}
+
+func formatBucketsList(buckets []string, jsonOut bool) error {
+	if jsonOut {
+		if buckets == nil {
+			buckets = []string{}
+		}
+		return writeJSON(buckets)
+	}
+	for _, name := range buckets {
+		fmt.Println(name)
+	}
+	return nil
+}
+
+func formatBucketExists(resp map[string]bool, jsonOut bool) error {
+	if jsonOut {
+		return writeJSON(resp)
+	}
+	if resp == nil {
+		fmt.Println(false)
+		return nil
+	}
+	fmt.Println(resp["exists"])
+	return nil
 }
 
 func deleteBucketObjects(ctx context.Context, store *meta.Store, bucket string) error {
