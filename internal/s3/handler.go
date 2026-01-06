@@ -245,13 +245,6 @@ func (h *Handler) handleMetaAndReplication(ctx context.Context, w http.ResponseW
 				h.handleOplogApply(ctx, w, r, requestID)
 			},
 		},
-		{
-			method: http.MethodPost,
-			prefix: "/v1/ops/run",
-			handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID string) {
-				h.handleOpsRun(ctx, w, r, requestID)
-			},
-		},
 	}
 	for _, route := range routes {
 		if r.Method != route.method {
@@ -1637,9 +1630,6 @@ func (h *Handler) opForRequest(r *http.Request) string {
 	}
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/replication/oplog") {
 		return "repl_oplog_apply"
-	}
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/ops/run") {
-		return "ops_run"
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" && h.hostBucket(r) == "" && r.URL.Query().Get("list-type") == "" {
 		return "list_buckets"

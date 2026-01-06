@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/app"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
@@ -124,8 +125,6 @@ type serverOptions struct {
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
 	shutdownTimeout   time.Duration
-	opsAccessKey      string
-	opsSecretKey      string
 }
 
 type opsOptions struct {
@@ -154,10 +153,6 @@ type opsOptions struct {
 	mpuMaxReclaim     int64
 	dbReindexTable    string
 	jsonOut           bool
-	opsURL            string
-	opsAccessKey      string
-	opsSecretKey      string
-	opsRegion         string
 }
 
 type keysOptions struct {
@@ -337,7 +332,21 @@ func main() {
 		if err := confirmLiveMode(opts.dataDir, global.mode, global.assumeYes); err != nil {
 			exitError("repl bootstrap", err)
 		}
-		if err := runReplBootstrap(opts.remote, opts.accessKey, opts.secretKey, opts.region, opts.dataDir, opts.force); err != nil {
+		if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
+			exitError("repl bootstrap", err)
+		} else if ok {
+			req := admin.ReplBootstrapRequest{
+				Remote:    opts.remote,
+				Force:     opts.force,
+				AccessKey: opts.accessKey,
+				SecretKey: opts.secretKey,
+				Region:    opts.region,
+			}
+			var resp map[string]string
+			if err := client.postJSON("/admin/repl/bootstrap", req, &resp); err != nil {
+				exitError("repl bootstrap", err)
+			}
+		} else if err := runReplBootstrap(opts.remote, opts.accessKey, opts.secretKey, opts.region, opts.dataDir, opts.force); err != nil {
 			exitError("repl bootstrap", err)
 		}
 	case global.mode == "keys":
@@ -624,8 +633,6 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.StringVar(&opts.tlsCert, "tls-cert", envOrDefault("SEGLAKE_TLS_CERT", ""), "TLS certificate path (PEM, env SEGLAKE_TLS_CERT)")
 	fs.StringVar(&opts.tlsKey, "tls-key", envOrDefault("SEGLAKE_TLS_KEY", ""), "TLS private key path (PEM, env SEGLAKE_TLS_KEY)")
 	fs.StringVar(&opts.trustedProxies, "trusted-proxies", envOrDefault("SEGLAKE_TRUSTED_PROXIES", ""), "Comma-separated CIDR ranges trusted for X-Forwarded-For (env SEGLAKE_TRUSTED_PROXIES)")
-	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_OPS_ACCESS_KEY", envOrDefault("SEGLAKE_ACCESS_KEY", "")), "Ops API access key (env SEGLAKE_OPS_ACCESS_KEY)")
-	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_OPS_SECRET_KEY", envOrDefault("SEGLAKE_SECRET_KEY", "")), "Ops API secret key (env SEGLAKE_OPS_SECRET_KEY, defaults to main secret if unset)")
 	fs.StringVar(&opts.siteID, "site-id", "local", "Site identifier for replication (HLC/oplog)")
 	fs.DurationVar(&opts.syncInterval, "sync-interval", 100*time.Millisecond, "Write barrier interval")
 	fs.Int64Var(&opts.syncBytes, "sync-bytes", 128<<20, "Write barrier byte threshold")
@@ -659,10 +666,6 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
 	fs.BoolVar(&opts.fsckAllManifests, "fsck-all-manifests", false, "Fsck scan all manifests instead of live set from meta")
 	fs.BoolVar(&opts.scrubAllManifests, "scrub-all-manifests", false, "Scrub scan all manifests instead of live set from meta")
-	fs.StringVar(&opts.opsURL, "ops-url", "", "Ops API base URL (default uses running server heartbeat)")
-	fs.StringVar(&opts.opsAccessKey, "ops-access-key", envOrDefault("SEGLAKE_OPS_ACCESS_KEY", envOrDefault("SEGLAKE_ACCESS_KEY", "")), "Ops API access key (env SEGLAKE_OPS_ACCESS_KEY, falls back to SEGLAKE_ACCESS_KEY)")
-	fs.StringVar(&opts.opsSecretKey, "ops-secret-key", envOrDefault("SEGLAKE_OPS_SECRET_KEY", envOrDefault("SEGLAKE_SECRET_KEY", "")), "Ops API secret key (env SEGLAKE_OPS_SECRET_KEY, falls back to SEGLAKE_SECRET_KEY)")
-	fs.StringVar(&opts.opsRegion, "ops-region", envOrDefault("SEGLAKE_REGION", "us-east-1"), "Ops API SigV4 region (env SEGLAKE_REGION)")
 	fs.DurationVar(&opts.gcMinAge, "gc-min-age", 24*time.Hour, "GC minimum segment age")
 	fs.BoolVar(&opts.gcForce, "gc-force", false, "GC delete segments (required for gc-run)")
 	fs.IntVar(&opts.gcWarnSegments, "gc-warn-segments", 100, "GC warn when candidates exceed this count (0 disables)")
@@ -818,7 +821,9 @@ func resolveMetaPath(dataDir, override string) string {
 }
 
 func runServer(opts *serverOptions) error {
-	lock, err := acquireServerLock(opts.dataDir, opts.addr)
+	adminSocketPath := defaultAdminSocketPath(opts.dataDir)
+	adminTokenPath := defaultAdminTokenPath(opts.dataDir)
+	lock, err := acquireServerLock(opts.dataDir, opts.addr, adminSocketPath, adminTokenPath)
 	if err != nil {
 		return err
 	}
@@ -838,8 +843,6 @@ func runServer(opts *serverOptions) error {
 	authCfg := &s3.AuthConfig{
 		AccessKey:            opts.accessKey,
 		SecretKey:            opts.secretKey,
-		OpsAccessKey:         opts.opsAccessKey,
-		OpsSecretKey:         opts.opsSecretKey,
 		Region:               opts.region,
 		MaxSkew:              5 * time.Minute,
 		AllowUnsignedPayload: opts.allowUnsigned,
@@ -877,6 +880,16 @@ func runServer(opts *serverOptions) error {
 	if opts.logRequests {
 		handler = s3.LoggingMiddleware(handler)
 	}
+	adminCtx, adminCancel := context.WithCancel(context.Background())
+	defer adminCancel()
+	_, _, socketPath, tokenPath, err := startAdminServer(adminCtx, opts.dataDir, opts.addr, store, eng, h.WriteInflight)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(socketPath)
+		_ = os.Remove(tokenPath)
+	}()
 	server := newHTTPServer(opts, handler)
 	srvErr := make(chan error, 1)
 	maintCtx, maintCancel := context.WithCancel(context.Background())
@@ -963,6 +976,25 @@ func newHTTPServer(opts *serverOptions, handler http.Handler) *http.Server {
 }
 
 func runReplPullMode(opts *replPullOptions) error {
+	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
+		return err
+	} else if ok {
+		req := admin.ReplPullRequest{
+			Remote:            opts.remote,
+			Since:             opts.since,
+			Limit:             opts.limit,
+			FetchData:         opts.fetchData,
+			Watch:             opts.watch,
+			IntervalNanos:     int64(opts.interval),
+			BackoffMaxNanos:   int64(opts.backoffMax),
+			RetryTimeoutNanos: int64(opts.retryTimeout),
+			AccessKey:         opts.accessKey,
+			SecretKey:         opts.secretKey,
+			Region:            opts.region,
+		}
+		var resp map[string]string
+		return client.postJSON("/admin/repl/pull", req, &resp)
+	}
 	store, err := openStore(opts.dataDir, opts.siteID)
 	if err != nil {
 		return err
@@ -976,6 +1008,23 @@ func runReplPullMode(opts *replPullOptions) error {
 }
 
 func runReplPushMode(opts *replPushOptions) error {
+	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
+		return err
+	} else if ok {
+		req := admin.ReplPushRequest{
+			Remote:          opts.remote,
+			Since:           opts.since,
+			Limit:           opts.limit,
+			Watch:           opts.watch,
+			IntervalNanos:   int64(opts.interval),
+			BackoffMaxNanos: int64(opts.backoffMax),
+			AccessKey:       opts.accessKey,
+			SecretKey:       opts.secretKey,
+			Region:          opts.region,
+		}
+		var resp map[string]string
+		return client.postJSON("/admin/repl/push", req, &resp)
+	}
 	store, err := openStore(opts.dataDir, opts.siteID)
 	if err != nil {
 		return err

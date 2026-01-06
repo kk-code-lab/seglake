@@ -8,7 +8,7 @@ Update assumptions and add mitigations/tests as the system evolves.
 - Out of scope: cloud infra, OS hardening, TLS termination if handled by external proxy.
 
 ## Assumptions (current)
-- Deployment exposure: public internet for S3 API; internal-only for /v1/meta/* and /v1/replication/* via proxy allowlist/mTLS.
+- Deployment exposure: public internet for S3 API; internal-only for /v1/meta/* and /v1/replication/* via proxy allowlist/mTLS. Admin ops channel is local-only (Unix socket).
 - Auth: SigV4 required when API keys are configured; public buckets may allow unsigned requests if policy permits.
 - TLS: native TLS supported, but deployment expects TLS termination at a proxy; TLS is required at the edge for any public exposure.
 - Rate limiting: partial (failed-auth limiter, per-key inflight, MPU Complete limiter; no global RPS limit by default).
@@ -35,8 +35,8 @@ Update assumptions and add mitigations/tests as the system evolves.
 | Bucket names | ListBuckets (`GET /`) | Info disclosure | Enumerate buckets outside tenant scope | Policy enforcement + per-key bucket allowlist filter | code | allowlist filter applies when configured; otherwise all buckets visible | Allowlist set via `keys allow-bucket` | `internal/s3/policy_integration_test.go` |
 | Availability | All inputs | DoS | Large bodies, range explosion | Size/time limits; global RPS limit at proxy/WAF (see recommended limits above) | code + deploy | size limits on; global RPS at proxy | Defaults: `-max-object-size=5GiB`, `-max-url-length=32KiB`, `-max-header-bytes=32KiB`, `-read-timeout=30s`, `-write-timeout=30s`, `-idle-timeout=2m`; Auth limiter 5 req/s burst 5 per IP/key; inflight per-key 32; MPU complete 4. Proxy/WAF RPS/timeout limits per deploy. | `internal/s3/put_validation_test.go`, `internal/s3/ratelimit_test.go` |
 | Availability | S3 write ops | Accidental writes during maintenance | Writes during GC/ops window | Maintenance mode (read-only) | code | off | `-mode maintenance -maintenance-action enable` | Add ops validation around maintenance windows |
-| Replication | Replication API | Spoofing/Tampering | Fake peer or public exposure of replication endpoints | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | code + deploy | auth depends on keys; allowlist/mTLS off | Proxy/WAF allowlist/mTLS; SigV4 only when keys exist | `internal/s3/replication_test.go`, `cmd/seglake/replication_test.go` |
-| Ops endpoints | /v1/meta/*, ops | Elevation/DoS | Unauth access to ops | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | code + deploy | auth depends on keys; allowlist/mTLS off | `/v1/ops/run` requires policy `ops`; server ops key (`-ops-access-key/-ops-secret-key`) is treated as `ops` for this endpoint (defaults to main access/secret if unset). Proxy/WAF allowlist/mTLS; SigV4 only when keys exist | `internal/s3/policy_integration_test.go`, `scripts/curl_security_smoke.sh` |
+| Replication | Replication API | Spoofing/Tampering | Fake peer or public exposure of replication endpoints | Require auth (SigV4 when enabled), network allowlist/mTLS at proxy | code + deploy | auth depends on keys; allowlist/mTLS off | Proxy/WAF allowlist/mTLS; SigV4 only when keys exist | `internal/s3/replication_test.go`, `internal/repl/repl_test.go` |
+| Ops endpoints | /v1/meta/*, admin socket | Elevation/DoS | Unauth access to ops | Admin socket is local-only + token; /v1/meta/* protected via SigV4 when enabled | code + deploy | auth depends on keys; allowlist/mTLS off for /v1/meta/*; admin socket always local-only | Unix socket + `X-Seglake-Admin-Token` (token file 0600). Proxy/WAF allowlist/mTLS for /v1/meta/* | `internal/s3/policy_integration_test.go` |
 
 ## Decisions
 - Public exposure is limited to S3 API; /v1/meta/* and /v1/replication/* are internal-only via proxy allowlist/mTLS.
