@@ -64,7 +64,7 @@ func (h *Handler) handleListBuckets(ctx context.Context, w http.ResponseWriter, 
 			Bucket: make([]bucket, 0, len(names)),
 		},
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := h.now().UTC().Format(time.RFC3339)
 	for _, name := range names {
 		out.Buckets.Bucket = append(out.Buckets.Bucket, bucket{
 			Name:         name,

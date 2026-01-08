@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/ops"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
@@ -111,5 +112,5 @@ func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCom
 }
 
 func fmtTime() string {
-	return fmt.Sprintf("%d", time.Now().UTC().Unix())
+	return fmt.Sprintf("%d", clock.RealClock{}.Now().UTC().Unix())
 }

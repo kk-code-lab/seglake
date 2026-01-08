@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
@@ -17,6 +18,7 @@ type segmentManager struct {
 	metaStore      *meta.Store
 	maxBytes       int64
 	maxAge         time.Duration
+	clock          clock.Clock
 
 	mu        sync.Mutex
 	writer    *segment.Writer
@@ -28,12 +30,15 @@ type segmentManager struct {
 	indexEntries []segment.IndexEntry
 }
 
-func newSegmentManager(layout fs.Layout, version uint32, metaStore *meta.Store, maxBytes int64, maxAge time.Duration) *segmentManager {
+func newSegmentManager(layout fs.Layout, version uint32, metaStore *meta.Store, maxBytes int64, maxAge time.Duration, clk clock.Clock) *segmentManager {
 	if maxBytes <= 0 {
 		maxBytes = 1 << 30
 	}
 	if maxAge <= 0 {
 		maxAge = 10 * time.Minute
+	}
+	if clk == nil {
+		clk = clock.RealClock{}
 	}
 	return &segmentManager{
 		layout:         layout,
@@ -41,7 +46,15 @@ func newSegmentManager(layout fs.Layout, version uint32, metaStore *meta.Store, 
 		metaStore:      metaStore,
 		maxBytes:       maxBytes,
 		maxAge:         maxAge,
+		clock:          clk,
 	}
+}
+
+func (m *segmentManager) now() time.Time {
+	if m != nil && m.clock != nil {
+		return m.clock.Now()
+	}
+	return clock.RealClock{}.Now()
 }
 
 func (m *segmentManager) appendChunk(ctx context.Context, hash [32]byte, data []byte) (string, int64, error) {
@@ -59,7 +72,7 @@ func (m *segmentManager) appendChunk(ctx context.Context, hash [32]byte, data []
 		return "", 0, err
 	}
 	m.size += int64(len(data)) + int64(segment.RecordHeaderLen())
-	m.lastWrite = time.Now().UTC()
+	m.lastWrite = m.now().UTC()
 	m.indexEntries = append(m.indexEntries, segment.IndexEntry{
 		Offset: offset,
 		Hash:   hash,
@@ -82,7 +95,7 @@ func (m *segmentManager) sealIfIdle(ctx context.Context) error {
 	if m.writer == nil {
 		return nil
 	}
-	if time.Since(m.lastWrite) < m.maxAge {
+	if m.now().Sub(m.lastWrite) < m.maxAge {
 		return nil
 	}
 	return m.sealCurrentLocked(ctx)
@@ -92,7 +105,7 @@ func (m *segmentManager) ensureSegment(ctx context.Context, nextBytes int64) err
 	if m.writer == nil {
 		return m.openNewSegment(ctx)
 	}
-	age := time.Since(m.lastWrite)
+	age := m.now().Sub(m.lastWrite)
 	if m.size+nextBytes >= m.maxBytes || age >= m.maxAge {
 		if err := m.sealCurrent(ctx); err != nil {
 			return err
@@ -115,7 +128,7 @@ func (m *segmentManager) openNewSegment(ctx context.Context) error {
 	}
 	m.writer = writer
 	m.segmentID = segmentID
-	m.createdAt = time.Now().UTC()
+	m.createdAt = m.now().UTC()
 	m.lastWrite = m.createdAt
 	info, _ := os.Stat(segmentPath)
 	if info != nil {

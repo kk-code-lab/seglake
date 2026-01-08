@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kk-code-lab/seglake/internal/clock"
 )
 
 // AuthConfig configures SigV4 validation.
@@ -23,6 +25,14 @@ type AuthConfig struct {
 	MaxSkew              time.Duration
 	AllowUnsignedPayload bool
 	SecretLookup         func(ctx context.Context, accessKey string) (string, bool, error)
+	Clock                clock.Clock
+}
+
+func (c *AuthConfig) now() time.Time {
+	if c != nil && c.Clock != nil {
+		return c.Clock.Now()
+	}
+	return clock.RealClock{}.Now()
 }
 
 // VerifyRequest validates AWS SigV4 Authorization headers.

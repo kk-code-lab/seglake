@@ -1,0 +1,19 @@
+id: no-time-now
+valid:
+  - |
+    package p
+
+    import "time"
+
+    func f(t time.Time) time.Time {
+    	return t.UTC()
+    }
+invalid:
+  - |
+    package p
+
+    import "time"
+
+    func f() time.Time {
+    	return time.Now()
+    }

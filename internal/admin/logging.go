@@ -8,15 +8,20 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/kk-code-lab/seglake/internal/clock"
 )
 
-func LoggingMiddleware(next http.Handler) http.Handler {
+func LoggingMiddleware(next http.Handler, clk clock.Clock) http.Handler {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		start := time.Now()
+		start := clk.Now()
 		body, summary := readAndSummarizeBody(r)
 		if body != nil {
 			r.Body = io.NopCloser(bytes.NewReader(body))
@@ -24,7 +29,8 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		reqID := newRequestID()
 		rw := &responseWithReqID{ResponseWriter: w, reqID: reqID, status: http.StatusOK}
 		next.ServeHTTP(rw, r.WithContext(withRequestID(r.Context(), reqID)))
-		log.Printf("admin method=%s path=%s status=%d dur_ms=%d req_id=%s %s", r.Method, r.URL.Path, rw.status, time.Since(start).Milliseconds(), reqID, summary)
+		end := clk.Now()
+		log.Printf("admin method=%s path=%s status=%d dur_ms=%d req_id=%s %s", r.Method, r.URL.Path, rw.status, end.Sub(start).Milliseconds(), reqID, summary)
 	})
 }
 

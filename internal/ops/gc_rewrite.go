@@ -108,10 +108,10 @@ func GCRewritePlanBuild(layout fs.Layout, metaPath string, minAge time.Duration,
 	for _, cand := range candidates {
 		report.CandidateIDs = append(report.CandidateIDs, cand.ID)
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 
 	plan := &GCRewritePlan{
-		GeneratedAt:   time.Now().UTC(),
+		GeneratedAt:   now().UTC(),
 		MinAge:        minAge,
 		LiveThreshold: liveThreshold,
 		Candidates:    candidates,
@@ -208,7 +208,7 @@ func GCRewriteFromPlan(layout fs.Layout, metaPath string, plan *GCRewritePlan, f
 		report.Reclaimed += seg.Size
 	}
 
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, nil
 }
@@ -423,7 +423,7 @@ func newGCThrottle(bps int64) *gcThrottle {
 	if bps <= 0 {
 		return nil
 	}
-	return &gcThrottle{bytesPerSec: bps, last: time.Now()}
+	return &gcThrottle{bytesPerSec: bps, last: now()}
 }
 
 func (t *gcThrottle) wait(n int64) {
@@ -443,6 +443,6 @@ func (t *gcThrottle) wait(n int64) {
 	if sleepFor > 0 {
 		time.Sleep(sleepFor)
 	}
-	t.last = time.Now()
+	t.last = now()
 	t.accum = 0
 }

@@ -23,7 +23,7 @@ func TestLoggingMiddlewareRedactsSecrets(t *testing.T) {
 	w := httptest.NewRecorder()
 	LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-	})).ServeHTTP(w, req)
+	}), nil).ServeHTTP(w, req)
 
 	logOutput := buf.String()
 	if strings.Contains(logOutput, "secret") {

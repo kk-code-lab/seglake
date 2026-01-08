@@ -157,7 +157,7 @@ func RebuildIndex(layout fs.Layout, metaPath string) (*Report, error) {
 	if err := os.Rename(newPath, metaPath); err != nil {
 		return nil, err
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	return report, nil
 }
 

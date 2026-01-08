@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +105,7 @@ func acquireServerLock(dataDir, addr, adminSocketPath, adminTokenPath string) (*
 	_ = lockFile.Close()
 	lock := &serverLock{
 		path:           path,
-		started:        time.Now().UTC(),
+		started:        clock.RealClock{}.Now().UTC(),
 		addr:           addr,
 		adminSocket:    adminSocketPath,
 		adminTokenPath: adminTokenPath,
@@ -146,7 +147,7 @@ func (l *serverLock) writeHeartbeat() error {
 		AdminSocket:    l.adminSocket,
 		AdminTokenPath: l.adminTokenPath,
 		StartedAt:      l.started,
-		HeartbeatAt:    time.Now().UTC(),
+		HeartbeatAt:    clock.RealClock{}.Now().UTC(),
 		Version:        app.Version,
 		Commit:         app.BuildCommit,
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"os"
 	"path/filepath"
 	"time"
@@ -176,7 +177,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 }
 
 func fmtTime() string {
-	return fmt.Sprintf("%d", time.Now().UTC().Unix())
+	return fmt.Sprintf("%d", clock.RealClock{}.Now().UTC().Unix())
 }
 
 func formatReport(report *ops.Report) string {
