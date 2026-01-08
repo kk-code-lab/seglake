@@ -95,7 +95,7 @@ func (c *adminClient) postJSON(path string, reqPayload any, respPayload any) err
 		var errPayload map[string]string
 		_ = json.NewDecoder(resp.Body).Decode(&errPayload)
 		if msg := errPayload["error"]; msg != "" {
-			return errors.New(msg)
+			return fmt.Errorf("admin error: %s", msg)
 		}
 		return fmt.Errorf("admin request failed: %s", resp.Status)
 	}

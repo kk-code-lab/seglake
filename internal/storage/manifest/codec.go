@@ -3,6 +3,7 @@ package manifest
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/zeebo/blake3"
@@ -28,7 +29,7 @@ type BinaryCodec struct{}
 // Encode writes a manifest with a header and checksum.
 func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 	if m == nil {
-		return errors.New("manifest: nil manifest")
+		return fmt.Errorf("manifest: nil manifest")
 	}
 	buf := make([]byte, 0, 256)
 	buf = appendU32(buf, magic)

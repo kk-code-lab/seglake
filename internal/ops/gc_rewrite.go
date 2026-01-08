@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -121,7 +122,7 @@ func GCRewritePlanBuild(layout fs.Layout, metaPath string, minAge time.Duration,
 // WriteGCRewritePlan writes plan JSON to a file.
 func WriteGCRewritePlan(path string, plan *GCRewritePlan) error {
 	if plan == nil || path == "" {
-		return errors.New("gc: plan and path required")
+		return fmt.Errorf("gc: plan and path required")
 	}
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {

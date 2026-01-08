@@ -242,7 +242,7 @@ func confirmLiveMode(dataDir, mode string, assumeYes bool) error {
 	case "y", "yes":
 		return nil
 	default:
-		return errors.New("aborted by user")
+		return ErrAbortedByUser
 	}
 }
 

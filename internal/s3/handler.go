@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -1401,7 +1402,7 @@ func (h *Handler) handleDeleteBucket(ctx context.Context, w http.ResponseWriter,
 	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		return h.Meta.DeleteBucketTx(ctx, tx, bucket)
 	}); err != nil {
@@ -1505,7 +1506,7 @@ func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter,
 		}
 		if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 			if h.Meta == nil {
-				return errors.New("meta store not configured")
+				return fmt.Errorf("meta store not configured")
 			}
 			return h.Meta.CreateBucketWithVersioningTx(ctx, tx, bucket, state)
 		}); err != nil {
@@ -1517,7 +1518,7 @@ func (h *Handler) handleCreateBucket(ctx context.Context, w http.ResponseWriter,
 	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		return h.Meta.CreateBucketTx(ctx, tx, bucket)
 	}); err != nil {

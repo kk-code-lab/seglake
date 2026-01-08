@@ -2,6 +2,7 @@ package segment
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 )
@@ -66,7 +67,7 @@ func (w *Writer) AppendRecord(header ChunkRecordHeader, data []byte) (int64, err
 // Seal writes the footer at the end of the segment.
 func (w *Writer) Seal(footer Footer) error {
 	if w.file == nil {
-		return errors.New("segment: writer closed")
+		return fmt.Errorf("segment: writer closed")
 	}
 	footer = FinalizeFooter(footer)
 	if err := ValidateFooter(footer); err != nil {

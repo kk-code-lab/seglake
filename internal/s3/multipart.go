@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -68,7 +69,7 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		return h.Meta.CreateMultipartUploadTx(ctx, tx, bucket, key, uploadID, contentType)
 	}); err != nil {
@@ -167,7 +168,7 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	}
 	_, result, err := h.Engine.PutObjectWithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
 	})
@@ -323,7 +324,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	}
 	_, result, err := h.Engine.PutManifestWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, totalSize, multiETag, chunks, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		if err := h.Meta.CompleteMultipartUploadTx(ctx, tx, uploadID); err != nil {
 			return err
@@ -356,7 +357,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 func (h *Handler) handleAbortMultipart(ctx context.Context, w http.ResponseWriter, uploadID string, requestID, resource string) {
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
-			return errors.New("meta store not configured")
+			return fmt.Errorf("meta store not configured")
 		}
 		return h.Meta.AbortMultipartUploadTx(ctx, tx, uploadID)
 	}); err != nil {
@@ -383,16 +384,16 @@ func normalizeETag(etag string) string {
 
 func validatePartSizes(parts []meta.MultipartPart) error {
 	if len(parts) == 0 {
-		return errors.New("no parts")
+		return fmt.Errorf("no parts")
 	}
 	for i := 0; i < len(parts)-1; i++ {
 		if parts[i].Size < minPartSize {
-			return errors.New("part too small")
+			return fmt.Errorf("part too small")
 		}
 	}
 	for i := 0; i < len(parts); i++ {
 		if parts[i].Size > maxPartSize {
-			return errors.New("part too large")
+			return fmt.Errorf("part too large")
 		}
 	}
 	return nil

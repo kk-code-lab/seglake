@@ -3,6 +3,7 @@ package s3
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -173,36 +174,36 @@ func ParsePolicy(raw string) (*Policy, error) {
 
 func (p *Policy) validate() error {
 	if p == nil {
-		return errors.New("policy required")
+		return fmt.Errorf("policy required")
 	}
 	if len(p.Statements) == 0 {
-		return errors.New("policy requires statements")
+		return fmt.Errorf("policy requires statements")
 	}
 	for i := range p.Statements {
 		stmt := &p.Statements[i]
 		stmt.Effect = strings.ToLower(strings.TrimSpace(stmt.Effect))
 		if stmt.Effect != policyEffectAllow && stmt.Effect != policyEffectDeny {
-			return errors.New("policy statement effect must be allow or deny")
+			return fmt.Errorf("policy statement effect must be allow or deny")
 		}
 		if len(stmt.Actions) == 0 {
-			return errors.New("policy statement requires actions")
+			return fmt.Errorf("policy statement requires actions")
 		}
 		for j := range stmt.Actions {
 			a := normalizeAction(stmt.Actions[j])
 			if _, ok := validPolicyActions[a]; !ok {
-				return errors.New("policy statement has invalid action")
+				return fmt.Errorf("policy statement has invalid action")
 			}
 			stmt.Actions[j] = a
 		}
 		if len(stmt.Resources) == 0 {
-			return errors.New("policy statement requires resources")
+			return fmt.Errorf("policy statement requires resources")
 		}
 		for j := range stmt.Resources {
 			res := &stmt.Resources[j]
 			res.Bucket = strings.TrimSpace(res.Bucket)
 			res.Prefix = strings.TrimSpace(res.Prefix)
 			if res.Bucket == "" {
-				return errors.New("policy resource bucket required")
+				return fmt.Errorf("policy resource bucket required")
 			}
 		}
 		if err := stmt.Conditions.validate(); err != nil {
@@ -322,26 +323,26 @@ func (c *Conditions) validate() error {
 	}
 	if c.Before != "" {
 		if _, err := time.Parse(time.RFC3339, c.Before); err != nil {
-			return errors.New("policy condition before must be RFC3339")
+			return fmt.Errorf("policy condition before must be RFC3339")
 		}
 	}
 	if c.After != "" {
 		if _, err := time.Parse(time.RFC3339, c.After); err != nil {
-			return errors.New("policy condition after must be RFC3339")
+			return fmt.Errorf("policy condition after must be RFC3339")
 		}
 	}
 	for _, cidr := range c.SourceIP {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return errors.New("policy condition source_ip must be CIDR")
+			return fmt.Errorf("policy condition source_ip must be CIDR")
 		}
 	}
 	for k := range c.Headers {
 		if strings.TrimSpace(k) == "" {
-			return errors.New("policy condition headers require keys")
+			return fmt.Errorf("policy condition headers require keys")
 		}
 	}
 	if c.PrefixLike && c.Prefix == "" {
-		return errors.New("policy condition prefix_like requires prefix")
+		return fmt.Errorf("policy condition prefix_like requires prefix")
 	}
 	return nil
 }

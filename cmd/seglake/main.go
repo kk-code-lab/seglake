@@ -791,14 +791,14 @@ func isOpsMode(mode string) bool {
 
 func ensureDataDir(dataDir string) error {
 	if dataDir == "" {
-		return errors.New("data dir required")
+		return ErrDataDirRequired
 	}
 	return os.MkdirAll(dataDir, 0o755)
 }
 
 func requireDataDir(dataDir string) error {
 	if dataDir == "" {
-		return errors.New("data dir required")
+		return ErrDataDirRequired
 	}
 	info, err := os.Stat(dataDir)
 	if err != nil {
