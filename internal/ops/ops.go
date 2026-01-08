@@ -64,7 +64,7 @@ func newReport(mode string) *Report {
 	return &Report{
 		SchemaVersion:     reportSchemaVersion,
 		Mode:              mode,
-		StartedAt:         time.Now().UTC(),
+		StartedAt:         now().UTC(),
 		ErrorSample:       []string{},
 		WarningSample:     []string{},
 		CandidateIDs:      []string{},
@@ -110,12 +110,12 @@ func DBIntegrityCheck(metaPath string) (*Report, error) {
 		return nil, err
 	}
 	if len(lines) == 1 && lines[0] == "ok" {
-		report.FinishedAt = time.Now().UTC()
+		report.FinishedAt = now().UTC()
 		return report, nil
 	}
 	report.Errors = len(lines)
 	report.ErrorSample = append(report.ErrorSample, lines...)
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	return report, nil
 }
 
@@ -130,7 +130,7 @@ func DBReindex(metaPath, table string) (*Report, error) {
 	if err := store.Reindex(context.Background(), table); err != nil {
 		return nil, err
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	return report, nil
 }
 
@@ -147,7 +147,7 @@ func Status(layout fs.Layout) (*Report, error) {
 	}
 	report.Manifests = len(manifests)
 	report.Segments = len(segments)
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	if store, err := meta.Open(filepath.Join(layout.Root, "meta.db")); err == nil {
 		livePaths, err := store.ListLiveManifestPaths(context.Background())
 		if err == nil {
@@ -266,7 +266,7 @@ func Fsck(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 		}
 	}
 
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	if store != nil {
 		_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	}
@@ -338,7 +338,7 @@ func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 		}
 	}
 
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	if store != nil {
 		_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	}
@@ -363,7 +363,7 @@ func Snapshot(layout fs.Layout, metaPath string, outDir string) (*Report, error)
 	segments, _ := listFiles(layout.SegmentsDir)
 	report.Manifests = len(manifests)
 	report.Segments = len(segments)
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	snapshotPath := filepath.Join(outDir, "snapshot.json")
 	if err := writeJSON(snapshotPath, report); err != nil {
 		return nil, err
@@ -399,7 +399,7 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 			_ = store.Close()
 		}
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	return report, nil
 }
 
@@ -481,7 +481,7 @@ func GCPlan(layout fs.Layout, metaPath string, minAge time.Duration, guardrails 
 	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
 		report.addWarning(fmt.Sprintf("gc: candidate_bytes=%d exceeds max=%d (gc-run will refuse)", report.CandidateBytes, guardrails.MaxReclaimedBytes))
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, candidates, nil
 }
@@ -517,7 +517,7 @@ func GCRun(layout fs.Layout, metaPath string, minAge time.Duration, force bool, 
 		report.Deleted++
 		report.Reclaimed += seg.Size
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, nil
 }
@@ -552,7 +552,7 @@ func MPUGCPlan(metaPath string, ttl time.Duration, guardrails MPUGCGuardrails) (
 	}
 	defer func() { _ = store.Close() }()
 
-	cutoff := time.Now().UTC().Add(-ttl)
+	cutoff := now().UTC().Add(-ttl)
 	uploads, err := store.ListMultipartUploadsBefore(context.Background(), cutoff)
 	if err != nil {
 		return nil, nil, err
@@ -579,7 +579,7 @@ func MPUGCPlan(metaPath string, ttl time.Duration, guardrails MPUGCGuardrails) (
 	if guardrails.MaxReclaimedBytes > 0 && report.CandidateBytes > guardrails.MaxReclaimedBytes {
 		report.addWarning(fmt.Sprintf("mpu-gc: candidate_bytes=%d exceeds max=%d (mpu-gc-run will refuse)", report.CandidateBytes, guardrails.MaxReclaimedBytes))
 	}
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, uploads, nil
 }
@@ -614,7 +614,7 @@ func MPUGCRun(metaPath string, ttl time.Duration, force bool, guardrails MPUGCGu
 		report.Reclaimed += bytes
 	}
 	report.Mode = "mpu-gc-run"
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	return report, nil
 }

@@ -106,7 +106,7 @@ func ReplValidate(layout fs.Layout, metaPath, compareDir string) (*Report, error
 		addError(fmt.Sprintf("version missing locally: %s", rel))
 	}
 
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt = now().UTC()
 	return report, nil
 }
 

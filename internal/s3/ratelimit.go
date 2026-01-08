@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kk-code-lab/seglake/internal/clock"
 )
 
 // AuthLimiter rate-limits failed auth attempts per IP and per access key.
@@ -13,6 +15,7 @@ type AuthLimiter struct {
 	perIP   *tokenBucket
 	perKey  *tokenBucket
 	cleanup time.Duration
+	Clock   clock.Clock
 }
 
 // NewAuthLimiter creates a limiter with defaults suitable for MVP.
@@ -21,14 +24,22 @@ func NewAuthLimiter() *AuthLimiter {
 		perIP:   newTokenBucket(5, 5, 1*time.Second),
 		perKey:  newTokenBucket(5, 5, 1*time.Second),
 		cleanup: 10 * time.Minute,
+		Clock:   clock.RealClock{},
 	}
+}
+
+func (l *AuthLimiter) now() time.Time {
+	if l != nil && l.Clock != nil {
+		return l.Clock.Now()
+	}
+	return clock.RealClock{}.Now()
 }
 
 func (l *AuthLimiter) Allow(ip, key string) bool {
 	if l == nil {
 		return true
 	}
-	now := time.Now()
+	now := l.now()
 	if ip != "" && !l.perIP.allow(ip, now) {
 		return false
 	}
@@ -42,7 +53,7 @@ func (l *AuthLimiter) ObserveFailure(ip, key string) {
 	if l == nil {
 		return
 	}
-	now := time.Now()
+	now := l.now()
 	if ip != "" {
 		l.perIP.consume(ip, now)
 	}
@@ -55,7 +66,7 @@ func (l *AuthLimiter) Cleanup() {
 	if l == nil {
 		return
 	}
-	cutoff := time.Now().Add(-l.cleanup)
+	cutoff := l.now().Add(-l.cleanup)
 	l.perIP.cleanup(cutoff)
 	l.perKey.cleanup(cutoff)
 }

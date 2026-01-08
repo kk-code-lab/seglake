@@ -21,6 +21,7 @@ type Store struct {
 	db     *sql.DB
 	hlc    *clock.HLC
 	siteID string
+	clock  clock.Clock
 }
 
 const (
@@ -165,7 +166,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, hlc: clock.New(), siteID: "local"}
+	store := &Store{db: db, hlc: clock.New(), siteID: "local", clock: clock.RealClock{}}
 	if err := store.applyPragmas(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -179,6 +180,13 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) now() time.Time {
+	if s != nil && s.clock != nil {
+		return s.clock.Now()
+	}
+	return clock.RealClock{}.Now()
 }
 
 // SetSiteID configures the local site identifier used in oplog entries.
@@ -234,7 +242,7 @@ func (s *Store) setHLCState(ctx context.Context, hlc string) error {
 	if s == nil || s.db == nil || hlc == "" {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO hlc_state(id, last_hlc, updated_at)
 VALUES(1, ?, ?)
@@ -248,7 +256,7 @@ func (s *Store) updateHLCStateTx(tx *sql.Tx, hlc string) error {
 	if tx == nil || hlc == "" {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.Exec(`
 INSERT INTO hlc_state(id, last_hlc, updated_at)
 VALUES(1, ?, ?)
@@ -407,7 +415,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV1(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -415,7 +423,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV2(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -423,7 +431,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV3(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -431,7 +439,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV4(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -439,7 +447,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV5(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -447,7 +455,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV6(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(6, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(6, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -455,7 +463,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV7(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -463,7 +471,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV8(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -471,7 +479,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV9(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -479,7 +487,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV10(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(10, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(10, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -487,7 +495,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV11(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(11, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(11, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -495,7 +503,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV12(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -503,7 +511,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV13(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -511,7 +519,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV14(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -519,7 +527,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV15(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -527,7 +535,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV16(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(16, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(16, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -535,7 +543,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV17(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(17, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(17, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -543,7 +551,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV18(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(18, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(18, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -551,7 +559,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err = applyV19(ctx, tx); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(19, ?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(19, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -949,7 +957,7 @@ GROUP BY v.bucket, v.key`)
 		}
 	}()
 	clock := clock.New()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	for rows.Next() {
 		var bucket string
 		var key string
@@ -1056,7 +1064,7 @@ func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy s
 	if policy == "" {
 		policy = "rw"
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
@@ -1129,7 +1137,7 @@ func (s *Store) UpdateAPIKeyPolicy(ctx context.Context, accessKey, policy string
 		}
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogAPIKeyPayload{
 		AccessKey:     key.AccessKey,
 		SecretKey:     key.SecretKey,
@@ -1248,7 +1256,7 @@ WHERE access_key=? AND bucket=?`, accessKey, bucket); err != nil {
 			return err
 		}
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogAPIKeyBucketPayload{
 		AccessKey: accessKey,
 		Bucket:    bucket,
@@ -1358,7 +1366,7 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, accessKey string) error {
 	if accessKey == "" {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
 	return err
 }
@@ -1371,7 +1379,7 @@ func (s *Store) RecordAPIKeyUseTx(ctx context.Context, tx *sql.Tx, accessKey str
 	if tx == nil {
 		return fmt.Errorf("meta: tx required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
 	return err
 }
@@ -1404,7 +1412,7 @@ func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled 
 		}
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogAPIKeyPayload{
 		AccessKey:     key.AccessKey,
 		SecretKey:     key.SecretKey,
@@ -1443,7 +1451,7 @@ func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) (err error) 
 	if _, err = tx.ExecContext(ctx, "DELETE FROM api_keys WHERE access_key=?", accessKey); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogAPIKeyPayload{
 		AccessKey: accessKey,
 		Deleted:   true,
@@ -1491,7 +1499,7 @@ func (s *Store) SetBucketPolicy(ctx context.Context, bucket, policy string) (err
 	if bucket == "" || policy == "" {
 		return fmt.Errorf("meta: bucket and policy required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1601,7 +1609,7 @@ func (s *Store) RecordSegment(ctx context.Context, segmentID, path, state string
 	if segmentID == "" || path == "" {
 		return fmt.Errorf("meta: segment id and path required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	sealedAt := ""
 	if state == "SEALED" {
 		sealedAt = now
@@ -1628,7 +1636,7 @@ func (s *Store) RecordSegmentTx(tx *sql.Tx, segmentID, path, state string, size 
 	if segmentID == "" || path == "" {
 		return fmt.Errorf("meta: segment id and path required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	sealedAt := ""
 	if state == "SEALED" {
 		sealedAt = now
@@ -1664,7 +1672,7 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 			_ = tx.Rollback()
 		}
 	}()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
 	if err := s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, contentType, now, true); err != nil {
 		return err
@@ -1677,7 +1685,7 @@ func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, siz
 	if bucket == "" || key == "" {
 		return fmt.Errorf("meta: bucket and key required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
 	return s.RecordPutWithHLC(tx, hlcTS, siteID, bucket, key, versionID, etag, size, manifestPath, contentType, now, true)
 }
@@ -1691,7 +1699,7 @@ func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, version
 		return fmt.Errorf("meta: bucket and key required")
 	}
 	if lastModified == "" {
-		lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+		lastModified = s.now().UTC().Format(time.RFC3339Nano)
 	}
 	if siteID == "" {
 		siteID = s.siteID
@@ -1765,7 +1773,7 @@ func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, e
 		}
 	}()
 	hlcTS, _ := s.nextHLC()
-	lastModified := time.Now().UTC().Format(time.RFC3339Nano)
+	lastModified := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogMPUCompletePayload{
 		ETag:         etag,
 		Size:         size,
@@ -1795,7 +1803,7 @@ func (s *Store) RecordMPUCompleteTx(ctx context.Context, tx *sql.Tx, bucket, key
 		return fmt.Errorf("meta: tx required")
 	}
 	hlcTS, _ := s.nextHLC()
-	lastModified := time.Now().UTC().Format(time.RFC3339Nano)
+	lastModified := s.now().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(oplogMPUCompletePayload{
 		ETag:         etag,
 		Size:         size,
@@ -1865,7 +1873,7 @@ func (s *Store) recordOplogTxWithSite(tx *sql.Tx, hlcTS, siteID, opType, bucket,
 	if siteID == "" {
 		siteID = "local"
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	bytes := oplogPayloadBytes(opType, payload)
 	_, err := tx.Exec(`
 INSERT INTO oplog(site_id, hlc_ts, op_type, bucket, key, version_id, payload, bytes, created_at)
@@ -1922,7 +1930,7 @@ LIMIT 1`,
 	}
 	createdAt := entry.CreatedAt
 	if createdAt == "" {
-		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
+		createdAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
 	bytes := oplogPayloadBytes(entry.OpType, entry.Payload)
 	_, err = tx.Exec(`
@@ -2009,7 +2017,7 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 					}
 					return fmt.Errorf("meta: put entry requires version id")
 				}
-				if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 					return err
 				}
 				versioningState, err := s.bucketVersioningStateTx(tx, entry.Bucket)
@@ -2037,7 +2045,7 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				}
 				lastModified := payload.LastModified
 				if lastModified == "" {
-					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+					lastModified = s.now().UTC().Format(time.RFC3339Nano)
 				}
 				if entry.OpType == "mpu_complete" {
 					if _, err := tx.Exec(`
@@ -2112,7 +2120,7 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 				}
 				lastModified := payload.LastModified
 				if lastModified == "" {
-					lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+					lastModified = s.now().UTC().Format(time.RFC3339Nano)
 				}
 				if payload.DeleteMarker {
 					if _, err := tx.Exec(`
@@ -2307,7 +2315,7 @@ ON CONFLICT(access_key) DO UPDATE SET
 			applied++
 		}
 		if conflicts > 0 {
-			now := time.Now().UTC().Format(time.RFC3339Nano)
+			now := s.now().UTC().Format(time.RFC3339Nano)
 			if _, err := tx.Exec(`
 INSERT INTO repl_metrics(id, updated_at, conflict_count)
 VALUES(1, ?, ?)
@@ -2449,7 +2457,7 @@ func (s *Store) SetReplPullWatermark(ctx context.Context, hlc string) error {
 	if hlc == "" {
 		return fmt.Errorf("meta: repl watermark required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO repl_state(id, updated_at, last_pull_hlc, last_push_hlc)
 VALUES(1, ?, ?, '')
@@ -2465,7 +2473,7 @@ func (s *Store) SetReplPushWatermark(ctx context.Context, hlc string) error {
 	if hlc == "" {
 		return fmt.Errorf("meta: repl watermark required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO repl_state(id, updated_at, last_pull_hlc, last_push_hlc)
 VALUES(1, ?, '', ?)
@@ -2566,7 +2574,7 @@ func (s *Store) SetReplRemotePullWatermark(ctx context.Context, remote, hlc stri
 	if remote == "" || hlc == "" {
 		return fmt.Errorf("meta: remote and watermark required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO repl_state_remote(remote, updated_at, last_pull_hlc, last_push_hlc)
 VALUES(?, ?, ?, '')
@@ -2582,7 +2590,7 @@ func (s *Store) SetReplRemotePushWatermark(ctx context.Context, remote, hlc stri
 	if remote == "" || hlc == "" {
 		return fmt.Errorf("meta: remote and watermark required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO repl_state_remote(remote, updated_at, last_pull_hlc, last_push_hlc)
 VALUES(?, ?, '', ?)
@@ -2648,7 +2656,7 @@ func (s *Store) CreateMultipartUpload(ctx context.Context, bucket, key, uploadID
 	if bucket == "" || key == "" || uploadID == "" {
 		return fmt.Errorf("meta: bucket, key, and upload id required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state, content_type)
 VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
@@ -2663,7 +2671,7 @@ func (s *Store) CreateMultipartUploadTx(ctx context.Context, tx *sql.Tx, bucket,
 	if tx == nil {
 		return fmt.Errorf("meta: tx required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO multipart_uploads(upload_id, bucket, key, created_at, state, content_type)
 VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
@@ -2796,7 +2804,7 @@ func (s *Store) PutMultipartPart(ctx context.Context, uploadID string, partNumbe
 	if uploadID == "" || partNumber <= 0 || versionID == "" {
 		return fmt.Errorf("meta: invalid part")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO multipart_parts(upload_id, part_number, version_id, etag, size, last_modified_utc)
 VALUES(?, ?, ?, ?, ?, ?)
@@ -2817,7 +2825,7 @@ func (s *Store) PutMultipartPartTx(ctx context.Context, tx *sql.Tx, uploadID str
 	if tx == nil {
 		return fmt.Errorf("meta: tx required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO multipart_parts(upload_id, part_number, version_id, etag, size, last_modified_utc)
 VALUES(?, ?, ?, ?, ?, ?)
@@ -3485,7 +3493,7 @@ func lagSeconds(hlc string) float64 {
 	if !ok {
 		return 0
 	}
-	now := time.Now().UTC().UnixNano()
+	now := s.now().UTC().UnixNano()
 	if now <= physical {
 		return 0
 	}
@@ -3546,7 +3554,7 @@ func (s *Store) RecordReplBytes(ctx context.Context, bytes int64) error {
 	if bytes <= 0 {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO repl_metrics(id, updated_at, bytes_in_total)
 VALUES(1, ?, ?)
@@ -3685,7 +3693,7 @@ func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
 	if bucket == "" {
 		return fmt.Errorf("meta: bucket required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
 	return err
 }
@@ -3722,7 +3730,7 @@ func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) e
 	if tx == nil {
 		return fmt.Errorf("meta: tx required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
 	return err
 }
@@ -3739,7 +3747,7 @@ func (s *Store) CreateBucketWithVersioningTx(ctx context.Context, tx *sql.Tx, bu
 	if !ok {
 		return fmt.Errorf("meta: invalid versioning state")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at, versioning_state) VALUES(?, ?, ?)", bucket, now, state)
 	return err
 }
@@ -3942,7 +3950,7 @@ func (s *Store) recordDeleteMarkerTx(ctx context.Context, tx *sql.Tx, bucket, ke
 		return fmt.Errorf("meta: tx required")
 	}
 	if lastModified == "" {
-		lastModified = time.Now().UTC().Format(time.RFC3339Nano)
+		lastModified = s.now().UTC().Format(time.RFC3339Nano)
 	}
 	hlcTS, siteID := s.nextHLC()
 	if _, err := tx.ExecContext(ctx, `
@@ -3990,7 +3998,7 @@ func (s *Store) DeleteObjectTx(ctx context.Context, tx *sql.Tx, bucket, key stri
 	if err != nil {
 		return "", err
 	}
-	if err := s.recordDeleteMarkerTx(ctx, tx, bucket, key, versionID, time.Now().UTC().Format(time.RFC3339Nano), true); err != nil {
+	if err := s.recordDeleteMarkerTx(ctx, tx, bucket, key, versionID, s.now().UTC().Format(time.RFC3339Nano), true); err != nil {
 		return "", err
 	}
 	return versionID, nil
@@ -4012,7 +4020,7 @@ func (s *Store) DeleteObjectUnversionedTx(ctx context.Context, tx *sql.Tx, bucke
 		return "", err
 	}
 	hlcTS, siteID := s.nextHLC()
-	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: s.now().UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		return "", err
 	}
@@ -4048,7 +4056,7 @@ WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID).Scan(&state)
 		return false, err
 	}
 	hlcTS, siteID := s.nextHLC()
-	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: time.Now().UTC().Format(time.RFC3339Nano)})
+	deletePayload, err := json.Marshal(oplogDeletePayload{LastModified: s.now().UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		return false, err
 	}
@@ -4121,7 +4129,7 @@ func (s *Store) SetMaintenanceState(ctx context.Context, state string) (Maintena
 	if !isValidMaintenanceState(state) {
 		return MaintenanceState{}, errors.New("meta: invalid maintenance state")
 	}
-	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	updatedAt := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO settings(name, value, updated_at)
 VALUES(?, ?, ?)

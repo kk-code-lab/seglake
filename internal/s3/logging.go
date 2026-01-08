@@ -5,16 +5,22 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/kk-code-lab/seglake/internal/clock"
 )
 
 // LoggingMiddleware logs request method/path/status/latency with request-id.
-func LoggingMiddleware(next http.Handler) http.Handler {
+func LoggingMiddleware(next http.Handler, clk clock.Clock) http.Handler {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		start := clk.Now()
 		lw := &loggingWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(lw, r)
+		end := clk.Now()
 		reqID := w.Header().Get("x-amz-request-id")
-		log.Printf("method=%s path=%s status=%d dur_ms=%d req_id=%s", r.Method, redactURL(r.URL), lw.status, time.Since(start).Milliseconds(), reqID)
+		log.Printf("method=%s path=%s status=%d dur_ms=%d req_id=%s", r.Method, redactURL(r.URL), lw.status, end.Sub(start).Milliseconds(), reqID)
 	})
 }
 

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/chunk"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
@@ -39,6 +40,7 @@ type Options struct {
 	Splitter        chunk.Splitter
 	ManifestCodec   manifest.Codec
 	MetaStore       *meta.Store
+	Clock           clock.Clock
 	SegmentMaxBytes int64
 	SegmentMaxAge   time.Duration
 	BarrierInterval time.Duration
@@ -52,6 +54,7 @@ type Engine struct {
 	splitter       chunk.Splitter
 	manifestCodec  manifest.Codec
 	metaStore      *meta.Store
+	clock          clock.Clock
 	segments       *segmentManager
 	barrier        *writeBarrier
 }
@@ -82,13 +85,17 @@ func New(opts Options) (*Engine, error) {
 	if opts.ManifestCodec == nil {
 		opts.ManifestCodec = &manifest.BinaryCodec{}
 	}
+	if opts.Clock == nil {
+		opts.Clock = clock.RealClock{}
+	}
 	engine := &Engine{
 		layout:         opts.Layout,
 		segmentVersion: opts.SegmentVersion,
 		splitter:       opts.Splitter,
 		manifestCodec:  opts.ManifestCodec,
 		metaStore:      opts.MetaStore,
-		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge),
+		clock:          opts.Clock,
+		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge, opts.Clock),
 	}
 	engine.barrier = newWriteBarrier(engine, opts.BarrierInterval, opts.BarrierMaxBytes)
 	if err := engine.ensureDirs(); err != nil {
@@ -207,7 +214,7 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 	if err := e.barrier.wait(ctx); err != nil {
 		return nil, nil, err
 	}
-	result.CommittedAt = time.Now().UTC()
+	result.CommittedAt = e.clock.Now().UTC()
 	return man, result, nil
 }
 
@@ -262,7 +269,7 @@ func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, content
 	if err := e.barrier.wait(ctx); err != nil {
 		return nil, nil, err
 	}
-	result.CommittedAt = time.Now().UTC()
+	result.CommittedAt = e.clock.Now().UTC()
 	return man, result, nil
 }
 

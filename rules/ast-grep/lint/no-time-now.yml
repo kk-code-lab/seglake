@@ -1,0 +1,17 @@
+id: no-time-now
+language: Go
+message: "Avoid time.Now in production code; use clock abstraction"
+severity: warning
+files:
+  - "internal/**/*.go"
+  - "cmd/**/*.go"
+ignores:
+  - "internal/clock/**"
+  - "**/*_test.go"
+rule:
+  pattern:
+    context: |
+      func _() {
+      	time.Now()
+      }
+    selector: call_expression

@@ -19,6 +19,7 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/admin"
 	"github.com/kk-code-lab/seglake/internal/app"
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
@@ -840,22 +841,27 @@ func runServer(opts *serverOptions) error {
 	}
 
 	fmt.Printf("seglake %s (commit %s)\n", app.Version, app.BuildCommit)
+	clk := clock.RealClock{}
 	authCfg := &s3.AuthConfig{
 		AccessKey:            opts.accessKey,
 		SecretKey:            opts.secretKey,
 		Region:               opts.region,
 		MaxSkew:              5 * time.Minute,
 		AllowUnsignedPayload: opts.allowUnsigned,
+		Clock:                clk,
 		SecretLookup: func(ctx context.Context, accessKey string) (string, bool, error) {
 			return store.LookupAPISecret(ctx, accessKey)
 		},
 	}
+	authLimiter := s3.NewAuthLimiter()
+	authLimiter.Clock = clk
 	h := &s3.Handler{
 		Engine:                eng,
 		Meta:                  store,
 		Auth:                  authCfg,
 		Metrics:               s3.NewMetrics(),
-		AuthLimiter:           s3.NewAuthLimiter(),
+		Clock:                 clk,
+		AuthLimiter:           authLimiter,
 		InflightLimiter:       s3.NewInflightLimiter(32),
 		MPUCompleteLimiter:    s3.NewSemaphore(int64(opts.mpuCompleteLimit)),
 		VirtualHosted:         opts.virtualHosted,
@@ -878,7 +884,7 @@ func runServer(opts *serverOptions) error {
 	}
 	var handler http.Handler = h
 	if opts.logRequests {
-		handler = s3.LoggingMiddleware(handler)
+		handler = s3.LoggingMiddleware(handler, h.Clock)
 	}
 	adminCtx, adminCancel := context.WithCancel(context.Background())
 	defer adminCancel()

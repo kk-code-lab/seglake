@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 )
@@ -26,6 +27,7 @@ type Handler struct {
 	Meta    *meta.Store
 	Auth    *AuthConfig
 	Metrics *Metrics
+	Clock   clock.Clock
 	// AuthLimiter rate-limits failed auth attempts.
 	AuthLimiter *AuthLimiter
 	// InflightLimiter limits concurrent requests per access key.
@@ -70,6 +72,13 @@ type Handler struct {
 	writeInflight        int64
 }
 
+func (h *Handler) now() time.Time {
+	if h != nil && h.Clock != nil {
+		return h.Clock.Now()
+	}
+	return clock.RealClock{}.Now()
+}
+
 type maintenanceStateKey struct{}
 
 func isUnsignedRequest(r *http.Request) bool {
@@ -103,7 +112,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
 	h.applyCORSHeaders(mw, r)
-	start := time.Now()
+	start := h.now()
 	accessKey := extractAccessKey(r)
 	if r.Method == http.MethodOptions {
 		requestID := newRequestID()
@@ -625,7 +634,7 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 			h.replayCache = newReplayCache(h.ReplayCacheTTL, h.ReplayCacheMaxEntries)
 		}
 		key := replayKey(r)
-		if !h.replayCache.allow(key, time.Now().UTC()) {
+		if !h.replayCache.allow(key, h.now().UTC()) {
 			if h.Metrics != nil {
 				h.Metrics.IncReplayDetected()
 			}
@@ -822,7 +831,7 @@ func (h *Handler) recordAPIKeyUse(accessKey string) {
 	if interval == 0 {
 		interval = 30 * time.Second
 	}
-	now := time.Now()
+	now := h.now()
 	h.apiKeyUseMu.Lock()
 	if h.apiKeyUseLast == nil {
 		h.apiKeyUseLast = make(map[string]time.Time)
@@ -842,7 +851,7 @@ func (h *Handler) recordAPIKeyUse(accessKey string) {
 
 func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 	if r == nil {
-		return &PolicyContext{Now: time.Now().UTC()}
+		return &PolicyContext{Now: h.now().UTC()}
 	}
 	headers := make(map[string]string)
 	for k, values := range r.Header {
@@ -870,7 +879,7 @@ func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 		delimiter = q.Get("delimiter")
 	}
 	return &PolicyContext{
-		Now:             time.Now().UTC(),
+		Now:             h.now().UTC(),
 		SourceIP:        ip,
 		Headers:         headers,
 		Prefix:          prefix,

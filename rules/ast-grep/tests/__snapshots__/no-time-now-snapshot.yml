@@ -1,0 +1,8 @@
+id: no-time-now
+snapshots:
+  ? "package p\n\nimport \"time\"\n\nfunc f() time.Time {\n\treturn time.Now()\n}\n"
+  : labels:
+    - source: time.Now()
+      style: primary
+      start: 55
+      end: 65

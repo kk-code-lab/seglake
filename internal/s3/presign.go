@@ -22,7 +22,7 @@ func (c *AuthConfig) Presign(method, rawURL string, expires time.Duration) (stri
 	if err != nil {
 		return "", err
 	}
-	amzDate := time.Now().UTC().Format("20060102T150405Z")
+	amzDate := c.now().UTC().Format("20060102T150405Z")
 	dateScope := amzDate[:8]
 	scope := dateScope + "/" + c.Region + "/s3/aws4_request"
 
