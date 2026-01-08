@@ -1,0 +1,14 @@
+id: errorf-missing-wrap
+snapshots:
+  ? "package p\n\nimport \"fmt\"\n\nfunc f(err error) error {\n\treturn fmt.Errorf(\"load: %s\", err)\n}\n"
+  : labels:
+    - source: 'fmt.Errorf("load: %s", err)'
+      style: primary
+      start: 59
+      end: 86
+  ? "package p\n\nimport \"fmt\"\n\nfunc f(err error) error {\n\treturn fmt.Errorf(\"load: %v\", err)\n}\n"
+  : labels:
+    - source: 'fmt.Errorf("load: %v", err)'
+      style: primary
+      start: 59
+      end: 86

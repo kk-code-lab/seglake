@@ -112,7 +112,7 @@ func RunBootstrap(remote, accessKey, secretKey, region, dataDir string, force bo
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(tmpDir, "meta.db")); err != nil {
-		return fmt.Errorf("replication: snapshot missing meta.db: %v", err)
+		return fmt.Errorf("replication: snapshot missing meta.db: %w", err)
 	}
 	if err := replaceMetaFiles(tmpDir, dataDir, force); err != nil {
 		return err
