@@ -957,7 +957,7 @@ GROUP BY v.bucket, v.key`)
 		}
 	}()
 	clock := clock.New()
-	now := s.now().UTC().Format(time.RFC3339Nano)
+	now := now().UTC().Format(time.RFC3339Nano)
 	for rows.Next() {
 		var bucket string
 		var key string
@@ -3493,7 +3493,7 @@ func lagSeconds(hlc string) float64 {
 	if !ok {
 		return 0
 	}
-	now := s.now().UTC().UnixNano()
+	now := now().UTC().UnixNano()
 	if now <= physical {
 		return 0
 	}
