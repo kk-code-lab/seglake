@@ -1,4 +1,4 @@
-.PHONY: build install test test-coverage test-race test-e2e test-all clean fmt lint check run help
+.PHONY: build install test test-coverage test-race test-e2e test-all clean fmt lint lint-astgrep test-astgrep check run help
 
 BINARY_NAME := seglake
 BUILD_DIR := build
@@ -25,6 +25,8 @@ help:
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fmt                - Format code with go fmt"
 	@echo "  lint               - Run linter (requires golangci-lint)"
+	@echo "  lint-astgrep       - Run ast-grep rules"
+	@echo "  test-astgrep       - Run ast-grep rule tests"
 	@echo "  help               - Show this help message"
 
 build:
@@ -68,14 +70,25 @@ fmt:
 lint:
 	@echo "Linting code (requires golangci-lint)..."
 	@golangci-lint run ./...
+	@$(MAKE) lint-astgrep
+
+lint-astgrep:
+	@echo "Linting code with ast-grep..."
+	@ast-grep scan
+
+test-astgrep:
+	@echo "Testing ast-grep rules..."
+	@ast-grep test
 
 check:
 	@echo "Linting code (requires golangci-lint)..."
 	@golangci-lint run ./...
+	@$(MAKE) lint-astgrep
 	@echo "Building $(BINARY_NAME)..."
 	@go build $(BUILD_FLAGS) -o $(BIN_PATH) $(MAIN_ENTRY)
 	@echo "Type-checking tests (no execution)..."
 	@go test -run '^$$' $(INTERNAL_PACKAGES)
+	@$(MAKE) test-astgrep
 
 run: build
 	@echo "Running $(BINARY_NAME)..."
