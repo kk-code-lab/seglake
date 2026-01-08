@@ -1,0 +1,8 @@
+id: no-error-eq
+snapshots:
+  ? "package p\n\nimport (\n\t\"database/sql\"\n\t\"errors\"\n)\n\nvar ErrNotFound = errors.New(\"missing\")\n\nfunc f(err error) bool {\n\tif err == sql.ErrNoRows {\n\t\treturn true\n\t}\n\tif err != ErrNotFound {\n\t\treturn false\n\t}\n\treturn false\n}\n"
+  : labels:
+    - source: err == sql.ErrNoRows
+      style: primary
+      start: 119
+      end: 139
