@@ -1,0 +1,16 @@
+id: no-panic
+language: Go
+message: "Avoid panic in production code; return errors instead"
+severity: warning
+files:
+  - "internal/**/*.go"
+  - "cmd/**/*.go"
+ignores:
+  - "**/*_test.go"
+rule:
+  pattern:
+    context: |
+      func _() {
+      	panic($MSG)
+      }
+    selector: call_expression
