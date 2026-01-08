@@ -74,10 +74,12 @@ lint:
 
 lint-astgrep:
 	@echo "Linting code with ast-grep..."
+	@command -v ast-grep >/dev/null 2>&1 || (echo "ast-grep not found; install it to run lint-astgrep." && exit 1)
 	@ast-grep scan
 
 test-astgrep:
 	@echo "Testing ast-grep rules..."
+	@command -v ast-grep >/dev/null 2>&1 || (echo "ast-grep not found; install it to run test-astgrep." && exit 1)
 	@ast-grep test
 
 check:
