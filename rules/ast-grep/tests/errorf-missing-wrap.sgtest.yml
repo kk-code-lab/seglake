@@ -1,0 +1,43 @@
+id: errorf-missing-wrap
+valid:
+  - |
+    package p
+
+    import "fmt"
+
+    func f(err error) error {
+    	return fmt.Errorf("load failed")
+    }
+  - |
+    package p
+
+    import "fmt"
+
+    func f(err error) error {
+    	return fmt.Errorf("load: %w", err)
+    }
+  - |
+    package p
+
+    import "fmt"
+
+    func f(err error) error {
+    	return fmt.Errorf("load: %v", otherErr)
+    }
+invalid:
+  - |
+    package p
+
+    import "fmt"
+
+    func f(err error) error {
+    	return fmt.Errorf("load: %v", err)
+    }
+  - |
+    package p
+
+    import "fmt"
+
+    func f(err error) error {
+    	return fmt.Errorf("load: %s", err)
+    }

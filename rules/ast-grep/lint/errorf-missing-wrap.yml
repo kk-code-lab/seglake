@@ -1,0 +1,14 @@
+id: errorf-missing-wrap
+language: Go
+message: "Prefer %w when wrapping err in fmt.Errorf"
+severity: warning
+rule:
+  pattern:
+    context: |
+      func _() {
+      	fmt.Errorf($FMT, err)
+      }
+    selector: call_expression
+constraints:
+  FMT:
+    regex: '^\".*(%v|%\\+v|%s|%q).*\"$'
