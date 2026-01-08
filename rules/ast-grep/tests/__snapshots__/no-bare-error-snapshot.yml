@@ -1,0 +1,8 @@
+id: no-bare-error
+snapshots:
+  ? "package p\n\nimport \"errors\"\n\nfunc f() error {\n\treturn errors.New(\"boom\")\n}\n"
+  : labels:
+    - source: return errors.New("boom")
+      style: primary
+      start: 46
+      end: 71

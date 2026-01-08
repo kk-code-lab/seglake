@@ -1,0 +1,11 @@
+id: no-bare-error
+language: Go
+message: "Avoid errors.New; prefer fmt.Errorf with context"
+severity: warning
+rule:
+  pattern:
+    context: |
+      func _() {
+      	return errors.New($MSG)
+      }
+    selector: return_statement

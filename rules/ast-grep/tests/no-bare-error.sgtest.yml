@@ -1,0 +1,29 @@
+id: no-bare-error
+valid:
+  - |
+    package p
+
+    import "fmt"
+
+    func f() error {
+    	return fmt.Errorf("boom")
+    }
+  - |
+    package p
+
+    import "errors"
+
+    var ErrBoom = errors.New("boom")
+
+    func f() error {
+    	return ErrBoom
+    }
+invalid:
+  - |
+    package p
+
+    import "errors"
+
+    func f() error {
+    	return errors.New("boom")
+    }
