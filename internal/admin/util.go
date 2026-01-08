@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/kk-code-lab/seglake/internal/s3"
@@ -9,7 +8,7 @@ import (
 
 func parsePolicy(policy string) error {
 	if policy == "" {
-		return errors.New("policy required")
+		return fmt.Errorf("policy required")
 	}
 	if _, err := s3.ParsePolicy(policy); err != nil {
 		return fmt.Errorf("invalid policy: %w", err)

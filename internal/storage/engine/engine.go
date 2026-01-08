@@ -116,7 +116,7 @@ func (e *Engine) CommitMeta(ctx context.Context, commit func(tx *sql.Tx) error) 
 		return nil
 	}
 	if e.metaStore == nil {
-		return errors.New("engine: meta store not configured")
+		return fmt.Errorf("engine: meta store not configured")
 	}
 	if err := e.barrier.register(commit); err != nil {
 		return err
@@ -190,7 +190,7 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 		}
 		if extraCommit != nil {
 			if tx == nil {
-				return errors.New("engine: extra commit requires transaction")
+				return fmt.Errorf("engine: extra commit requires transaction")
 			}
 			if err := extraCommit(tx, result, manifestPath); err != nil {
 				return err
@@ -248,7 +248,7 @@ func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, content
 		}
 		if extraCommit != nil {
 			if tx == nil {
-				return errors.New("engine: extra commit requires transaction")
+				return fmt.Errorf("engine: extra commit requires transaction")
 			}
 			if err := extraCommit(tx, result, manifestPath); err != nil {
 				return err
@@ -529,10 +529,10 @@ func (e *Engine) StoreManifestBytes(ctx context.Context, data []byte) (*manifest
 // WriteSegmentRange writes raw bytes into a segment file at the given offset.
 func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset int64, data []byte) error {
 	if segmentID == "" {
-		return errors.New("engine: segment id required")
+		return fmt.Errorf("engine: segment id required")
 	}
 	if offset < 0 || len(data) == 0 {
-		return errors.New("engine: invalid segment range")
+		return fmt.Errorf("engine: invalid segment range")
 	}
 	if err := e.ensureDirs(); err != nil {
 		return err

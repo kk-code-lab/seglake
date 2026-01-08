@@ -53,7 +53,7 @@ type replOplogApplyResponse struct {
 
 func RunBootstrap(remote, accessKey, secretKey, region, dataDir string, force bool) error {
 	if remote == "" {
-		return errors.New("replication: -repl-remote required")
+		return fmt.Errorf("replication: -repl-remote required")
 	}
 	base, err := url.Parse(remote)
 	if err != nil {
@@ -92,7 +92,7 @@ func RunBootstrap(remote, accessKey, secretKey, region, dataDir string, force bo
 	metaPath := filepath.Join(dataDir, "meta.db")
 	if !force {
 		if _, err := os.Stat(metaPath); err == nil {
-			return errors.New("replication: meta.db exists (use -repl-bootstrap-force to overwrite)")
+			return fmt.Errorf("replication: meta.db exists (use -repl-bootstrap-force to overwrite)")
 		}
 	}
 	tmpDir, err := os.MkdirTemp("", "seglake-bootstrap-")
@@ -185,10 +185,10 @@ func (c *replMissingCache) clear() {
 
 func RunPush(remote, since string, limit int, watch bool, interval, backoffMax time.Duration, accessKey, secretKey, region string, store *meta.Store) error {
 	if store == nil {
-		return errors.New("replication: store required")
+		return fmt.Errorf("replication: store required")
 	}
 	if remote == "" {
-		return errors.New("replication: -repl-remote required")
+		return fmt.Errorf("replication: -repl-remote required")
 	}
 	base, err := url.Parse(remote)
 	if err != nil {
@@ -264,10 +264,10 @@ func RunPush(remote, since string, limit int, watch bool, interval, backoffMax t
 
 func RunPull(remote, since string, limit int, fetchData bool, watch bool, interval, backoffMax, retryTimeout time.Duration, accessKey, secretKey, region string, store *meta.Store, eng *engine.Engine) error {
 	if eng == nil {
-		return errors.New("replication: engine required")
+		return fmt.Errorf("replication: engine required")
 	}
 	if remote == "" {
-		return errors.New("replication: -repl-remote required")
+		return fmt.Errorf("replication: -repl-remote required")
 	}
 	base, err := url.Parse(remote)
 	if err != nil {
@@ -364,7 +364,7 @@ func fetchChunkWithRetry(ctx context.Context, client *replClient, eng *engine.En
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		if !deadline.IsZero() && time.Now().After(deadline) {
-			return errors.New("repl: retry deadline exceeded")
+			return fmt.Errorf("repl: retry deadline exceeded")
 		}
 		data, err := client.getChunk(ch.SegmentID, ch.Offset, ch.Length)
 		if err == nil {

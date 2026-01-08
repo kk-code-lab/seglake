@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -70,7 +71,7 @@ func (r *manifestReader) loadNextChunk() error {
 	}
 	ref := r.manifest.Chunks[r.index]
 	if ref.Len == 0 {
-		return errors.New("engine: zero-length chunk")
+		return fmt.Errorf("engine: zero-length chunk")
 	}
 	if err := r.openSegment(ref.SegmentID); err != nil {
 		return err

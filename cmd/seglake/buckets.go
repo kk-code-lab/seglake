@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -48,7 +47,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		}
 	}
 	if metaPath == "" {
-		return errors.New("meta path required")
+		return ErrMetaPathRequired
 	}
 	store, err := meta.Open(metaPath)
 	if err != nil {
@@ -65,7 +64,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		return formatBucketsList(buckets, jsonOut)
 	case "create":
 		if bucket == "" {
-			return errors.New("bucket required")
+			return ErrBucketRequired
 		}
 		if err := s3.ValidateBucketName(bucket); err != nil {
 			return err
@@ -86,7 +85,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		return nil
 	case "delete":
 		if bucket == "" {
-			return errors.New("bucket required")
+			return ErrBucketRequired
 		}
 		exists, err := store.BucketExists(context.Background(), bucket)
 		if err != nil {
@@ -109,7 +108,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 				return err
 			}
 			if hasObjects {
-				return errors.New("bucket not empty")
+				return ErrBucketNotEmpty
 			}
 		}
 		if err := store.DeleteBucket(context.Background(), bucket); err != nil {
@@ -122,7 +121,7 @@ func runBuckets(action, metaPath, bucket, versioning string, force bool, jsonOut
 		return nil
 	case "exists":
 		if bucket == "" {
-			return errors.New("bucket required")
+			return ErrBucketRequired
 		}
 		exists, err := store.BucketExists(context.Background(), bucket)
 		if err != nil {

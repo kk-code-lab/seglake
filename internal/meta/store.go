@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -356,7 +357,7 @@ func (s *Store) Reindex(ctx context.Context, table string) error {
 		case r >= '0' && r <= '9':
 		case r == '_':
 		default:
-			return errors.New("meta: invalid reindex target")
+			return fmt.Errorf("meta: invalid reindex target")
 		}
 	}
 	_, err := s.db.ExecContext(ctx, "REINDEX "+table)
@@ -1050,7 +1051,7 @@ func applyV19(ctx context.Context, tx *sql.Tx) error {
 // UpsertAPIKey inserts or updates an API key entry.
 func (s *Store) UpsertAPIKey(ctx context.Context, accessKey, secretKey, policy string, enabled bool, inflightLimit int64) (err error) {
 	if accessKey == "" || secretKey == "" {
-		return errors.New("meta: access key and secret required")
+		return fmt.Errorf("meta: access key and secret required")
 	}
 	if policy == "" {
 		policy = "rw"
@@ -1104,7 +1105,7 @@ ON CONFLICT(access_key) DO UPDATE SET
 // UpdateAPIKeyPolicy updates policy for an API key.
 func (s *Store) UpdateAPIKeyPolicy(ctx context.Context, accessKey, policy string) (err error) {
 	if accessKey == "" {
-		return errors.New("meta: access key required")
+		return fmt.Errorf("meta: access key required")
 	}
 	if policy == "" {
 		policy = "rw"
@@ -1223,7 +1224,7 @@ func (s *Store) DisallowBucketForKey(ctx context.Context, accessKey, bucket stri
 
 func (s *Store) updateAPIKeyBucketAccess(ctx context.Context, accessKey, bucket string, allowed bool) (err error) {
 	if accessKey == "" || bucket == "" {
-		return errors.New("meta: access key and bucket required")
+		return fmt.Errorf("meta: access key and bucket required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1368,7 +1369,7 @@ func (s *Store) RecordAPIKeyUseTx(ctx context.Context, tx *sql.Tx, accessKey str
 		return nil
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "UPDATE api_keys SET last_used_at=? WHERE access_key=?", now, accessKey)
@@ -1378,7 +1379,7 @@ func (s *Store) RecordAPIKeyUseTx(ctx context.Context, tx *sql.Tx, accessKey str
 // SetAPIKeyEnabled enables or disables an API key.
 func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled bool) (err error) {
 	if accessKey == "" {
-		return errors.New("meta: access key required")
+		return fmt.Errorf("meta: access key required")
 	}
 	enabledInt := 0
 	if enabled {
@@ -1425,7 +1426,7 @@ func (s *Store) SetAPIKeyEnabled(ctx context.Context, accessKey string, enabled 
 // DeleteAPIKey removes an API key and its bucket allowlist.
 func (s *Store) DeleteAPIKey(ctx context.Context, accessKey string) (err error) {
 	if accessKey == "" {
-		return errors.New("meta: access key required")
+		return fmt.Errorf("meta: access key required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1488,7 +1489,7 @@ ORDER BY access_key`)
 // SetBucketPolicy sets or replaces a bucket policy.
 func (s *Store) SetBucketPolicy(ctx context.Context, bucket, policy string) (err error) {
 	if bucket == "" || policy == "" {
-		return errors.New("meta: bucket and policy required")
+		return fmt.Errorf("meta: bucket and policy required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1563,7 +1564,7 @@ ORDER BY bucket`)
 // DeleteBucketPolicy removes a bucket policy.
 func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) (err error) {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1598,7 +1599,7 @@ type Segment struct {
 // RecordSegment inserts or updates segment metadata.
 func (s *Store) RecordSegment(ctx context.Context, segmentID, path, state string, size int64, footerChecksum []byte) error {
 	if segmentID == "" || path == "" {
-		return errors.New("meta: segment id and path required")
+		return fmt.Errorf("meta: segment id and path required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	sealedAt := ""
@@ -1625,7 +1626,7 @@ ON CONFLICT(segment_id) DO UPDATE SET
 // RecordSegmentTx inserts or updates segment metadata within a transaction.
 func (s *Store) RecordSegmentTx(tx *sql.Tx, segmentID, path, state string, size int64, footerChecksum []byte) error {
 	if segmentID == "" || path == "" {
-		return errors.New("meta: segment id and path required")
+		return fmt.Errorf("meta: segment id and path required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	sealedAt := ""
@@ -1652,7 +1653,7 @@ ON CONFLICT(segment_id) DO UPDATE SET
 // RecordPut inserts a new version and updates objects_current.
 func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag string, size int64, manifestPath, contentType string) error {
 	if bucket == "" || key == "" {
-		return errors.New("meta: bucket and key required")
+		return fmt.Errorf("meta: bucket and key required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1674,7 +1675,7 @@ func (s *Store) RecordPut(ctx context.Context, bucket, key, versionID, etag stri
 // RecordPutTx inserts a new version and updates objects_current within a transaction.
 func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, size int64, manifestPath, contentType string) error {
 	if bucket == "" || key == "" {
-		return errors.New("meta: bucket and key required")
+		return fmt.Errorf("meta: bucket and key required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	hlcTS, siteID := s.nextHLC()
@@ -1684,10 +1685,10 @@ func (s *Store) RecordPutTx(tx *sql.Tx, bucket, key, versionID, etag string, siz
 // RecordPutWithHLC inserts a new version using the provided HLC/site_id.
 func (s *Store) RecordPutWithHLC(tx *sql.Tx, hlcTS, siteID, bucket, key, versionID, etag string, size int64, manifestPath, contentType, lastModified string, writeOplog bool) error {
 	if tx == nil {
-		return errors.New("meta: transaction required")
+		return fmt.Errorf("meta: transaction required")
 	}
 	if bucket == "" || key == "" {
-		return errors.New("meta: bucket and key required")
+		return fmt.Errorf("meta: bucket and key required")
 	}
 	if lastModified == "" {
 		lastModified = time.Now().UTC().Format(time.RFC3339Nano)
@@ -1752,7 +1753,7 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 // RecordMPUComplete records an MPU completion in the oplog.
 func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, etag string, size int64) error {
 	if bucket == "" || key == "" || versionID == "" {
-		return errors.New("meta: bucket, key, and version id required")
+		return fmt.Errorf("meta: bucket, key, and version id required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1788,10 +1789,10 @@ WHERE version_id=?`, etag, size, lastModified, versionID); err != nil {
 // RecordMPUCompleteTx records an MPU completion in the oplog within the provided transaction.
 func (s *Store) RecordMPUCompleteTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID, etag string, size int64) error {
 	if bucket == "" || key == "" || versionID == "" {
-		return errors.New("meta: bucket, key, and version id required")
+		return fmt.Errorf("meta: bucket, key, and version id required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	hlcTS, _ := s.nextHLC()
 	lastModified := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1818,10 +1819,10 @@ WHERE version_id=?`, etag, size, lastModified, versionID); err != nil {
 // RecordManifestTx records a manifest path for a version id.
 func (s *Store) RecordManifestTx(tx *sql.Tx, versionID, manifestPath string) error {
 	if versionID == "" || manifestPath == "" {
-		return errors.New("meta: version id and manifest path required")
+		return fmt.Errorf("meta: version id and manifest path required")
 	}
 	if tx == nil {
-		return errors.New("meta: transaction required")
+		return fmt.Errorf("meta: transaction required")
 	}
 	if _, err := tx.Exec(`
 INSERT INTO manifests(version_id, path) VALUES(?, ?)
@@ -1835,7 +1836,7 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 // RecordManifest records a manifest path for a version id.
 func (s *Store) RecordManifest(ctx context.Context, versionID, manifestPath string) error {
 	if versionID == "" || manifestPath == "" {
-		return errors.New("meta: version id and manifest path required")
+		return fmt.Errorf("meta: version id and manifest path required")
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO manifests(version_id, path) VALUES(?, ?)
@@ -1853,13 +1854,13 @@ func (s *Store) recordOplogTx(tx *sql.Tx, hlcTS, opType, bucket, key, versionID,
 
 func (s *Store) recordOplogTxWithSite(tx *sql.Tx, hlcTS, siteID, opType, bucket, key, versionID, payload string) error {
 	if tx == nil {
-		return errors.New("meta: transaction required")
+		return fmt.Errorf("meta: transaction required")
 	}
 	if bucket == "" || key == "" {
-		return errors.New("meta: bucket and key required")
+		return fmt.Errorf("meta: bucket and key required")
 	}
 	if opType == "" {
-		return errors.New("meta: op type required")
+		return fmt.Errorf("meta: op type required")
 	}
 	if siteID == "" {
 		siteID = "local"
@@ -1991,7 +1992,7 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 	err := s.WithTx(func(tx *sql.Tx) error {
 		for _, entry := range entries {
 			if entry.SiteID == "" || entry.HLCTS == "" || entry.OpType == "" || entry.Bucket == "" || entry.Key == "" {
-				return errors.New("meta: invalid oplog entry")
+				return fmt.Errorf("meta: invalid oplog entry")
 			}
 			inserted, err := s.insertOplogEntryTx(tx, entry)
 			if err != nil {
@@ -2004,9 +2005,9 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 			case "put", "mpu_complete":
 				if entry.VersionID == "" {
 					if entry.OpType == "mpu_complete" {
-						return errors.New("meta: mpu_complete entry requires version id")
+						return fmt.Errorf("meta: mpu_complete entry requires version id")
 					}
-					return errors.New("meta: put entry requires version id")
+					return fmt.Errorf("meta: put entry requires version id")
 				}
 				if _, err := tx.Exec("INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", entry.Bucket, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 					return err
@@ -2101,7 +2102,7 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 				}
 			case "delete":
 				if entry.VersionID == "" {
-					return errors.New("meta: delete entry requires version id")
+					return fmt.Errorf("meta: delete entry requires version id")
 				}
 				var payload oplogDeletePayload
 				if entry.Payload != "" {
@@ -2216,7 +2217,7 @@ LIMIT 1`, entry.Bucket, entry.Key).Scan(&nextVersion)
 			case "bucket_policy":
 				var payload oplogBucketPolicyPayload
 				if entry.Payload == "" {
-					return errors.New("meta: bucket_policy payload required")
+					return fmt.Errorf("meta: bucket_policy payload required")
 				}
 				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
 					return err
@@ -2234,7 +2235,7 @@ ON CONFLICT(bucket) DO UPDATE SET policy=excluded.policy, updated_at=excluded.up
 				}
 			case "bucket_policy_delete":
 				if entry.Bucket == "" {
-					return errors.New("meta: bucket required")
+					return fmt.Errorf("meta: bucket required")
 				}
 				_, err := tx.Exec(`DELETE FROM bucket_policies WHERE bucket=?`, entry.Bucket)
 				if err != nil {
@@ -2243,7 +2244,7 @@ ON CONFLICT(bucket) DO UPDATE SET policy=excluded.policy, updated_at=excluded.up
 			case "api_key":
 				var payload oplogAPIKeyPayload
 				if entry.Payload == "" {
-					return errors.New("meta: api_key payload required")
+					return fmt.Errorf("meta: api_key payload required")
 				}
 				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
 					return err
@@ -2281,7 +2282,7 @@ ON CONFLICT(access_key) DO UPDATE SET
 			case "api_key_bucket":
 				var payload oplogAPIKeyBucketPayload
 				if entry.Payload == "" {
-					return errors.New("meta: api_key_bucket payload required")
+					return fmt.Errorf("meta: api_key_bucket payload required")
 				}
 				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
 					return err
@@ -2301,7 +2302,7 @@ ON CONFLICT(access_key) DO UPDATE SET
 					}
 				}
 			default:
-				return errors.New("meta: unknown oplog op")
+				return fmt.Errorf("meta: unknown oplog op")
 			}
 			applied++
 		}
@@ -2443,10 +2444,10 @@ func (s *Store) GetReplPushWatermark(ctx context.Context) (string, error) {
 // SetReplPullWatermark stores the last replication pull HLC watermark.
 func (s *Store) SetReplPullWatermark(ctx context.Context, hlc string) error {
 	if s == nil || s.db == nil {
-		return errors.New("meta: db not initialized")
+		return fmt.Errorf("meta: db not initialized")
 	}
 	if hlc == "" {
-		return errors.New("meta: repl watermark required")
+		return fmt.Errorf("meta: repl watermark required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2459,10 +2460,10 @@ ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, last_pull_hlc=excl
 // SetReplPushWatermark stores the last replication push HLC watermark.
 func (s *Store) SetReplPushWatermark(ctx context.Context, hlc string) error {
 	if s == nil || s.db == nil {
-		return errors.New("meta: db not initialized")
+		return fmt.Errorf("meta: db not initialized")
 	}
 	if hlc == "" {
-		return errors.New("meta: repl watermark required")
+		return fmt.Errorf("meta: repl watermark required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2560,10 +2561,10 @@ WHERE remote=?`, remote).Scan(&hlc)
 // SetReplRemotePullWatermark stores replication pull watermark for a remote.
 func (s *Store) SetReplRemotePullWatermark(ctx context.Context, remote, hlc string) error {
 	if s == nil || s.db == nil {
-		return errors.New("meta: db not initialized")
+		return fmt.Errorf("meta: db not initialized")
 	}
 	if remote == "" || hlc == "" {
-		return errors.New("meta: remote and watermark required")
+		return fmt.Errorf("meta: remote and watermark required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2576,10 +2577,10 @@ ON CONFLICT(remote) DO UPDATE SET updated_at=excluded.updated_at, last_pull_hlc=
 // SetReplRemotePushWatermark stores replication push watermark for a remote.
 func (s *Store) SetReplRemotePushWatermark(ctx context.Context, remote, hlc string) error {
 	if s == nil || s.db == nil {
-		return errors.New("meta: db not initialized")
+		return fmt.Errorf("meta: db not initialized")
 	}
 	if remote == "" || hlc == "" {
-		return errors.New("meta: remote and watermark required")
+		return fmt.Errorf("meta: remote and watermark required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2592,7 +2593,7 @@ ON CONFLICT(remote) DO UPDATE SET updated_at=excluded.updated_at, last_push_hlc=
 // MarkDamaged sets version state to DAMAGED.
 func (s *Store) MarkDamaged(ctx context.Context, versionID string) error {
 	if versionID == "" {
-		return errors.New("meta: version id required")
+		return fmt.Errorf("meta: version id required")
 	}
 	_, err := s.db.ExecContext(ctx, `
 UPDATE versions SET state='DAMAGED' WHERE version_id=?`, versionID)
@@ -2645,7 +2646,7 @@ type MultipartPart struct {
 // CreateMultipartUpload creates an upload and returns its id.
 func (s *Store) CreateMultipartUpload(ctx context.Context, bucket, key, uploadID, contentType string) error {
 	if bucket == "" || key == "" || uploadID == "" {
-		return errors.New("meta: bucket, key, and upload id required")
+		return fmt.Errorf("meta: bucket, key, and upload id required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2657,10 +2658,10 @@ VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
 // CreateMultipartUploadTx creates an upload within the provided transaction.
 func (s *Store) CreateMultipartUploadTx(ctx context.Context, tx *sql.Tx, bucket, key, uploadID, contentType string) error {
 	if bucket == "" || key == "" || uploadID == "" {
-		return errors.New("meta: bucket, key, and upload id required")
+		return fmt.Errorf("meta: bucket, key, and upload id required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, `
@@ -2711,7 +2712,7 @@ WHERE upload_id=?`, uploadID)
 // AbortMultipartUpload marks an upload as aborted.
 func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error {
 	if uploadID == "" {
-		return errors.New("meta: upload id required")
+		return fmt.Errorf("meta: upload id required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2734,10 +2735,10 @@ func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error
 // AbortMultipartUploadTx marks an upload as aborted within the provided transaction.
 func (s *Store) AbortMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID string) error {
 	if uploadID == "" {
-		return errors.New("meta: upload id required")
+		return fmt.Errorf("meta: upload id required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
 		return err
@@ -2751,7 +2752,7 @@ func (s *Store) AbortMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID
 // CompleteMultipartUpload marks an upload as completed and clears its parts.
 func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string) error {
 	if uploadID == "" {
-		return errors.New("meta: upload id required")
+		return fmt.Errorf("meta: upload id required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2775,10 +2776,10 @@ UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); er
 // CompleteMultipartUploadTx marks an upload as completed and clears its parts within the provided transaction.
 func (s *Store) CompleteMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID string) error {
 	if uploadID == "" {
-		return errors.New("meta: upload id required")
+		return fmt.Errorf("meta: upload id required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); err != nil {
@@ -2793,7 +2794,7 @@ UPDATE multipart_uploads SET state='COMPLETED' WHERE upload_id=?`, uploadID); er
 // PutMultipartPart records or replaces a part.
 func (s *Store) PutMultipartPart(ctx context.Context, uploadID string, partNumber int, versionID, etag string, size int64) error {
 	if uploadID == "" || partNumber <= 0 || versionID == "" {
-		return errors.New("meta: invalid part")
+		return fmt.Errorf("meta: invalid part")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
@@ -2811,10 +2812,10 @@ ON CONFLICT(upload_id, part_number) DO UPDATE SET
 // PutMultipartPartTx records or replaces a part within the provided transaction.
 func (s *Store) PutMultipartPartTx(ctx context.Context, tx *sql.Tx, uploadID string, partNumber int, versionID, etag string, size int64) error {
 	if uploadID == "" || partNumber <= 0 || versionID == "" {
-		return errors.New("meta: invalid part")
+		return fmt.Errorf("meta: invalid part")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, `
@@ -3289,7 +3290,7 @@ func (s *Store) RecordOpsRun(ctx context.Context, mode string, report *ReportOps
 		return nil
 	}
 	if mode == "" || report.FinishedAt == "" {
-		return errors.New("meta: ops run requires mode and finished_at")
+		return fmt.Errorf("meta: ops run requires mode and finished_at")
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO ops_runs(mode, finished_at, errors, warnings, candidates, candidate_bytes, deleted, reclaimed_bytes, rewritten_segments, rewritten_bytes, new_segments)
@@ -3540,7 +3541,7 @@ func (s *Store) sumOplogBytesSince(ctx context.Context, since string) (int64, er
 // RecordReplBytes increments replicated bytes counter.
 func (s *Store) RecordReplBytes(ctx context.Context, bytes int64) error {
 	if s == nil || s.db == nil {
-		return errors.New("meta: db not initialized")
+		return fmt.Errorf("meta: db not initialized")
 	}
 	if bytes <= 0 {
 		return nil
@@ -3682,7 +3683,7 @@ func (s *Store) BucketExists(ctx context.Context, bucket string) (bool, error) {
 // CreateBucket inserts a bucket entry if it does not already exist.
 func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
@@ -3692,11 +3693,11 @@ func (s *Store) CreateBucket(ctx context.Context, bucket string) error {
 // CreateBucketWithVersioning inserts a bucket entry with an initial versioning state.
 func (s *Store) CreateBucketWithVersioning(ctx context.Context, bucket, versioningState string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	state, ok := normalizeBucketVersioningState(versioningState)
 	if !ok {
-		return errors.New("meta: invalid versioning state")
+		return fmt.Errorf("meta: invalid versioning state")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -3716,10 +3717,10 @@ func (s *Store) CreateBucketWithVersioning(ctx context.Context, bucket, versioni
 // CreateBucketTx inserts a bucket entry within the provided transaction.
 func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at) VALUES(?, ?)", bucket, now)
@@ -3729,14 +3730,14 @@ func (s *Store) CreateBucketTx(ctx context.Context, tx *sql.Tx, bucket string) e
 // CreateBucketWithVersioningTx inserts a bucket entry with an initial versioning state within a transaction.
 func (s *Store) CreateBucketWithVersioningTx(ctx context.Context, tx *sql.Tx, bucket, versioningState string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	state, ok := normalizeBucketVersioningState(versioningState)
 	if !ok {
-		return errors.New("meta: invalid versioning state")
+		return fmt.Errorf("meta: invalid versioning state")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO buckets(bucket, created_at, versioning_state) VALUES(?, ?, ?)", bucket, now, state)
@@ -3762,11 +3763,11 @@ func (s *Store) GetBucketVersioningState(ctx context.Context, bucket string) (st
 // SetBucketVersioningState updates the versioning state for a bucket.
 func (s *Store) SetBucketVersioningState(ctx context.Context, bucket, versioningState string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	state, ok := normalizeBucketVersioningState(versioningState)
 	if !ok {
-		return errors.New("meta: invalid versioning state")
+		return fmt.Errorf("meta: invalid versioning state")
 	}
 	res, err := s.db.ExecContext(ctx, "UPDATE buckets SET versioning_state=? WHERE bucket=?", state, bucket)
 	if err != nil {
@@ -3843,7 +3844,7 @@ LIMIT 1`, bucket).Scan(&any)
 // DeleteBucket removes a bucket entry.
 func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	_, err := s.db.ExecContext(ctx, "DELETE FROM buckets WHERE bucket=?", bucket)
 	return err
@@ -3852,10 +3853,10 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 // DeleteBucketTx removes a bucket entry within the provided transaction.
 func (s *Store) DeleteBucketTx(ctx context.Context, tx *sql.Tx, bucket string) error {
 	if bucket == "" {
-		return errors.New("meta: bucket required")
+		return fmt.Errorf("meta: bucket required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	_, err := tx.ExecContext(ctx, "DELETE FROM buckets WHERE bucket=?", bucket)
 	return err
@@ -3935,10 +3936,10 @@ func (s *Store) DeleteObjectVersion(ctx context.Context, bucket, key, versionID 
 
 func (s *Store) recordDeleteMarkerTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID, lastModified string, writeOplog bool) error {
 	if bucket == "" || key == "" || versionID == "" {
-		return errors.New("meta: bucket, key, and version id required")
+		return fmt.Errorf("meta: bucket, key, and version id required")
 	}
 	if tx == nil {
-		return errors.New("meta: tx required")
+		return fmt.Errorf("meta: tx required")
 	}
 	if lastModified == "" {
 		lastModified = time.Now().UTC().Format(time.RFC3339Nano)

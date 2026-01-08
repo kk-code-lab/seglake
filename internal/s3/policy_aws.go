@@ -409,11 +409,11 @@ func validateAWSPrincipal(principal any) error {
 		return fmt.Errorf("aws policy principal not supported: %q", v)
 	case map[string]any:
 		if len(v) != 1 {
-			return errors.New("aws policy principal not supported")
+			return fmt.Errorf("aws policy principal not supported")
 		}
 		raw, ok := v["AWS"]
 		if !ok {
-			return errors.New("aws policy principal not supported")
+			return fmt.Errorf("aws policy principal not supported")
 		}
 		vals, err := awsStringValue(raw)
 		if err != nil {
@@ -422,8 +422,8 @@ func validateAWSPrincipal(principal any) error {
 		if len(vals) == 1 && vals[0] == "*" {
 			return nil
 		}
-		return errors.New("aws policy principal not supported")
+		return fmt.Errorf("aws policy principal not supported")
 	default:
-		return errors.New("aws policy principal not supported")
+		return fmt.Errorf("aws policy principal not supported")
 	}
 }

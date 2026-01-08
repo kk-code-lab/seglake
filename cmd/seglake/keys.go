@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -60,7 +59,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		}
 	}
 	if metaPath == "" {
-		return errors.New("meta path required")
+		return ErrMetaPathRequired
 	}
 	store, err := meta.Open(metaPath)
 	if err != nil {
@@ -77,7 +76,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return formatKeysList(keys, jsonOut)
 	case "create":
 		if accessKey == "" || secretKey == "" {
-			return errors.New("key-access and key-secret required")
+			return ErrKeyAccessSecretNeeded
 		}
 		if _, err := s3.ParsePolicy(policy); err != nil {
 			return fmt.Errorf("invalid policy: %w", err)
@@ -92,7 +91,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "allow-bucket":
 		if accessKey == "" || bucket == "" {
-			return errors.New("key-access and key-bucket required")
+			return ErrKeyAccessBucketNeeded
 		}
 		if err := store.AllowBucketForKey(context.Background(), accessKey, bucket); err != nil {
 			return err
@@ -104,7 +103,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "disallow-bucket":
 		if accessKey == "" || bucket == "" {
-			return errors.New("key-access and key-bucket required")
+			return ErrKeyAccessBucketNeeded
 		}
 		if err := store.DisallowBucketForKey(context.Background(), accessKey, bucket); err != nil {
 			return err
@@ -116,7 +115,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "list-buckets":
 		if accessKey == "" {
-			return errors.New("key-access required")
+			return ErrKeyAccessNeeded
 		}
 		buckets, err := store.ListAllowedBuckets(context.Background(), accessKey)
 		if err != nil {
@@ -131,7 +130,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return formatAllKeyBuckets(keyBuckets, jsonOut)
 	case "enable":
 		if accessKey == "" {
-			return errors.New("key-access required")
+			return ErrKeyAccessNeeded
 		}
 		if err := store.SetAPIKeyEnabled(context.Background(), accessKey, true); err != nil {
 			return err
@@ -143,7 +142,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "disable":
 		if accessKey == "" {
-			return errors.New("key-access required")
+			return ErrKeyAccessNeeded
 		}
 		if err := store.SetAPIKeyEnabled(context.Background(), accessKey, false); err != nil {
 			return err
@@ -155,7 +154,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "delete":
 		if accessKey == "" {
-			return errors.New("key-access required")
+			return ErrKeyAccessNeeded
 		}
 		if err := store.DeleteAPIKey(context.Background(), accessKey); err != nil {
 			return err
@@ -167,7 +166,7 @@ func runKeys(action, metaPath, accessKey, secretKey, policy, bucket string, enab
 		return nil
 	case "set-policy":
 		if accessKey == "" {
-			return errors.New("key-access required")
+			return ErrKeyAccessNeeded
 		}
 		if _, err := s3.ParsePolicy(policy); err != nil {
 			return fmt.Errorf("invalid policy: %w", err)

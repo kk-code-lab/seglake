@@ -57,7 +57,7 @@ func runBucketPolicy(action, metaPath, bucket, policy, policyFile string, jsonOu
 		}
 	}
 	if metaPath == "" {
-		return errors.New("meta path required")
+		return ErrMetaPathRequired
 	}
 	store, err := meta.Open(metaPath)
 	if err != nil {
@@ -84,10 +84,10 @@ func runBucketPolicy(action, metaPath, bucket, policy, policyFile string, jsonOu
 		return formatBucketPolicyGet(map[string]any{"policy": value}, jsonOut)
 	case "set":
 		if bucket == "" {
-			return errors.New("bucket-policy-bucket required")
+			return ErrBucketPolicyBucketNeeded
 		}
 		if policy == "" {
-			return errors.New("bucket-policy required")
+			return ErrBucketPolicyNeeded
 		}
 		if _, err := s3.ParsePolicy(policy); err != nil {
 			return fmt.Errorf("invalid policy: %w", err)
@@ -102,7 +102,7 @@ func runBucketPolicy(action, metaPath, bucket, policy, policyFile string, jsonOu
 		return nil
 	case "delete":
 		if bucket == "" {
-			return errors.New("bucket-policy-bucket required")
+			return ErrBucketPolicyBucketNeeded
 		}
 		if err := store.DeleteBucketPolicy(context.Background(), bucket); err != nil {
 			return err
