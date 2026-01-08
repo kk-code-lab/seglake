@@ -1,0 +1,29 @@
+id: context-avoid-todo
+valid:
+  - |
+    package p
+
+    import "context"
+
+    func f(ctx context.Context) error {
+    	_, cancel := context.WithCancel(ctx)
+    	defer cancel()
+    	return nil
+    }
+  - |
+    package p
+
+    import "context"
+
+    func f() context.Context {
+    	return context.Background()
+    }
+invalid:
+  - |
+    package p
+
+    import "context"
+
+    func f() {
+    	_ = context.TODO()
+    }

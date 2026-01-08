@@ -1,0 +1,11 @@
+id: context-avoid-todo
+language: Go
+message: "Avoid context.TODO in production paths; pass ctx instead"
+severity: warning
+rule:
+  pattern:
+    context: |
+      func _() {
+      	context.TODO()
+      }
+    selector: call_expression
