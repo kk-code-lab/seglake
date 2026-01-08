@@ -1,0 +1,11 @@
+id: no-error-eq
+language: Go
+message: "Use errors.Is/As instead of direct error comparison"
+severity: warning
+rule:
+  any:
+    - pattern: err == $ERR
+    - pattern: err != $ERR
+constraints:
+  ERR:
+    regex: '^(Err\w+|sql\.ErrNoRows)$'

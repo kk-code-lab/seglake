@@ -1,0 +1,41 @@
+id: no-error-eq
+valid:
+  - |
+    package p
+
+    import (
+    	"database/sql"
+    	"errors"
+    )
+
+    var ErrNotFound = errors.New("missing")
+
+    func f(err error) bool {
+    	if errors.Is(err, sql.ErrNoRows) {
+    		return true
+    	}
+    	if err == nil {
+    		return false
+    	}
+    	return false
+    }
+invalid:
+  - |
+    package p
+
+    import (
+    	"database/sql"
+    	"errors"
+    )
+
+    var ErrNotFound = errors.New("missing")
+
+    func f(err error) bool {
+    	if err == sql.ErrNoRows {
+    		return true
+    	}
+    	if err != ErrNotFound {
+    		return false
+    	}
+    	return false
+    }

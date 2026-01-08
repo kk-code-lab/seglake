@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -28,7 +29,7 @@ func (h *Handler) handleGetBucketPolicy(ctx context.Context, w http.ResponseWrit
 	}
 	policy, err := h.Meta.GetBucketPolicy(ctx, bucket)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeErrorWithResource(w, http.StatusNotFound, "NoSuchBucketPolicy", "bucket policy not found", requestID, r.URL.Path)
 			return
 		}
