@@ -1,0 +1,14 @@
+id: context-avoid-todo
+snapshots:
+  ? "package p\n\nimport \"context\"\n\nfunc f() {\n\t_ = context.Background()\n}\n"
+  : labels:
+    - source: context.Background()
+      style: primary
+      start: 45
+      end: 65
+  ? "package p\n\nimport \"context\"\n\nfunc f() {\n\t_ = context.TODO()\n}\n"
+  : labels:
+    - source: context.TODO()
+      style: primary
+      start: 45
+      end: 59
