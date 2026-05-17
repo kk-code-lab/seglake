@@ -3,12 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/kk-code-lab/seglake/internal/clock"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/admin"
+	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/ops"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
@@ -17,6 +18,9 @@ import (
 func runOpsWithMode(mode string, opts *opsOptions) error {
 	if opts == nil {
 		return fmt.Errorf("ops options required")
+	}
+	if mode == "sse-rewrap-plan" || mode == "sse-rewrap-run" {
+		return runSSERewrapMode(mode, opts)
 	}
 	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
 		return err
@@ -138,6 +142,8 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 		}
 	case "mpu-gc-run":
 		report, err = ops.MPUGCRun(metaPath, mpuTTL, mpuForce, mpuGuardrails)
+	case "sse-rewrap-plan", "sse-rewrap-run":
+		return fmt.Errorf("%s is local-only and must be handled before admin dispatch", mode)
 	case "support-bundle":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "support", "bundle-"+fmtTime())
@@ -176,6 +182,59 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 	return nil
 }
 
+func runSSERewrapMode(mode string, opts *opsOptions) error {
+	targetKey := strings.TrimSpace(opts.sseRewrapTarget)
+	if targetKey == "" {
+		return fmt.Errorf("%s requires -sse-s3-rewrap-target-key", mode)
+	}
+	provider, err := buildSSEProviderFrom(targetKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+	if err != nil {
+		return err
+	}
+	layout := fs.NewLayout(filepath.Join(opts.dataDir, "objects"))
+	metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
+	switch mode {
+	case "sse-rewrap-plan":
+		if opts.sseRewrapPlan == "" {
+			return fmt.Errorf("sse-rewrap-plan requires -sse-s3-rewrap-plan")
+		}
+		plan, report, err := ops.BuildSSERewrapPlan(layout, metaPath, provider, targetKey, opts.sseRewrapSources)
+		if err != nil {
+			return err
+		}
+		if err := ops.WriteSSERewrapPlan(opts.sseRewrapPlan, plan); err != nil {
+			return err
+		}
+		if opts.jsonOut {
+			return writeJSONReport(report)
+		}
+		fmt.Printf("%s\n", formatReport(report))
+		return nil
+	case "sse-rewrap-run":
+		if opts.sseRewrapFromPlan == "" {
+			return fmt.Errorf("sse-rewrap-run requires -sse-s3-rewrap-from-plan")
+		}
+		plan, err := ops.ReadSSERewrapPlan(opts.sseRewrapFromPlan)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(plan.TargetKeyID) != targetKey {
+			return fmt.Errorf("sse rewrap: plan target key %q does not match -sse-s3-rewrap-target-key %q", plan.TargetKeyID, targetKey)
+		}
+		report, err := ops.RunSSERewrapPlan(layout, metaPath, provider, plan)
+		if err != nil {
+			return err
+		}
+		if opts.jsonOut {
+			return writeJSONReport(report)
+		}
+		fmt.Printf("%s\n", formatReport(report))
+		return nil
+	default:
+		return fmt.Errorf("unknown mode %q", mode)
+	}
+}
+
 func fmtTime() string {
 	return fmt.Sprintf("%d", clock.RealClock{}.Now().UTC().Unix())
 }
@@ -199,6 +258,12 @@ func formatReport(report *ops.Report) string {
 			return fmt.Sprintf("mode=%s manifests_total=%d live_manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.LiveManifests, report.Segments, report.Errors, report.Warnings)
 		}
 		return fmt.Sprintf("mode=%s manifests_total=%d live_manifests=%d segments=%d errors=%d", report.Mode, report.Manifests, report.LiveManifests, report.Segments, report.Errors)
+	}
+	if report.Mode == "sse-rewrap-plan" {
+		return fmt.Sprintf("mode=%s scanned=%d candidates=%d skipped=%d errors=%d", report.Mode, report.Manifests, report.Candidates, report.SkippedManifests, report.Errors)
+	}
+	if report.Mode == "sse-rewrap-run" {
+		return fmt.Sprintf("mode=%s candidates=%d rewrapped=%d errors=%d", report.Mode, report.Candidates, report.RebuiltObjects, report.Errors)
 	}
 	if report.Warnings > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
@@ -241,6 +306,10 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
 	case "mpu-gc-run":
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
+	case "sse-rewrap-plan":
+		fmt.Println("Mode sse-rewrap-plan: writes a redacted SSE-S3 KEK rewrap plan.")
+	case "sse-rewrap-run":
+		fmt.Println("Mode sse-rewrap-run: executes an SSE-S3 KEK rewrap plan.")
 	case "support-bundle":
 		fmt.Println("Mode support-bundle: creates snapshot + fsck/scrub reports.")
 	case "db-integrity-check":

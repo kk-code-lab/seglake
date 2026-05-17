@@ -177,6 +177,13 @@ type opsOptions struct {
 	mpuMaxUploads     int
 	mpuMaxReclaim     int64
 	dbReindexTable    string
+	sseS3KEKs         multiString
+	sseS3KEKsEnv      string
+	sseS3SingleKeyB64 string
+	sseRewrapTarget   string
+	sseRewrapSources  multiString
+	sseRewrapPlan     string
+	sseRewrapFromPlan string
 	jsonOut           bool
 }
 
@@ -714,6 +721,13 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.IntVar(&opts.mpuMaxUploads, "mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
 	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
+	fs.Var(&opts.sseS3KEKs, "sse-s3-kek", "SSE-S3 KEK spec key-id=file:/path or key-id=env:NAME (repeatable)")
+	opts.sseS3KEKsEnv = envOrDefault("SEGLAKE_SSE_S3_KEKS", "")
+	opts.sseS3SingleKeyB64 = envOrDefault("SEGLAKE_SSE_S3_KEK_B64", "")
+	fs.StringVar(&opts.sseRewrapTarget, "sse-s3-rewrap-target-key", envOrDefault("SEGLAKE_SSE_S3_REWRAP_TARGET_KEY", ""), "Target SSE-S3 KEK id for rewrap")
+	fs.Var(&opts.sseRewrapSources, "sse-s3-rewrap-source-key", "Source SSE-S3 KEK id to rewrap (repeatable; default all non-target keys)")
+	fs.StringVar(&opts.sseRewrapPlan, "sse-s3-rewrap-plan", "", "SSE-S3 rewrap plan output file")
+	fs.StringVar(&opts.sseRewrapFromPlan, "sse-s3-rewrap-from-plan", "", "SSE-S3 rewrap plan input file")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
 	return fs, opts
 }
@@ -812,7 +826,7 @@ func newReplBootstrapFlagSet() (*flag.FlagSet, *replBootstrapOptions) {
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -981,14 +995,19 @@ func buildSSEProvider(opts *serverOptions) (*ssecrypto.Provider, error) {
 	if opts == nil || !opts.sseS3Enabled {
 		return nil, nil
 	}
-	specs := make([]string, 0, len(opts.sseS3KEKs)+4)
-	specs = append(specs, opts.sseS3KEKs...)
-	specs = append(specs, splitComma(opts.sseS3KEKsEnv)...)
-	if opts.sseS3SingleKeyB64 != "" {
-		if strings.TrimSpace(opts.sseS3ActiveKey) == "" {
+	return buildSSEProviderFrom(opts.sseS3ActiveKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+}
+
+func buildSSEProviderFrom(activeKey string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
+	activeKey = strings.TrimSpace(activeKey)
+	specs := make([]string, 0, len(kekSpecs)+4)
+	specs = append(specs, kekSpecs...)
+	specs = append(specs, splitComma(kekEnv)...)
+	if singleKeyB64 != "" {
+		if activeKey == "" {
 			return nil, fmt.Errorf("sse-s3: active key required with SEGLAKE_SSE_S3_KEK_B64")
 		}
-		specs = append(specs, strings.TrimSpace(opts.sseS3ActiveKey)+"=inline:"+opts.sseS3SingleKeyB64)
+		specs = append(specs, activeKey+"=inline:"+singleKeyB64)
 	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("sse-s3: at least one -sse-s3-kek or SEGLAKE_SSE_S3_KEKS entry required")
@@ -1001,7 +1020,7 @@ func buildSSEProvider(opts *serverOptions) (*ssecrypto.Provider, error) {
 		}
 		keys = append(keys, key)
 	}
-	return ssecrypto.NewProvider(opts.sseS3ActiveKey, keys)
+	return ssecrypto.NewProvider(activeKey, keys)
 }
 
 func parseSSEKeySpec(spec string) (ssecrypto.Key, error) {
@@ -1181,6 +1200,8 @@ func printGlobalHelp() {
 		"gc-rewrite-run",
 		"mpu-gc-plan",
 		"mpu-gc-run",
+		"sse-rewrap-plan",
+		"sse-rewrap-run",
 		"support-bundle",
 		"keys",
 		"bucket-policy",

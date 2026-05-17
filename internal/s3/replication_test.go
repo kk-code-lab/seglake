@@ -127,6 +127,71 @@ func TestReplicationOplogApplyEndpoint(t *testing.T) {
 	}
 }
 
+func TestReplicationOplogApplySSERewrapRequestsManifest(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 10, "", ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"last_modified_utc":            "2026-01-01T00:00:00Z",
+		"encryption_mode":              "SSE-S3",
+		"encryption_algorithm":         "AES-256-GCM",
+		"encryption_key_ids":           "local:v2",
+		"encryption_edek_fingerprints": "beef",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	reqBody, err := json.Marshal(oplogApplyRequest{
+		Entries: []meta.OplogEntry{{
+			SiteID:    "site-a",
+			HLCTS:     "0000000000000000002-0000000001",
+			OpType:    "sse_rewrap",
+			Bucket:    "bucket",
+			Key:       "key",
+			VersionID: "v1",
+			Payload:   string(payload),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	handler := &Handler{Engine: eng, Meta: store}
+	req := httptest.NewRequest(http.MethodPost, "/v1/replication/oplog", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp oplogApplyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.MissingManifests) != 1 || resp.MissingManifests[0] != "v1" {
+		t.Fatalf("expected missing rewrapped manifest, got %+v", resp.MissingManifests)
+	}
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.EncryptionKeyIDs != "local:v2" {
+		t.Fatalf("encryption summary not updated: %+v", metaObj)
+	}
+}
+
 func TestReplicationManifestEndpoint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

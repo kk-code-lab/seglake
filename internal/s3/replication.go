@@ -97,7 +97,14 @@ func (h *Handler) handleOplogApply(ctx context.Context, w http.ResponseWriter, r
 		missingManifests := make(map[string]struct{})
 		missingChunks := make(map[string]missingChunk)
 		for _, entry := range req.Entries {
-			if entry.OpType != "put" || entry.VersionID == "" {
+			if entry.VersionID == "" {
+				continue
+			}
+			if entry.OpType == "sse_rewrap" {
+				missingManifests[entry.VersionID] = struct{}{}
+				continue
+			}
+			if entry.OpType != "put" {
 				continue
 			}
 			man, err := h.Engine.GetManifest(ctx, entry.VersionID)

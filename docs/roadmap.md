@@ -22,7 +22,6 @@ Tag legend (order used below):
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
-- [ops][integrity] Add SSE-S3 KEK re-wrap tooling for rotation without rewriting ciphertext payloads.
 - [api][ops] Add SSE-S3 bucket default encryption config and S3-compatible Get/Put/DeleteBucketEncryption subset.
 - [integrity][ops] Add deep encrypted fsck/scrub mode that unwraps DEKs, validates AEAD tags, and reports missing KEKs clearly.
 - [api][ops] Add require-encryption policy controls for buckets/prefixes so plaintext PUT can be rejected before bytes are committed.

@@ -476,6 +476,77 @@ func TestApplyOplogEntriesPersistsEncryptionSummary(t *testing.T) {
 	}
 }
 
+func TestSSERewrapOplogUpdatesEncryptionSummary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.RecordPut(ctx, "bucket", "key", "v1", "etag", 10, "/tmp/old-manifest", ""); err != nil {
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return store.RecordSSERewrapTx(tx, "bucket", "key", "v1", "/tmp/new-manifest", "SSE-S3", "AES-256-GCM", "local:v2", "beef")
+	}); err != nil {
+		t.Fatalf("RecordSSERewrapTx: %v", err)
+	}
+	entries, err := store.ListOplog(ctx)
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if got := entries[len(entries)-1].OpType; got != "sse_rewrap" {
+		t.Fatalf("expected sse_rewrap oplog, got %s", got)
+	}
+	gotPath, err := store.ManifestPath(ctx, "v1")
+	if err != nil {
+		t.Fatalf("ManifestPath: %v", err)
+	}
+	if gotPath != "/tmp/new-manifest" {
+		t.Fatalf("manifest path mismatch: %q", gotPath)
+	}
+
+	remote, err := Open(filepath.Join(dir, "remote.db"))
+	if err != nil {
+		t.Fatalf("Open remote: %v", err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	putPayload, err := json.Marshal(oplogPutPayload{
+		ETag:                   "etag",
+		Size:                   10,
+		LastModified:           "2026-01-01T00:00:00Z",
+		EncryptionMode:         "SSE-S3",
+		EncryptionAlgorithm:    "AES-256-GCM",
+		EncryptionKeyIDs:       "local:v1",
+		EncryptionFingerprints: "cafe",
+	})
+	if err != nil {
+		t.Fatalf("marshal put payload: %v", err)
+	}
+	if _, err := remote.ApplyOplogEntries(ctx, []OplogEntry{{
+		SiteID:    "site-a",
+		HLCTS:     "0000000000000000001-0001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(putPayload),
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}, entries[len(entries)-1]}); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	obj, err := remote.GetObjectMeta(ctx, "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if obj.EncryptionKeyIDs != "local:v2" {
+		t.Fatalf("encryption summary mismatch after rewrap apply: %+v", obj)
+	}
+}
+
 func TestRecordAPIKeyWritesOplog(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -417,7 +417,7 @@ Rotation should not rewrite object payload data. It should:
 4. Rewrap DEK with new KEK.
 5. Atomically update manifest encryption metadata and SQLite key ID/fingerprint.
 
-Open question: whether manifest rewrap should create a new manifest file path or update the existing manifest file in place. Given current append-only/correctness goals, prefer creating a new manifest revision or a durable temp-file-and-rename flow with metadata transaction ordering.
+Decision: rewrap writes a new manifest file path and then updates SQLite metadata plus an `sse_rewrap` replication oplog entry in one transaction. Old manifest files are left as orphans for future manifest-GC.
 
 ### 10.3 Backup and restore
 

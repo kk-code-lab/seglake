@@ -12,7 +12,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - **object manifests** as separate files (binary codec),
 - **metadata in SQLite (WAL, synchronous=FULL)**,
 - **hard durability contract**: fsync segments + WAL commit before an object is visible,
-- **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite (gc-rewrite + plan/run),
+- **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, GC plan/run, GC rewrite (gc-rewrite + plan/run), SSE-S3 KEK rewrap (plan/run),
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
@@ -77,7 +77,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
-  gc-rewrite/gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL), repl-validate.
+  gc-rewrite/gc-rewrite-plan/gc-rewrite-run (throttle + pause file), mpu-gc-plan/mpu-gc-run (TTL),
+  sse-rewrap-plan/sse-rewrap-run, repl-validate.
 - `/v1/meta/stats` with basic counters + traffic and latency.
 - `/v1/meta/conflicts` lists conflicting versions (JSON).
 - Request-id in logs and responses.
@@ -271,6 +272,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `gc-rewrite-plan`/`gc-rewrite-run` — plan + execute rewrite (run requires `-gc-force`).
 - `mpu-gc-plan`/`mpu-gc-run` — cleanup stale multipart uploads (TTL; run requires `-mpu-force`).
   - Segment GC treats multipart parts as live.
+- `sse-rewrap-plan`/`sse-rewrap-run` — rotate local SSE-S3 KEKs by rewriting only manifest EDEKs and SQLite encryption summaries. The run writes new manifest paths, preserves object versions, ETags, sizes, Last-Modified values, chunk refs, and segment ciphertext, and records `sse_rewrap` oplog entries so peers fetch the new manifest bytes.
 
 ### 5.2 Stats API
 `GET /v1/meta/stats` (JSON):

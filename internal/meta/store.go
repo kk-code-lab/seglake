@@ -126,6 +126,14 @@ type oplogMPUCompletePayload struct {
 	EncryptionFingerprints string `json:"encryption_edek_fingerprints,omitempty"`
 }
 
+type oplogSSERewrapPayload struct {
+	LastModified           string `json:"last_modified_utc"`
+	EncryptionMode         string `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm    string `json:"encryption_algorithm,omitempty"`
+	EncryptionKeyIDs       string `json:"encryption_key_ids,omitempty"`
+	EncryptionFingerprints string `json:"encryption_edek_fingerprints,omitempty"`
+}
+
 type oplogBucketPolicyPayload struct {
 	Bucket    string `json:"bucket"`
 	Policy    string `json:"policy"`
@@ -1815,6 +1823,39 @@ WHERE version_id=?`, mode, algorithm, keyIDs, fingerprints, versionID)
 	return s.updateOplogEncryptionTx(tx, versionID, mode, algorithm, keyIDs, fingerprints)
 }
 
+func (s *Store) RecordSSERewrapTx(tx *sql.Tx, bucket, key, versionID, manifestPath, mode, algorithm, keyIDs, fingerprints string) error {
+	if tx == nil {
+		return fmt.Errorf("meta: transaction required")
+	}
+	if bucket == "" || key == "" || versionID == "" || manifestPath == "" {
+		return fmt.Errorf("meta: bucket, key, version id, and manifest path required")
+	}
+	lastModified := s.now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+INSERT INTO manifests(version_id, path) VALUES(?, ?)
+ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`, versionID, manifestPath); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+UPDATE versions
+SET encryption_mode=?, encryption_algorithm=?, encryption_key_ids=?, encryption_edek_fingerprints=?
+WHERE version_id=?`, mode, algorithm, keyIDs, fingerprints, versionID); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogSSERewrapPayload{
+		LastModified:           lastModified,
+		EncryptionMode:         mode,
+		EncryptionAlgorithm:    algorithm,
+		EncryptionKeyIDs:       keyIDs,
+		EncryptionFingerprints: fingerprints,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	return s.recordOplogTx(tx, hlcTS, "sse_rewrap", bucket, key, versionID, string(payload))
+}
+
 func (s *Store) updateOplogEncryptionTx(tx *sql.Tx, versionID, mode, algorithm, keyIDs, fingerprints string) error {
 	rows, err := tx.Query(`
 SELECT id, op_type, payload
@@ -2284,6 +2325,22 @@ ON CONFLICT(bucket, key) DO UPDATE SET version_id=excluded.version_id`,
 					if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
 						return err
 					}
+				}
+			case "sse_rewrap":
+				if entry.VersionID == "" {
+					return fmt.Errorf("meta: sse_rewrap entry requires version id")
+				}
+				var payload oplogSSERewrapPayload
+				if entry.Payload != "" {
+					if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.Exec(`
+UPDATE versions
+SET encryption_mode=?, encryption_algorithm=?, encryption_key_ids=?, encryption_edek_fingerprints=?
+WHERE version_id=?`, payload.EncryptionMode, payload.EncryptionAlgorithm, payload.EncryptionKeyIDs, payload.EncryptionFingerprints, entry.VersionID); err != nil {
+					return err
 				}
 			case "delete":
 				if entry.VersionID == "" {
@@ -3191,6 +3248,18 @@ type ConflictMeta struct {
 	LastModified string
 }
 
+type VersionManifestRecord struct {
+	Bucket                 string
+	Key                    string
+	VersionID              string
+	ManifestPath           string
+	EncryptionMode         string
+	EncryptionAlgorithm    string
+	EncryptionKeyIDs       string
+	EncryptionFingerprints string
+	State                  string
+}
+
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -3850,6 +3919,27 @@ JOIN manifests m ON m.version_id = v.version_id`)
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *Store) ListVersionManifestRecords(ctx context.Context) (out []VersionManifestRecord, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT v.bucket, v.key, v.version_id, m.path,
+	COALESCE(v.encryption_mode,''), COALESCE(v.encryption_algorithm,''), COALESCE(v.encryption_key_ids,''), COALESCE(v.encryption_edek_fingerprints,''), v.state
+FROM versions v
+JOIN manifests m ON m.version_id = v.version_id
+WHERE v.state<>'DELETED'
+ORDER BY v.bucket, v.key, v.version_id`)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var rec VersionManifestRecord
+		if err := scan(&rec.Bucket, &rec.Key, &rec.VersionID, &rec.ManifestPath, &rec.EncryptionMode, &rec.EncryptionAlgorithm, &rec.EncryptionKeyIDs, &rec.EncryptionFingerprints, &rec.State); err != nil {
+			return err
+		}
+		out = append(out, rec)
+		return nil
+	})
 }
 
 // ListBuckets returns bucket names in lexical order.

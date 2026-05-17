@@ -405,7 +405,14 @@ func runReplPullOnce(ctx context.Context, client *replClient, since string, limi
 	missingChunks := make(map[string]replMissingChunk)
 	if eng != nil {
 		for _, entry := range oplogResp.Entries {
-			if entry.OpType != "put" || entry.VersionID == "" {
+			if entry.VersionID == "" {
+				continue
+			}
+			if entry.OpType == "sse_rewrap" {
+				missingManifests[entry.VersionID] = struct{}{}
+				continue
+			}
+			if entry.OpType != "put" {
 				continue
 			}
 			man, err := eng.GetManifest(ctx, entry.VersionID)
