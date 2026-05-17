@@ -188,6 +188,19 @@ SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a re
 
 The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so KEK material is not sent to the running server process. Peers must have the target KEK before they can read rewrapped encrypted objects after replication.
 
+Manifest GC removes orphan manifest files left by operations such as SSE-S3 KEK rewrap. It never removes segments, SQLite rows, object versions, or MPU metadata. Build a plan first, then run it explicitly:
+```
+./build/seglake -mode manifest-gc-plan -data-dir ./data \
+  -manifest-gc-ttl 168h \
+  -manifest-gc-plan ./manifest-gc.json
+
+./build/seglake -mode manifest-gc-run -data-dir ./data \
+  -manifest-gc-from-plan ./manifest-gc.json \
+  -manifest-gc-force
+```
+
+`manifest-gc-plan` treats current object manifests and active MPU part manifests as live. A run rechecks that each planned file is still orphaned and that size, mtime, and SHA-256 fingerprint still match before deleting it. Missing or changed planned files are skipped, not removed.
+
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
 - `SEGLAKE_SSE_S3_REWRAP_TARGET_KEY` → `-sse-s3-rewrap-target-key` (modes: `sse-rewrap-plan`, `sse-rewrap-run`)
@@ -334,13 +347,13 @@ Safe (no prompt):
 
 | Mode | Note |
 | --- | --- |
-| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `mpu-gc-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `manifest-gc-plan`, `mpu-gc-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
 
 Unsafe (prompt required, maintenance quiesced):
 
 | Mode | Note |
 | --- | --- |
-| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`, `sse-rewrap-run`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
+| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `manifest-gc-run`, `mpu-gc-run`, `sse-rewrap-run`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
 
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.

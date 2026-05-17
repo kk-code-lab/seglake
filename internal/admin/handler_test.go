@@ -50,6 +50,19 @@ func TestOpsRunUnsafeRequiresQuiesced(t *testing.T) {
 	}
 }
 
+func TestOpsRunManifestGCRunRequiresQuiesced(t *testing.T) {
+	h := newTestHandler(t)
+	reqBody := []byte(`{"mode":"manifest-gc-run","manifest_gc_force":true,"manifest_gc_from_plan":"/tmp/plan.json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/ops/run", bytes.NewReader(reqBody))
+	req.Header.Set(TokenHeader(), h.AuthToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected maintenance check, got %d", w.Code)
+	}
+}
+
 func TestOpsRunRequiresToken(t *testing.T) {
 	h := newTestHandler(t)
 	if _, err := h.Meta.SetMaintenanceState(context.Background(), "quiesced"); err != nil {

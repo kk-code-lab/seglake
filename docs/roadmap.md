@@ -20,7 +20,6 @@ Tag legend (order used below):
 - [observability][repl] Add conflict metrics per bucket/key to highlight hotspots.
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
-- [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 - [api][ops] Add SSE-S3 bucket default encryption config and S3-compatible Get/Put/DeleteBucketEncryption subset.
 - [integrity][ops] Add deep encrypted fsck/scrub mode that unwraps DEKs, validates AEAD tags, and reports missing KEKs clearly.

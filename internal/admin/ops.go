@@ -13,7 +13,7 @@ import (
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -22,14 +22,14 @@ func isOpsMode(mode string) bool {
 
 func requiresQuiescedOps(mode string) bool {
 	switch mode {
-	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "mpu-gc-run", "db-integrity-check", "db-reindex":
+	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
 	}
 }
 
-func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string) (*ops.Report, error) {
+func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string) (*ops.Report, error) {
 	var (
 		report *ops.Report
 		err    error
@@ -80,6 +80,26 @@ func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCom
 		plan, err = ops.ReadGCRewritePlan(gcRewriteFromPlan)
 		if err == nil {
 			report, err = ops.GCRewriteFromPlan(layout, metaPath, plan, gcForce, gcRewriteBps, gcPauseFile)
+		}
+	case "manifest-gc-plan":
+		if manifestGCPlan == "" {
+			return nil, fmt.Errorf("manifest-gc-plan requires manifest_gc_plan")
+		}
+		var plan *ops.ManifestGCPlan
+		plan, report, err = ops.ManifestGCPlanBuild(layout, metaPath, manifestGCTTL)
+		if err == nil {
+			if err := ops.WriteManifestGCPlan(manifestGCPlan, plan); err != nil {
+				return nil, err
+			}
+		}
+	case "manifest-gc-run":
+		if manifestGCFromPlan == "" {
+			return nil, fmt.Errorf("manifest-gc-run requires manifest_gc_from_plan")
+		}
+		var plan *ops.ManifestGCPlan
+		plan, err = ops.ReadManifestGCPlan(manifestGCFromPlan)
+		if err == nil {
+			report, err = ops.ManifestGCRun(layout, metaPath, plan, manifestGCForce)
 		}
 	case "mpu-gc-plan":
 		var uploads []meta.MultipartUpload

@@ -122,8 +122,9 @@ func (h *Handler) handleOpsRun(w http.ResponseWriter, r *http.Request) {
 		MaxReclaimedBytes:  req.MPUMaxReclaim,
 	}
 	gcMinAge := time.Duration(req.GCMinAgeNanos)
+	manifestGCTTL := time.Duration(req.ManifestGCTTLNanos)
 	mpuTTL := time.Duration(req.MPUTTLNanos)
-	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, mpuTTL, req.MPUForce, gcGuard, mpuGuard, req.DBReindexTable)
+	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, manifestGCTTL, req.ManifestGCPlan, req.ManifestGCFromPlan, req.ManifestGCForce, mpuTTL, req.MPUForce, gcGuard, mpuGuard, req.DBReindexTable)
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return

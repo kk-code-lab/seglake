@@ -26,30 +26,34 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		return err
 	} else if ok {
 		req := admin.OpsRunRequest{
-			Mode:              mode,
-			SnapshotDir:       opts.snapshotDir,
-			RebuildMeta:       opts.rebuildMeta,
-			ReplCompareDir:    opts.replCompareDir,
-			DBReindexTable:    opts.dbReindexTable,
-			FsckAllManifests:  opts.fsckAllManifests,
-			ScrubAllManifests: opts.scrubAllManifests,
-			GCMinAgeNanos:     int64(opts.gcMinAge),
-			GCForce:           opts.gcForce,
-			GCWarnSegments:    opts.gcWarnSegments,
-			GCWarnReclaim:     opts.gcWarnReclaim,
-			GCMaxSegments:     opts.gcMaxSegments,
-			GCMaxReclaim:      opts.gcMaxReclaim,
-			GCLiveThreshold:   opts.gcLiveThreshold,
-			GCRewritePlanFile: opts.gcRewritePlanFile,
-			GCRewriteFromPlan: opts.gcRewriteFromPlan,
-			GCRewriteBps:      opts.gcRewriteBps,
-			GCPauseFile:       opts.gcPauseFile,
-			MPUTTLNanos:       int64(opts.mpuTTL),
-			MPUForce:          opts.mpuForce,
-			MPUWarnUploads:    opts.mpuWarnUploads,
-			MPUWarnReclaim:    opts.mpuWarnReclaim,
-			MPUMaxUploads:     opts.mpuMaxUploads,
-			MPUMaxReclaim:     opts.mpuMaxReclaim,
+			Mode:               mode,
+			SnapshotDir:        opts.snapshotDir,
+			RebuildMeta:        opts.rebuildMeta,
+			ReplCompareDir:     opts.replCompareDir,
+			DBReindexTable:     opts.dbReindexTable,
+			FsckAllManifests:   opts.fsckAllManifests,
+			ScrubAllManifests:  opts.scrubAllManifests,
+			GCMinAgeNanos:      int64(opts.gcMinAge),
+			GCForce:            opts.gcForce,
+			GCWarnSegments:     opts.gcWarnSegments,
+			GCWarnReclaim:      opts.gcWarnReclaim,
+			GCMaxSegments:      opts.gcMaxSegments,
+			GCMaxReclaim:       opts.gcMaxReclaim,
+			GCLiveThreshold:    opts.gcLiveThreshold,
+			GCRewritePlanFile:  opts.gcRewritePlanFile,
+			GCRewriteFromPlan:  opts.gcRewriteFromPlan,
+			GCRewriteBps:       opts.gcRewriteBps,
+			GCPauseFile:        opts.gcPauseFile,
+			ManifestGCTTLNanos: int64(opts.manifestGCTTL),
+			ManifestGCPlan:     opts.manifestGCPlan,
+			ManifestGCFromPlan: opts.manifestGCFromPlan,
+			ManifestGCForce:    opts.manifestGCForce,
+			MPUTTLNanos:        int64(opts.mpuTTL),
+			MPUForce:           opts.mpuForce,
+			MPUWarnUploads:     opts.mpuWarnUploads,
+			MPUWarnReclaim:     opts.mpuWarnReclaim,
+			MPUMaxUploads:      opts.mpuMaxUploads,
+			MPUMaxReclaim:      opts.mpuMaxReclaim,
 		}
 		var report ops.Report
 		if err := client.postJSON("/admin/ops/run", req, &report); err != nil {
@@ -74,10 +78,10 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		MaxUploads:         opts.mpuMaxUploads,
 		MaxReclaimedBytes:  opts.mpuMaxReclaim,
 	}
-	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut)
+	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.manifestGCTTL, opts.manifestGCPlan, opts.manifestGCFromPlan, opts.manifestGCForce, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut)
 }
 
-func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -129,6 +133,26 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 		plan, err = ops.ReadGCRewritePlan(gcRewriteFromPlan)
 		if err == nil {
 			report, err = ops.GCRewriteFromPlan(layout, metaPath, plan, gcForce, gcRewriteBps, gcPauseFile)
+		}
+	case "manifest-gc-plan":
+		if manifestGCPlan == "" {
+			return fmt.Errorf("manifest-gc-plan requires -manifest-gc-plan")
+		}
+		var plan *ops.ManifestGCPlan
+		plan, report, err = ops.ManifestGCPlanBuild(layout, metaPath, manifestGCTTL)
+		if err == nil {
+			if err := ops.WriteManifestGCPlan(manifestGCPlan, plan); err != nil {
+				return err
+			}
+		}
+	case "manifest-gc-run":
+		if manifestGCFromPlan == "" {
+			return fmt.Errorf("manifest-gc-run requires -manifest-gc-from-plan")
+		}
+		var plan *ops.ManifestGCPlan
+		plan, err = ops.ReadManifestGCPlan(manifestGCFromPlan)
+		if err == nil {
+			report, err = ops.ManifestGCRun(layout, metaPath, plan, manifestGCForce)
 		}
 	case "mpu-gc-plan":
 		var uploads []meta.MultipartUpload
@@ -265,6 +289,12 @@ func formatReport(report *ops.Report) string {
 	if report.Mode == "sse-rewrap-run" {
 		return fmt.Sprintf("mode=%s candidates=%d rewrapped=%d errors=%d", report.Mode, report.Candidates, report.RebuiltObjects, report.Errors)
 	}
+	if report.Mode == "manifest-gc-plan" {
+		return fmt.Sprintf("mode=%s manifests=%d live_manifests=%d candidates=%d candidate_bytes=%d errors=%d", report.Mode, report.Manifests, report.LiveManifests, report.Candidates, report.CandidateBytes, report.Errors)
+	}
+	if report.Mode == "manifest-gc-run" {
+		return fmt.Sprintf("mode=%s candidates=%d deleted=%d reclaimed_bytes=%d skipped=%d errors=%d", report.Mode, report.Candidates, report.Deleted, report.Reclaimed, report.SkippedManifests, report.Errors)
+	}
 	if report.Warnings > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
 	}
@@ -302,6 +332,10 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode gc-rewrite-plan: writes rewrite plan for partially-dead segments.")
 	case "gc-rewrite-run":
 		fmt.Println("Mode gc-rewrite-run: executes rewrite from plan.")
+	case "manifest-gc-plan":
+		fmt.Println("Mode manifest-gc-plan: writes a plan for orphan manifest cleanup.")
+	case "manifest-gc-run":
+		fmt.Println("Mode manifest-gc-run: deletes orphan manifests from a saved plan.")
 	case "mpu-gc-plan":
 		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
 	case "mpu-gc-run":

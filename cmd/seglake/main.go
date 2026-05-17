@@ -153,38 +153,42 @@ func (m *multiString) Set(value string) error {
 }
 
 type opsOptions struct {
-	dataDir           string
-	snapshotDir       string
-	rebuildMeta       string
-	replCompareDir    string
-	fsckAllManifests  bool
-	scrubAllManifests bool
-	gcMinAge          time.Duration
-	gcForce           bool
-	gcWarnSegments    int
-	gcWarnReclaim     int64
-	gcMaxSegments     int
-	gcMaxReclaim      int64
-	gcLiveThreshold   float64
-	gcRewritePlanFile string
-	gcRewriteFromPlan string
-	gcRewriteBps      int64
-	gcPauseFile       string
-	mpuTTL            time.Duration
-	mpuForce          bool
-	mpuWarnUploads    int
-	mpuWarnReclaim    int64
-	mpuMaxUploads     int
-	mpuMaxReclaim     int64
-	dbReindexTable    string
-	sseS3KEKs         multiString
-	sseS3KEKsEnv      string
-	sseS3SingleKeyB64 string
-	sseRewrapTarget   string
-	sseRewrapSources  multiString
-	sseRewrapPlan     string
-	sseRewrapFromPlan string
-	jsonOut           bool
+	dataDir            string
+	snapshotDir        string
+	rebuildMeta        string
+	replCompareDir     string
+	fsckAllManifests   bool
+	scrubAllManifests  bool
+	gcMinAge           time.Duration
+	gcForce            bool
+	gcWarnSegments     int
+	gcWarnReclaim      int64
+	gcMaxSegments      int
+	gcMaxReclaim       int64
+	gcLiveThreshold    float64
+	gcRewritePlanFile  string
+	gcRewriteFromPlan  string
+	gcRewriteBps       int64
+	gcPauseFile        string
+	manifestGCTTL      time.Duration
+	manifestGCPlan     string
+	manifestGCFromPlan string
+	manifestGCForce    bool
+	mpuTTL             time.Duration
+	mpuForce           bool
+	mpuWarnUploads     int
+	mpuWarnReclaim     int64
+	mpuMaxUploads      int
+	mpuMaxReclaim      int64
+	dbReindexTable     string
+	sseS3KEKs          multiString
+	sseS3KEKsEnv       string
+	sseS3SingleKeyB64  string
+	sseRewrapTarget    string
+	sseRewrapSources   multiString
+	sseRewrapPlan      string
+	sseRewrapFromPlan  string
+	jsonOut            bool
 }
 
 type keysOptions struct {
@@ -714,6 +718,10 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.gcRewriteFromPlan, "gc-rewrite-from-plan", "", "GC rewrite plan input file")
 	fs.Int64Var(&opts.gcRewriteBps, "gc-rewrite-bps", 0, "GC rewrite max bytes per second (0 = unlimited)")
 	fs.StringVar(&opts.gcPauseFile, "gc-pause-file", "", "GC pause while file exists")
+	fs.DurationVar(&opts.manifestGCTTL, "manifest-gc-ttl", 7*24*time.Hour, "Manifest GC orphan minimum age")
+	fs.StringVar(&opts.manifestGCPlan, "manifest-gc-plan", "", "Manifest GC plan output file")
+	fs.StringVar(&opts.manifestGCFromPlan, "manifest-gc-from-plan", "", "Manifest GC plan input file")
+	fs.BoolVar(&opts.manifestGCForce, "manifest-gc-force", false, "Manifest GC delete files (required for manifest-gc-run)")
 	fs.DurationVar(&opts.mpuTTL, "mpu-ttl", 7*24*time.Hour, "Multipart upload TTL for cleanup")
 	fs.BoolVar(&opts.mpuForce, "mpu-force", false, "Multipart GC delete uploads (required for mpu-gc-run)")
 	fs.IntVar(&opts.mpuWarnUploads, "mpu-warn-uploads", 1000, "MPU GC warn when uploads exceed this count (0 disables)")
@@ -826,7 +834,7 @@ func newReplBootstrapFlagSet() (*flag.FlagSet, *replBootstrapOptions) {
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "mpu-gc-plan", "mpu-gc-run", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -1198,6 +1206,8 @@ func printGlobalHelp() {
 		"gc-rewrite",
 		"gc-rewrite-plan",
 		"gc-rewrite-run",
+		"manifest-gc-plan",
+		"manifest-gc-run",
 		"mpu-gc-plan",
 		"mpu-gc-run",
 		"sse-rewrap-plan",

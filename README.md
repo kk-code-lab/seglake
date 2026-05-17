@@ -32,7 +32,7 @@ If you need a transparent, robust S3 backend for local/edge/on‑prem setups, Se
 - Multipart upload (init/upload/list/complete/abort)
 - Durability contract: fsync segments + WAL commit before ACK
 - Append‑only segments, 4 MiB chunking, BLAKE3 per chunk
-- Ops tooling: fsck, scrub, rebuild-index, snapshot, gc-plan/run, gc-rewrite, mpu-gc, SSE-S3 rewrap, repl-validate
+- Ops tooling: fsck, scrub, rebuild-index, snapshot, gc-plan/run, gc-rewrite, manifest-gc, mpu-gc, SSE-S3 rewrap, repl-validate
 - Access policies (MVP): per-key + bucket policies + conditions
 - Public buckets (unsigned access) via `-public-buckets` + bucket policy
 
@@ -140,7 +140,7 @@ Full details: `docs/spec.md`.
 ## Operations and maintenance
 
 Available modes: `status`, `fsck`, `scrub`, `rebuild-index`, `snapshot`, `support-bundle`,
-`gc-plan`/`gc-run`, `gc-rewrite`, `mpu-gc-plan`/`mpu-gc-run`, `sse-rewrap-plan`/`sse-rewrap-run`, `repl-validate`, `buckets`.
+`gc-plan`/`gc-run`, `gc-rewrite`, `manifest-gc-plan`/`manifest-gc-run`, `mpu-gc-plan`/`mpu-gc-run`, `sse-rewrap-plan`/`sse-rewrap-run`, `repl-validate`, `buckets`.
 
 Checklists and examples: `docs/ops.md`  
 Smoke scripts: `scripts/`  
