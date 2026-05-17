@@ -453,6 +453,10 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 }
 
 func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWriter, r *http.Request, requestID, bucket, key string) {
+	if header, ok := sseCustomerHeader(r); ok {
+		writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-C is not supported: "+header, requestID, r.URL.Path)
+		return
+	}
 	type objectRoute struct {
 		method  string
 		match   func(*http.Request) bool
@@ -552,6 +556,22 @@ func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWrite
 		}
 	}
 	writeErrorWithResource(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "", requestID, r.URL.Path)
+}
+
+func sseCustomerHeader(r *http.Request) (string, bool) {
+	for _, header := range []string{
+		"X-Amz-Server-Side-Encryption-Customer-Algorithm",
+		"X-Amz-Server-Side-Encryption-Customer-Key",
+		"X-Amz-Server-Side-Encryption-Customer-Key-Md5",
+		"X-Amz-Copy-Source-Server-Side-Encryption-Customer-Algorithm",
+		"X-Amz-Copy-Source-Server-Side-Encryption-Customer-Key",
+		"X-Amz-Copy-Source-Server-Side-Encryption-Customer-Key-Md5",
+	} {
+		if r.Header.Get(header) != "" {
+			return http.CanonicalHeaderKey(header), true
+		}
+	}
+	return "", false
 }
 
 func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

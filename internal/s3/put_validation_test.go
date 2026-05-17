@@ -54,6 +54,96 @@ func TestPutRequiresContentLength(t *testing.T) {
 	}
 }
 
+func TestSSECustomerHeadersRejected(t *testing.T) {
+	h := newTestHandler(t)
+
+	cases := []struct {
+		name   string
+		method string
+		target string
+		body   string
+		header string
+		setup  func(*http.Request)
+	}{
+		{
+			name:   "put object",
+			method: http.MethodPut,
+			target: "/bucket/key",
+			body:   "data",
+			header: "X-Amz-Server-Side-Encryption-Customer-Algorithm",
+		},
+		{
+			name:   "get object",
+			method: http.MethodGet,
+			target: "/bucket/key",
+			header: "X-Amz-Server-Side-Encryption-Customer-Key",
+		},
+		{
+			name:   "head object",
+			method: http.MethodHead,
+			target: "/bucket/key",
+			header: "X-Amz-Server-Side-Encryption-Customer-Key-MD5",
+		},
+		{
+			name:   "copy object destination",
+			method: http.MethodPut,
+			target: "/bucket/copy",
+			header: "X-Amz-Server-Side-Encryption-Customer-Algorithm",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Amz-Copy-Source", "/bucket/key")
+			},
+		},
+		{
+			name:   "copy object source",
+			method: http.MethodPut,
+			target: "/bucket/copy",
+			header: "X-Amz-Copy-Source-Server-Side-Encryption-Customer-Algorithm",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Amz-Copy-Source", "/bucket/key")
+			},
+		},
+		{
+			name:   "initiate multipart",
+			method: http.MethodPost,
+			target: "/bucket/key?uploads",
+			header: "X-Amz-Server-Side-Encryption-Customer-Algorithm",
+		},
+		{
+			name:   "upload part",
+			method: http.MethodPut,
+			target: "/bucket/key?partNumber=1&uploadId=upload-id",
+			body:   "part",
+			header: "X-Amz-Server-Side-Encryption-Customer-Key",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(tc.method, tc.target, body)
+			req.Header.Set(tc.header, "AES256")
+			if tc.setup != nil {
+				tc.setup(req)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusNotImplemented {
+				t.Fatalf("expected 501, got %d; body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "NotImplemented") {
+				t.Fatalf("expected NotImplemented error, got %s", w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), http.CanonicalHeaderKey(tc.header)) {
+				t.Fatalf("expected header name in error, got %s", w.Body.String())
+			}
+		})
+	}
+}
+
 func TestPutEnforcesMaxObjectSize(t *testing.T) {
 	h := newTestHandler(t)
 	h.MaxObjectSize = 3
