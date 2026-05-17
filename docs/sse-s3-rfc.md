@@ -574,5 +574,6 @@ Ops tests:
 ## 16) Open questions
 
 - No open MVP-blocking questions remain.
+- Post-MVP scope is tracked in `docs/roadmap.md`.
 - Future optimization: add contiguous key runs if per-chunk `key_ref` makes MPU manifests too large in practice.
 - Future feature: bucket default encryption as a separate bucket-level configuration/API surface.

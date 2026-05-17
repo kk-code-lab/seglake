@@ -22,7 +22,11 @@ Tag legend (order used below):
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
-- [api][integrity][ops] Add SSE-S3 follow-ups: KEK re-wrap tooling for rotation, bucket default encryption, deep encrypted scrub, and optional opaque ETag mode.
+- [ops][integrity] Add SSE-S3 KEK re-wrap tooling for rotation without rewriting ciphertext payloads.
+- [api][ops] Add SSE-S3 bucket default encryption config and S3-compatible Get/Put/DeleteBucketEncryption subset.
+- [integrity][ops] Add deep encrypted fsck/scrub mode that unwraps DEKs, validates AEAD tags, and reports missing KEKs clearly.
+- [api][ops] Add require-encryption policy controls for buckets/prefixes so plaintext PUT can be rejected before bytes are committed.
+- [observability][ops] Add redacted SSE-S3 diagnostics to support bundles and stats: encrypted/plaintext counts, key IDs, EDEK fingerprint prefixes, and missing-key summaries.
 
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
@@ -30,3 +34,8 @@ Tag legend (order used below):
 - [perf][research] Consider read-path optimizations if virtual manifests increase read latency in real workloads.
 - [perf][research] Reduce barrier pressure by combining meta updates in fewer transactions.
 - [api][research] Evaluate SSE-C (client-provided keys) feasibility and operational risks.
+- [api][research] Add a KMS-style key provider interface (`GenerateDataKey`, `DecryptDataKey`, `RewrapDataKey`) and evaluate Vault/KMS/HSM backends.
+- [storage][research] Evaluate a pending-MPU-DEK design so encrypted MPU-created objects can use one DEK for the final object without data rewrite.
+- [storage][research] Evaluate AAD v2 with stronger object-context binding if MPU/GC paths can re-encrypt or preserve stable object context.
+- [api][research] Evaluate optional opaque ETag mode for encrypted objects.
+- [repl][research] Evaluate encrypted replication between peers with independent KEKs via rewrap or decrypt/re-encrypt flows.
