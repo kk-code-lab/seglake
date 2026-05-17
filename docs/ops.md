@@ -227,6 +227,20 @@ PUT object with explicit SSE-S3:
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp ./file.bin s3://demo/file.bin --endpoint-url http://localhost:9000 --sse AES256
 ```
 
+Enable bucket default SSE-S3 for future writes without per-object `--sse`:
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api put-bucket-encryption \
+  --bucket demo \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' \
+  --endpoint-url http://localhost:9000
+```
+
+Inspect or clear bucket default SSE-S3:
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api get-bucket-encryption --bucket demo --endpoint-url http://localhost:9000
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api delete-bucket-encryption --bucket demo --endpoint-url http://localhost:9000
+```
+
 GET object:
 ```
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp s3://demo/file.bin ./file.bin --endpoint-url http://localhost:9000

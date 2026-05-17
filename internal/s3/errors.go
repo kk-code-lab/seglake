@@ -67,10 +67,11 @@ var statusByCode = map[string]int{
 	"NotImplemented":               http.StatusNotImplemented,
 	"PreconditionFailed":           http.StatusPreconditionFailed,
 	"RequestTimeTooSkewed":         http.StatusForbidden,
-	"ServiceUnavailable":           http.StatusServiceUnavailable,
-	"SignatureDoesNotMatch":        http.StatusForbidden,
-	"SlowDown":                     http.StatusServiceUnavailable,
-	"XAmzContentSHA256Mismatch":    http.StatusBadRequest,
+	"ServerSideEncryptionConfigurationNotFoundError": http.StatusNotFound,
+	"ServiceUnavailable":                             http.StatusServiceUnavailable,
+	"SignatureDoesNotMatch":                          http.StatusForbidden,
+	"SlowDown":                                       http.StatusServiceUnavailable,
+	"XAmzContentSHA256Mismatch":                      http.StatusBadRequest,
 }
 
 var defaultMessageByCode = map[string]string{
@@ -97,8 +98,9 @@ var defaultMessageByCode = map[string]string{
 	"NotImplemented":               "not implemented",
 	"PreconditionFailed":           "precondition failed",
 	"RequestTimeTooSkewed":         "request time too skewed",
-	"ServiceUnavailable":           "service unavailable",
-	"SignatureDoesNotMatch":        "signature mismatch",
-	"SlowDown":                     "slow down",
-	"XAmzContentSHA256Mismatch":    "payload hash mismatch",
+	"ServerSideEncryptionConfigurationNotFoundError": "bucket encryption configuration not found",
+	"ServiceUnavailable":                             "service unavailable",
+	"SignatureDoesNotMatch":                          "signature mismatch",
+	"SlowDown":                                       "slow down",
+	"XAmzContentSHA256Mismatch":                      "payload hash mismatch",
 }

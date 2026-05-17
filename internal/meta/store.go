@@ -36,6 +36,9 @@ const (
 	BucketVersioningEnabled   = "enabled"
 	BucketVersioningSuspended = "suspended"
 	BucketVersioningDisabled  = "disabled"
+
+	BucketEncryptionModeSSES3       = "SSE-S3"
+	BucketEncryptionAlgorithmAES256 = "AES256"
 )
 
 func normalizeBucketVersioningState(raw string) (string, bool) {
@@ -92,6 +95,14 @@ type OplogEntry struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// BucketEncryptionConfig describes a bucket-level default encryption rule.
+type BucketEncryptionConfig struct {
+	Bucket    string
+	Mode      string
+	Algorithm string
+	UpdatedAt string
+}
+
 type oplogPutPayload struct {
 	ETag                   string `json:"etag"`
 	Size                   int64  `json:"size"`
@@ -137,6 +148,13 @@ type oplogSSERewrapPayload struct {
 type oplogBucketPolicyPayload struct {
 	Bucket    string `json:"bucket"`
 	Policy    string `json:"policy"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type oplogBucketEncryptionPayload struct {
+	Bucket    string `json:"bucket"`
+	Mode      string `json:"mode"`
+	Algorithm string `json:"algorithm"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -587,6 +605,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 21 {
+		if err = applyV21(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(21, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -951,6 +977,23 @@ func applyV20(ctx context.Context, tx *sql.Tx) error {
 			if strings.Contains(err.Error(), "no such table") {
 				continue
 			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV21(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS bucket_encryption (
+			bucket TEXT PRIMARY KEY,
+			mode TEXT NOT NULL,
+			algorithm TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -1636,6 +1679,120 @@ func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) (err erro
 	}
 	hlcTS, _ := s.nextHLC()
 	if err := s.recordOplogTx(tx, hlcTS, "bucket_policy_delete", bucket, bucket, "", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetBucketEncryption sets or replaces a bucket default encryption config.
+func (s *Store) SetBucketEncryption(ctx context.Context, bucket, mode, algorithm string) (err error) {
+	if bucket == "" {
+		return fmt.Errorf("meta: bucket required")
+	}
+	if mode != BucketEncryptionModeSSES3 || algorithm != BucketEncryptionAlgorithmAES256 {
+		return fmt.Errorf("meta: invalid bucket encryption config")
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var exists string
+	if err = tx.QueryRowContext(ctx, "SELECT bucket FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&exists); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `
+INSERT INTO bucket_encryption(bucket, mode, algorithm, updated_at)
+VALUES(?, ?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET
+	mode=excluded.mode,
+	algorithm=excluded.algorithm,
+	updated_at=excluded.updated_at`, bucket, mode, algorithm, now); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogBucketEncryptionPayload{
+		Bucket:    bucket,
+		Mode:      mode,
+		Algorithm: algorithm,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_encryption", bucket, bucket, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetBucketEncryption returns a bucket default encryption config.
+func (s *Store) GetBucketEncryption(ctx context.Context, bucket string) (BucketEncryptionConfig, error) {
+	if bucket == "" {
+		return BucketEncryptionConfig{}, errors.New("meta: bucket required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT bucket, mode, algorithm, updated_at
+FROM bucket_encryption
+WHERE bucket=?`, bucket)
+	var cfg BucketEncryptionConfig
+	if err := row.Scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.UpdatedAt); err != nil {
+		return BucketEncryptionConfig{}, err
+	}
+	return cfg, nil
+}
+
+// ListBucketEncryption returns default encryption configs by bucket name.
+func (s *Store) ListBucketEncryption(ctx context.Context) (map[string]BucketEncryptionConfig, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, mode, algorithm, updated_at
+FROM bucket_encryption
+ORDER BY bucket`)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]BucketEncryptionConfig)
+	if err := scanRows(rows, func(scan func(dest ...any) error) error {
+		var cfg BucketEncryptionConfig
+		if err := scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.UpdatedAt); err != nil {
+			return err
+		}
+		out[cfg.Bucket] = cfg
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteBucketEncryption removes a bucket default encryption config.
+func (s *Store) DeleteBucketEncryption(ctx context.Context, bucket string) (err error) {
+	if bucket == "" {
+		return fmt.Errorf("meta: bucket required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var exists string
+	if err = tx.QueryRowContext(ctx, "SELECT bucket FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&exists); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM bucket_encryption WHERE bucket=?", bucket); err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_encryption_delete", bucket, bucket, "", ""); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2480,6 +2637,36 @@ ON CONFLICT(bucket) DO UPDATE SET policy=excluded.policy, updated_at=excluded.up
 					return fmt.Errorf("meta: bucket required")
 				}
 				_, err := tx.Exec(`DELETE FROM bucket_policies WHERE bucket=?`, entry.Bucket)
+				if err != nil {
+					return err
+				}
+			case "bucket_encryption":
+				var payload oplogBucketEncryptionPayload
+				if entry.Payload == "" {
+					return fmt.Errorf("meta: bucket_encryption payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.Bucket == "" {
+					payload.Bucket = entry.Bucket
+				}
+				if payload.Mode != BucketEncryptionModeSSES3 || payload.Algorithm != BucketEncryptionAlgorithmAES256 {
+					return fmt.Errorf("meta: invalid bucket_encryption payload")
+				}
+				_, err := tx.Exec(`
+INSERT INTO bucket_encryption(bucket, mode, algorithm, updated_at)
+VALUES(?, ?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET mode=excluded.mode, algorithm=excluded.algorithm, updated_at=excluded.updated_at`,
+					payload.Bucket, payload.Mode, payload.Algorithm, payload.UpdatedAt)
+				if err != nil {
+					return err
+				}
+			case "bucket_encryption_delete":
+				if entry.Bucket == "" {
+					return fmt.Errorf("meta: bucket required")
+				}
+				_, err := tx.Exec(`DELETE FROM bucket_encryption WHERE bucket=?`, entry.Bucket)
 				if err != nil {
 					return err
 				}

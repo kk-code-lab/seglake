@@ -68,7 +68,7 @@ const (
 func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	encrypt, reqErr := sseS3Requested(r)
+	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, resource)
 		return

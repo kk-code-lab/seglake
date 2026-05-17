@@ -283,6 +283,9 @@ const (
 	bucketDeletePolicy
 	bucketGetVersioning
 	bucketPutVersioning
+	bucketGetEncryption
+	bucketPutEncryption
+	bucketDeleteEncryption
 	bucketHead
 )
 
@@ -327,6 +330,12 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			}
 			return bucketGetPolicy
 		}
+		if r.URL.Query().Has("encryption") {
+			if !hasBucketOnly && hostBucket == "" {
+				return bucketListNone
+			}
+			return bucketGetEncryption
+		}
 		return bucketListNone
 	}
 	if r.Method == http.MethodHead && (hasBucketOnly || hostBucket != "") {
@@ -351,6 +360,17 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			return bucketPutVersioning
 		}
 	}
+	if r.URL.Query().Has("encryption") {
+		if !hasBucketOnly && hostBucket == "" {
+			return bucketListNone
+		}
+		switch r.Method {
+		case http.MethodPut:
+			return bucketPutEncryption
+		case http.MethodDelete:
+			return bucketDeleteEncryption
+		}
+	}
 	return bucketListNone
 }
 
@@ -368,6 +388,9 @@ func isListV1Request(r *http.Request, hasBucketOnly bool) bool {
 		return false
 	}
 	if r.URL.Query().Has("versions") {
+		return false
+	}
+	if r.URL.Query().Has("encryption") {
 		return false
 	}
 	return true
@@ -441,6 +464,27 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 			bucket = hostBucket
 		}
 		h.handlePutBucketVersioning(ctx, w, r, bucket, requestID)
+		return true
+	case bucketGetEncryption:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleGetBucketEncryption(ctx, w, r, bucket, requestID)
+		return true
+	case bucketPutEncryption:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handlePutBucketEncryption(ctx, w, r, bucket, requestID)
+		return true
+	case bucketDeleteEncryption:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleDeleteBucketEncryption(ctx, w, r, bucket, requestID)
 		return true
 	case bucketHead:
 		bucket := bucketOnly
@@ -1047,7 +1091,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	encrypt, reqErr := sseS3Requested(r)
+	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
@@ -1275,7 +1319,7 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = reader.Close() }()
 
 	contentType := srcMeta.ContentType
-	encrypt, reqErr := sseS3Requested(r)
+	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
@@ -1784,6 +1828,29 @@ func (h *Handler) opForRequest(r *http.Request) string {
 			}
 		}
 	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Has("encryption") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_encryption"
+			case http.MethodPut:
+				return "put_bucket_encryption"
+			case http.MethodDelete:
+				return "delete_bucket_encryption"
+			}
+		}
+		if path == "" && h.hostBucket(r) != "" {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_encryption"
+			case http.MethodPut:
+				return "put_bucket_encryption"
+			case http.MethodDelete:
+				return "delete_bucket_encryption"
+			}
+		}
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("versions") {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path != "" && !strings.Contains(path, "/") {
@@ -1848,6 +1915,7 @@ func isWriteOp(op string) bool {
 	switch op {
 	case "put", "delete", "delete_bucket", "copy",
 		"put_bucket_policy", "delete_bucket_policy", "put_bucket_versioning",
+		"put_bucket_encryption", "delete_bucket_encryption",
 		"mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort",
 		"repl_oplog_apply":
 		return true

@@ -192,6 +192,55 @@ func TestReplicationOplogApplySSERewrapRequestsManifest(t *testing.T) {
 	}
 }
 
+func TestReplicationOplogApplyBucketEncryptionAffectsFutureWrites(t *testing.T) {
+	h := newTestHandler(t)
+	payload, err := json.Marshal(map[string]string{
+		"bucket":     "bucket",
+		"mode":       "SSE-S3",
+		"algorithm":  "AES256",
+		"updated_at": "2026-05-18T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	reqBody, err := json.Marshal(oplogApplyRequest{
+		Entries: []meta.OplogEntry{{
+			SiteID:  "site-a",
+			HLCTS:   "0000000000000000002-0000000001",
+			OpType:  "bucket_encryption",
+			Bucket:  "bucket",
+			Key:     "bucket",
+			Payload: string(payload),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/replication/oplog", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	cfg, err := h.Meta.GetBucketEncryption(context.Background(), "bucket")
+	if err != nil {
+		t.Fatalf("GetBucketEncryption: %v", err)
+	}
+	if cfg.Mode != "SSE-S3" || cfg.Algorithm != "AES256" {
+		t.Fatalf("unexpected bucket encryption config: %+v", cfg)
+	}
+
+	put := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("replicated default"))
+	putW := httptest.NewRecorder()
+	h.ServeHTTP(putW, put)
+	if putW.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", putW.Code, putW.Body.String())
+	}
+	if got := putW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected replicated default encryption to apply, got %q", got)
+	}
+}
+
 func TestReplicationManifestEndpoint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

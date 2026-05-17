@@ -54,62 +54,68 @@ const (
 const (
 	policyActionAll = "*"
 
-	policyActionListBuckets           = "listbuckets"
-	policyActionListBucket            = "listbucket"
-	policyActionListBucketVersions    = "listbucketversions"
-	policyActionGetBucketLocation     = "getbucketlocation"
-	policyActionGetBucketPolicy       = "getbucketpolicy"
-	policyActionPutBucketPolicy       = "putbucketpolicy"
-	policyActionDeleteBucketPolicy    = "deletebucketpolicy"
-	policyActionGetBucketVersioning   = "getbucketversioning"
-	policyActionPutBucketVersioning   = "putbucketversioning"
-	policyActionGetObject             = "getobject"
-	policyActionHeadObject            = "headobject"
-	policyActionPutObject             = "putobject"
-	policyActionDeleteObject          = "deleteobject"
-	policyActionDeleteBucket          = "deletebucket"
-	policyActionCopyObject            = "copyobject"
-	policyActionCreateMultipartUpload = "createmultipartupload"
-	policyActionUploadPart            = "uploadpart"
-	policyActionCompleteMultipart     = "completemultipartupload"
-	policyActionAbortMultipart        = "abortmultipartupload"
-	policyActionListMultipartUploads  = "listmultipartuploads"
-	policyActionListMultipartParts    = "listmultipartparts"
-	policyActionGetMetaStats          = "getmetastats"
-	policyActionGetMetaConflicts      = "getmetaconflicts"
-	policyActionReplicationRead       = "replicationread"
-	policyActionReplicationWrite      = "replicationwrite"
-	policyActionOps                   = "ops"
+	policyActionListBuckets            = "listbuckets"
+	policyActionListBucket             = "listbucket"
+	policyActionListBucketVersions     = "listbucketversions"
+	policyActionGetBucketLocation      = "getbucketlocation"
+	policyActionGetBucketPolicy        = "getbucketpolicy"
+	policyActionPutBucketPolicy        = "putbucketpolicy"
+	policyActionDeleteBucketPolicy     = "deletebucketpolicy"
+	policyActionGetBucketVersioning    = "getbucketversioning"
+	policyActionPutBucketVersioning    = "putbucketversioning"
+	policyActionGetBucketEncryption    = "getbucketencryption"
+	policyActionPutBucketEncryption    = "putbucketencryption"
+	policyActionDeleteBucketEncryption = "deletebucketencryption"
+	policyActionGetObject              = "getobject"
+	policyActionHeadObject             = "headobject"
+	policyActionPutObject              = "putobject"
+	policyActionDeleteObject           = "deleteobject"
+	policyActionDeleteBucket           = "deletebucket"
+	policyActionCopyObject             = "copyobject"
+	policyActionCreateMultipartUpload  = "createmultipartupload"
+	policyActionUploadPart             = "uploadpart"
+	policyActionCompleteMultipart      = "completemultipartupload"
+	policyActionAbortMultipart         = "abortmultipartupload"
+	policyActionListMultipartUploads   = "listmultipartuploads"
+	policyActionListMultipartParts     = "listmultipartparts"
+	policyActionGetMetaStats           = "getmetastats"
+	policyActionGetMetaConflicts       = "getmetaconflicts"
+	policyActionReplicationRead        = "replicationread"
+	policyActionReplicationWrite       = "replicationwrite"
+	policyActionOps                    = "ops"
 )
 
 var validPolicyActions = map[string]struct{}{
-	policyActionAll:                   {},
-	policyActionListBuckets:           {},
-	policyActionListBucket:            {},
-	policyActionListBucketVersions:    {},
-	policyActionGetBucketLocation:     {},
-	policyActionGetBucketPolicy:       {},
-	policyActionPutBucketPolicy:       {},
-	policyActionDeleteBucketPolicy:    {},
-	policyActionGetBucketVersioning:   {},
-	policyActionPutBucketVersioning:   {},
-	policyActionGetObject:             {},
-	policyActionHeadObject:            {},
-	policyActionPutObject:             {},
-	policyActionDeleteObject:          {},
-	policyActionDeleteBucket:          {},
-	policyActionCopyObject:            {},
-	policyActionCreateMultipartUpload: {},
-	policyActionUploadPart:            {},
-	policyActionCompleteMultipart:     {},
-	policyActionAbortMultipart:        {},
-	policyActionListMultipartUploads:  {},
-	policyActionListMultipartParts:    {},
-	policyActionGetMetaStats:          {},
-	policyActionGetMetaConflicts:      {},
-	policyActionReplicationRead:       {},
-	policyActionReplicationWrite:      {},
-	policyActionOps:                   {},
+	policyActionAll:                    {},
+	policyActionListBuckets:            {},
+	policyActionListBucket:             {},
+	policyActionListBucketVersions:     {},
+	policyActionGetBucketLocation:      {},
+	policyActionGetBucketPolicy:        {},
+	policyActionPutBucketPolicy:        {},
+	policyActionDeleteBucketPolicy:     {},
+	policyActionGetBucketVersioning:    {},
+	policyActionPutBucketVersioning:    {},
+	policyActionGetBucketEncryption:    {},
+	policyActionPutBucketEncryption:    {},
+	policyActionDeleteBucketEncryption: {},
+	policyActionGetObject:              {},
+	policyActionHeadObject:             {},
+	policyActionPutObject:              {},
+	policyActionDeleteObject:           {},
+	policyActionDeleteBucket:           {},
+	policyActionCopyObject:             {},
+	policyActionCreateMultipartUpload:  {},
+	policyActionUploadPart:             {},
+	policyActionCompleteMultipart:      {},
+	policyActionAbortMultipart:         {},
+	policyActionListMultipartUploads:   {},
+	policyActionListMultipartParts:     {},
+	policyActionGetMetaStats:           {},
+	policyActionGetMetaConflicts:       {},
+	policyActionReplicationRead:        {},
+	policyActionReplicationWrite:       {},
+	policyActionOps:                    {},
 }
 
 // ParsePolicy parses a policy JSON string or accepts short-hands "rw" and "ro".
@@ -145,6 +151,7 @@ func ParsePolicy(raw string) (*Policy, error) {
 				policyActionListBucketVersions,
 				policyActionGetBucketLocation,
 				policyActionGetBucketPolicy,
+				policyActionGetBucketEncryption,
 				policyActionGetObject,
 				policyActionHeadObject,
 				policyActionListMultipartUploads,
@@ -447,6 +454,12 @@ func policyActionForRequest(op string) string {
 		return policyActionGetBucketVersioning
 	case "put_bucket_versioning":
 		return policyActionPutBucketVersioning
+	case "get_bucket_encryption":
+		return policyActionGetBucketEncryption
+	case "put_bucket_encryption":
+		return policyActionPutBucketEncryption
+	case "delete_bucket_encryption":
+		return policyActionDeleteBucketEncryption
 	case "list_v1", "list_v2":
 		return policyActionListBucket
 	case "list_versions":

@@ -38,6 +38,7 @@ Sources:
 ## 3) Goals
 
 - Support explicit SSE-S3 object creation with `x-amz-server-side-encryption: AES256`.
+- Support bucket default encryption through the S3-compatible Get/Put/DeleteBucketEncryption XML subset for `AES256`.
 - Encrypt object payload bytes at rest in segment files.
 - Use a fresh DEK per object write; multipart-created versions may carry multiple per-part DEKs in manifest v3.
 - Store only EDEKs, never plaintext DEKs or KEKs, in manifests/SQLite.
@@ -54,7 +55,6 @@ Sources:
 
 - SSE-C support.
 - SSE-KMS or external KMS in the MVP.
-- Bucket default encryption configuration in the MVP.
 - Client-side encryption.
 - Re-encrypting existing plaintext objects automatically.
 - Encrypting SQLite metadata, object keys, bucket names, logs, or ops reports.
@@ -68,10 +68,10 @@ Sources:
 ### 5.1 PUT Object
 
 Accepted:
-- No SSE header: preserve current plaintext behavior for compatibility in MVP.
+- No SSE header: encrypt if bucket default encryption is configured with `AES256`; otherwise preserve plaintext behavior for compatibility.
 - `x-amz-server-side-encryption: AES256`: store the new object version encrypted with SSE-S3.
 
-Decision: bucket default encryption is out of MVP. It should be implemented later as a separate bucket-level feature after explicit SSE-S3 is stable.
+Decision: bucket default encryption is implemented as a separate bucket-level feature after explicit SSE-S3. It affects only new writes and does not rewrite existing object versions.
 
 Rejected:
 - Any other `x-amz-server-side-encryption` value: `400 InvalidArgument`.
@@ -101,13 +101,14 @@ For plaintext object versions:
 
 ### 5.3 CopyObject
 
-MVP recommendation:
-- Destination encryption is controlled by the destination request header.
+Recommendation:
+- Destination encryption is controlled by the destination request header or, when that header is absent, the destination bucket default encryption config.
 - Source can be plaintext or SSE-S3 encrypted.
 - If destination request includes `x-amz-server-side-encryption: AES256`, the destination version is encrypted with a new DEK.
-- If destination request omits the header, the destination follows the MVP default: plaintext, not "copy source encryption".
+- If destination request omits the header and destination bucket default encryption is `AES256`, the destination version is encrypted with a new DEK.
+- If destination request omits the header and destination bucket default encryption is absent, the destination is plaintext, not "copy source encryption".
 
-This intentionally differs from some console-level workflows and should be documented. It matches the useful S3 API rule that destination encryption is explicit at object creation time.
+This intentionally differs from some console-level workflows and should be documented. It matches the useful S3 API rule that destination encryption is decided at object creation time from destination request/config, not copied from source object metadata.
 
 Rejected:
 - Unsupported destination encryption values: `400 InvalidArgument`.
@@ -362,7 +363,7 @@ HEAD resolves metadata and returns encryption response headers, but does not nee
 
 ### 9.4 CopyObject
 
-Copy should read/decrypt the source through the same object reader used by GET, then write the destination through the same PUT pipeline. The destination encryption mode follows the destination request header.
+Copy should read/decrypt the source through the same object reader used by GET, then write the destination through the same PUT pipeline. The destination encryption mode follows the destination request header when present, otherwise the destination bucket default encryption configuration.
 
 ---
 
@@ -576,4 +577,3 @@ Ops tests:
 - No open MVP-blocking questions remain.
 - Post-MVP scope is tracked in `docs/roadmap.md`.
 - Future optimization: add contiguous key runs if per-chunk `key_ref` makes MPU manifests too large in practice.
-- Future feature: bucket default encryption as a separate bucket-level configuration/API surface.

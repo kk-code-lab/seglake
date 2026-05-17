@@ -55,6 +55,9 @@ func TestPolicyActionForRequest(t *testing.T) {
 	if op != policyActionUploadPart {
 		t.Fatalf("expected upload part action, got %q", op)
 	}
+	if op := policyActionForRequest("get_bucket_encryption"); op != policyActionGetBucketEncryption {
+		t.Fatalf("expected get bucket encryption action, got %q", op)
+	}
 }
 
 func TestPolicyConditionsSourceIP(t *testing.T) {
@@ -126,6 +129,32 @@ func TestParsePolicyAWSBasic(t *testing.T) {
 	}
 	if pol.Allows("GetObject", "demo", "private/x") {
 		t.Fatalf("expected deny for non-prefix")
+	}
+}
+
+func TestParsePolicyAWSBucketEncryptionActions(t *testing.T) {
+	raw := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration", "s3:DeleteBucketEncryption"],
+      "Resource": "arn:aws:s3:::demo"
+    }
+  ]
+}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy aws: %v", err)
+	}
+	for _, action := range []string{
+		policyActionGetBucketEncryption,
+		policyActionPutBucketEncryption,
+		policyActionDeleteBucketEncryption,
+	} {
+		if !pol.Allows(action, "demo", "") {
+			t.Fatalf("expected allow for %s", action)
+		}
 	}
 }
 

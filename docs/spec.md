@@ -16,7 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
-- **SSE-S3 (MVP)**: explicit `x-amz-server-side-encryption: AES256` object writes with local KEKs and envelope encryption.
+- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs and envelope encryption.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
@@ -61,7 +61,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 2.2 Metadata
 - SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) on flush.
 - Tables: schema_migrations, buckets, versions, objects_current, manifests, segments, api_keys,
-  api_key_bucket_allow, bucket_policies, multipart_uploads (content_type), multipart_parts,
+  api_key_bucket_allow, bucket_policies, bucket_encryption, multipart_uploads (content_type), multipart_parts,
   rebuild_state, ops_runs, oplog, repl_state, repl_state_remote, repl_metrics.
 
 ### 2.3 S3 API
@@ -73,7 +73,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
-- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. SSE-C and SSE-KMS remain unsupported.
+- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for the S3 XML `AES256` subset; when configured, PUT/CopyObject destination/Initiate MPU without an explicit destination SSE header are encrypted. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. SSE-C and SSE-KMS remain unsupported.
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
