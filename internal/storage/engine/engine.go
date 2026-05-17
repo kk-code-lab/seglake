@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/chunk"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
@@ -45,6 +47,7 @@ type Options struct {
 	SegmentMaxAge   time.Duration
 	BarrierInterval time.Duration
 	BarrierMaxBytes int64
+	SSE             *ssecrypto.Provider
 }
 
 // Engine owns the storage read/write path.
@@ -57,6 +60,7 @@ type Engine struct {
 	clock          clock.Clock
 	segments       *segmentManager
 	barrier        *writeBarrier
+	sse            *ssecrypto.Provider
 }
 
 // Layout returns the engine storage layout.
@@ -96,6 +100,7 @@ func New(opts Options) (*Engine, error) {
 		metaStore:      opts.MetaStore,
 		clock:          opts.Clock,
 		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge, opts.Clock),
+		sse:            opts.SSE,
 	}
 	engine.barrier = newWriteBarrier(engine, opts.BarrierInterval, opts.BarrierMaxBytes)
 	if err := engine.ensureDirs(); err != nil {
@@ -107,6 +112,10 @@ func New(opts Options) (*Engine, error) {
 	return engine, nil
 }
 
+func (e *Engine) SSES3Enabled() bool {
+	return e != nil && e.sse != nil
+}
+
 // Put stores an object stream and returns manifest metadata.
 func (e *Engine) Put(ctx context.Context, r io.Reader) (*manifest.Manifest, *PutResult, error) {
 	return e.PutObject(ctx, "", "", "", r)
@@ -115,6 +124,10 @@ func (e *Engine) Put(ctx context.Context, r io.Reader) (*manifest.Manifest, *Put
 // PutObject stores an object stream and returns manifest metadata.
 func (e *Engine) PutObject(ctx context.Context, bucket, key, contentType string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
 	return e.PutObjectWithCommit(ctx, bucket, key, contentType, r, nil)
+}
+
+func (e *Engine) PutObjectSSES3(ctx context.Context, bucket, key, contentType string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
+	return e.PutObjectSSES3WithCommit(ctx, bucket, key, contentType, r, nil)
 }
 
 // CommitMeta schedules a meta-only commit through the write barrier.
@@ -189,6 +202,143 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 				if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath, contentType); err != nil {
 					return err
 				}
+				if err := setEncryptionSummaryTx(e.metaStore, tx, versionID, man.Encryption); err != nil {
+					return err
+				}
+			} else {
+				if err := e.metaStore.RecordManifestTx(tx, versionID, manifestPath); err != nil {
+					return err
+				}
+			}
+		}
+		if extraCommit != nil {
+			if tx == nil {
+				return fmt.Errorf("engine: extra commit requires transaction")
+			}
+			if err := extraCommit(tx, result, manifestPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := e.barrier.register(commit); err != nil {
+		return nil, nil, err
+	}
+	if err := e.segments.sync(); err != nil {
+		return nil, nil, err
+	}
+	if err := e.barrier.wait(ctx); err != nil {
+		return nil, nil, err
+	}
+	result.CommittedAt = e.clock.Now().UTC()
+	return man, result, nil
+}
+
+func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, contentType string, r io.Reader, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
+	if e.sse == nil {
+		return nil, nil, ssecrypto.ErrDisabled
+	}
+	if err := e.ensureDirs(); err != nil {
+		return nil, nil, err
+	}
+	versionID, err := newID()
+	if err != nil {
+		return nil, nil, err
+	}
+	activeKey, err := e.sse.ActiveKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	dek, err := ssecrypto.GenerateDEK()
+	if err != nil {
+		return nil, nil, err
+	}
+	wrapNonce, edek, err := ssecrypto.WrapDEK(activeKey, dek, ssecrypto.WrapAAD(activeKey.ID))
+	if err != nil {
+		return nil, nil, err
+	}
+	noncePrefix, err := ssecrypto.RandomBytes(8)
+	if err != nil {
+		return nil, nil, err
+	}
+	edekSum := sha256.Sum256(edek)
+	man := &manifest.Manifest{
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Encryption: &manifest.Encryption{
+			Mode:          ssecrypto.ModeSSES3,
+			Algorithm:     ssecrypto.AlgorithmAES256GCM,
+			WrapAlgorithm: ssecrypto.WrapAES256GCM,
+			AADScheme:     ssecrypto.AADSchemeV1,
+			Keys: []manifest.KeyEntry{{
+				KeyRef:          0,
+				KeyID:           activeKey.ID,
+				EncryptedDEK:    edek,
+				WrapNonce:       wrapNonce,
+				NoncePrefix:     noncePrefix,
+				NonceScheme:     ssecrypto.NonceSchemeV1,
+				EDEKFingerprint: edekSum[:ssecrypto.KeyFingerprintBytes],
+			}},
+		},
+	}
+	aead, err := ssecrypto.NewGCM(dek)
+	if err != nil {
+		return nil, nil, err
+	}
+	var size int64
+	hasher := md5.New()
+	splitErr := e.splitter.Split(io.TeeReader(r, hasher), func(ch chunk.Chunk) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		nonce, err := ssecrypto.ChunkNonce(noncePrefix, uint32(ch.Index))
+		if err != nil {
+			return err
+		}
+		ciphertext := aead.Seal(nil, nonce, ch.Data, ssecrypto.ChunkAAD(ch.Index, len(ch.Data)))
+		cipherHash := chunk.Hash(ciphertext)
+		segmentID, offset, err := e.segments.appendChunk(ctx, cipherHash, ciphertext)
+		if err != nil {
+			return err
+		}
+		e.barrier.addBytes(int64(len(ciphertext)))
+		man.Chunks = append(man.Chunks, manifest.ChunkRef{
+			Index:     ch.Index,
+			Hash:      cipherHash,
+			SegmentID: segmentID,
+			Offset:    offset,
+			Len:       uint32(len(ciphertext)),
+			PlainLen:  uint32(len(ch.Data)),
+			KeyRef:    0,
+		})
+		size += int64(len(ch.Data))
+		return nil
+	})
+	if splitErr != nil {
+		return nil, nil, splitErr
+	}
+	man.Size = size
+	result := &PutResult{
+		VersionID: versionID,
+		ETag:      hex.EncodeToString(hasher.Sum(nil)),
+		Size:      size,
+	}
+	manifestPath := e.layout.ManifestPath(formatManifestName(bucket, key, versionID))
+	commit := func(tx *sql.Tx) error {
+		if err := writeManifestFile(manifestPath, e.manifestCodec, man); err != nil {
+			return err
+		}
+		if e.metaStore != nil {
+			if bucket != "" && key != "" {
+				if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath, contentType); err != nil {
+					return err
+				}
+				if err := setEncryptionSummaryTx(e.metaStore, tx, versionID, man.Encryption); err != nil {
+					return err
+				}
 			} else {
 				if err := e.metaStore.RecordManifestTx(tx, versionID, manifestPath); err != nil {
 					return err
@@ -221,6 +371,10 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 // PutManifestWithCommit stores a manifest and runs an optional meta commit in the barrier transaction.
 // This is used for virtual manifests that reference existing chunks without rewriting data.
 func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, contentType string, size int64, etag string, chunks []manifest.ChunkRef, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
+	return e.PutManifestWithCommitEx(ctx, bucket, key, contentType, size, etag, chunks, nil, extraCommit)
+}
+
+func (e *Engine) PutManifestWithCommitEx(ctx context.Context, bucket, key, contentType string, size int64, etag string, chunks []manifest.ChunkRef, enc *manifest.Encryption, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
 	if err := e.ensureDirs(); err != nil {
 		return nil, nil, err
 	}
@@ -232,11 +386,12 @@ func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, content
 		return nil, nil, err
 	}
 	man := &manifest.Manifest{
-		Bucket:    bucket,
-		Key:       key,
-		VersionID: versionID,
-		Size:      size,
-		Chunks:    chunks,
+		Bucket:     bucket,
+		Key:        key,
+		VersionID:  versionID,
+		Size:       size,
+		Chunks:     chunks,
+		Encryption: enc,
 	}
 	result := &PutResult{
 		VersionID: versionID,
@@ -250,6 +405,9 @@ func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, content
 		}
 		if e.metaStore != nil {
 			if err := e.metaStore.RecordPutTx(tx, bucket, key, versionID, result.ETag, size, manifestPath, contentType); err != nil {
+				return err
+			}
+			if err := setEncryptionSummaryTx(e.metaStore, tx, versionID, man.Encryption); err != nil {
 				return err
 			}
 		}
@@ -273,6 +431,25 @@ func (e *Engine) PutManifestWithCommit(ctx context.Context, bucket, key, content
 	return man, result, nil
 }
 
+func setEncryptionSummaryTx(store *meta.Store, tx *sql.Tx, versionID string, enc *manifest.Encryption) error {
+	if store == nil || enc == nil {
+		return nil
+	}
+	keyIDs := make([]string, 0, len(enc.Keys))
+	fps := make([]string, 0, len(enc.Keys))
+	seen := make(map[string]struct{})
+	for _, key := range enc.Keys {
+		if _, ok := seen[key.KeyID]; !ok {
+			seen[key.KeyID] = struct{}{}
+			keyIDs = append(keyIDs, key.KeyID)
+		}
+		if len(key.EDEKFingerprint) > 0 {
+			fps = append(fps, hex.EncodeToString(key.EDEKFingerprint))
+		}
+	}
+	return store.SetVersionEncryptionTx(tx, versionID, enc.Mode, enc.Algorithm, strings.Join(keyIDs, ","), strings.Join(fps, ","))
+}
+
 // Get retrieves an object stream by version id.
 func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *manifest.Manifest, error) {
 	if err := e.ensureDirs(); err != nil {
@@ -283,9 +460,14 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 		return nil, nil, err
 	}
 	defer func() { _ = file.Close() }()
-	reader := newManifestReader(e.layout, man)
+	var reader io.ReadCloser
+	if man.Encrypted() {
+		reader = newEncryptedManifestReader(e.layout, man, e.sse)
+	} else {
+		reader = newManifestReader(e.layout, man)
+	}
 	if ctx != nil {
-		reader.ctx = ctx
+		setReaderContext(reader, ctx)
 	}
 	return reader, man, nil
 }
@@ -303,12 +485,17 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 		return nil, nil, err
 	}
 	defer func() { _ = file.Close() }()
-	reader, err := newRangeReader(e.layout, man, start, length)
+	var reader io.ReadCloser
+	if man.Encrypted() {
+		reader, err = newEncryptedRangeReader(e.layout, man, e.sse, start, length)
+	} else {
+		reader, err = newRangeReader(e.layout, man, start, length)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	if ctx != nil {
-		reader.ctx = ctx
+		setReaderContext(reader, ctx)
 	}
 	return reader, man, nil
 }

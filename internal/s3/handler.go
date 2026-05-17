@@ -18,6 +18,7 @@ import (
 
 	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 )
 
@@ -457,6 +458,14 @@ func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWrite
 		writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-C is not supported: "+header, requestID, r.URL.Path)
 		return
 	}
+	if header, ok := sseKMSHeader(r); ok {
+		writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-KMS is not supported: "+header, requestID, r.URL.Path)
+		return
+	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.Header.Get("X-Amz-Server-Side-Encryption") != "" {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "server-side encryption request headers are not valid for GET/HEAD", requestID, r.URL.Path)
+		return
+	}
 	type objectRoute struct {
 		method  string
 		match   func(*http.Request) bool
@@ -572,6 +581,53 @@ func sseCustomerHeader(r *http.Request) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func sseKMSHeader(r *http.Request) (string, bool) {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption")), "aws:kms") {
+		return "X-Amz-Server-Side-Encryption", true
+	}
+	for _, header := range []string{
+		"X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id",
+		"X-Amz-Server-Side-Encryption-Context",
+		"X-Amz-Server-Side-Encryption-Bucket-Key-Enabled",
+	} {
+		if r.Header.Get(header) != "" {
+			return http.CanonicalHeaderKey(header), true
+		}
+	}
+	return "", false
+}
+
+func sseS3Requested(r *http.Request) (bool, *requestError) {
+	value := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption"))
+	if value == "" {
+		return false, nil
+	}
+	if value == ssecrypto.ServerSideHeaderS3 {
+		return true, nil
+	}
+	return false, &requestError{status: http.StatusBadRequest, code: "InvalidArgument", message: "unsupported server-side encryption"}
+}
+
+func writeObjectWriteError(w http.ResponseWriter, err error, requestID, resource string) bool {
+	switch {
+	case errors.Is(err, errPayloadHashMismatch):
+		writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, resource)
+	case errors.Is(err, errInvalidDigest):
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, resource)
+	case errors.Is(err, errBadDigest):
+		writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, resource)
+	case errors.Is(err, errInvalidContentLength):
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, resource)
+	case errors.Is(err, errEntityTooLarge):
+		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, resource)
+	case errors.Is(err, ssecrypto.ErrDisabled):
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, resource)
+	default:
+		return false
+	}
+	return true
 }
 
 func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -991,28 +1047,24 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	encrypt, reqErr := sseS3Requested(r)
+	if reqErr != nil {
+		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
+		return
+	}
 	versioningState, err := h.bucketVersioningState(ctx, bucket)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+	var result *engine.PutResult
+	if encrypt {
+		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+	} else {
+		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+	}
 	if err != nil {
-		switch {
-		case errors.Is(err, errPayloadHashMismatch):
-			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errInvalidDigest):
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errBadDigest):
-			writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errInvalidContentLength):
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errEntityTooLarge):
-			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		if writeObjectWriteError(w, err, requestID, r.URL.Path) {
 			return
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
@@ -1023,6 +1075,9 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
 		w.Header().Set("x-amz-version-id", versionID)
+	}
+	if encrypt {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
 	}
 	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
@@ -1080,6 +1135,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if objMeta.ContentType != "" {
 		w.Header().Set("Content-Type", objMeta.ContentType)
+	}
+	if strings.EqualFold(objMeta.EncryptionMode, ssecrypto.ModeSSES3) {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
 	}
 	if objMeta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, objMeta.LastModified); err == nil {
@@ -1148,6 +1206,10 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	reader, _, err := h.Engine.Get(ctx, objMeta.VersionID)
 	if err != nil {
+		if errors.Is(err, ssecrypto.ErrDisabled) {
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, r.URL.Path)
+			return
+		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
@@ -1213,13 +1275,26 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = reader.Close() }()
 
 	contentType := srcMeta.ContentType
+	encrypt, reqErr := sseS3Requested(r)
+	if reqErr != nil {
+		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
+		return
+	}
 	versioningState, err := h.bucketVersioningState(ctx, bucket)
 	if err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	_, result, err := h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+	var result *engine.PutResult
+	if encrypt {
+		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+	} else {
+		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+	}
 	if err != nil {
+		if writeObjectWriteError(w, err, requestID, r.URL.Path) {
+			return
+		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
@@ -1234,6 +1309,9 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 		if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
 			w.Header().Set("x-amz-version-id", versionID)
 		}
+	}
+	if encrypt {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
 	}
 	resp := copyObjectResult{
 		ETag:         `"` + result.ETag + `"`,
@@ -1504,7 +1582,7 @@ func (h *Handler) corsAllowHeaders() string {
 	if len(h.CORSAllowHeaders) > 0 {
 		return strings.Join(h.CORSAllowHeaders, ", ")
 	}
-	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256"
+	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption"
 }
 
 func (h *Handler) corsMaxAge() int {

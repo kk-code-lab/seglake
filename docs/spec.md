@@ -16,6 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
+- **SSE-S3 (MVP)**: explicit `x-amz-server-side-encryption: AES256` object writes with local KEKs and envelope encryption.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
@@ -72,8 +73,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
-- SSE: not supported yet; SSE-C request headers are rejected with `NotImplemented`;
-  planned SSE-S3 (server-managed keys).
+- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. SSE-C and SSE-KMS remain unsupported.
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
@@ -107,13 +107,15 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.4 Object manifest
 - Manifest contains: bucket, key, versionID, size, list of chunks (hash, segment_id, offset, len).
+- Manifest v1/v2 objects are plaintext. Manifest v3 is used for SSE-S3 and includes encryption metadata: mode, algorithm, AAD/nonce/wrap schemes, wrapped DEKs, per-key nonce prefixes, per-chunk plaintext length, and per-chunk key refs.
+- For encrypted chunks, `len` is the stored ciphertext length and chunk hash is over ciphertext. Range reads use the explicit plaintext length.
 - Storage:
   - manifest file on disk (binary codec),
   - manifest path in SQLite (table `manifests`).
 
 ### 3.5 Metadata (SQLite)
 - `objects_current` points to the current object version.
-- `versions` stores etag (MD5), size, content_type, last_modified_utc, state.
+- `versions` stores etag (MD5), size, content_type, last_modified_utc, state, and optional encryption summary fields.
   - state can be `ACTIVE`, `DELETED`, `DAMAGED`, or `CONFLICT` (kept when replication loses LWW).
 - `segments` stores state, size, footer checksum.
 - Multipart: `multipart_uploads`, `multipart_parts`.
@@ -127,7 +129,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.7 Read path
 - GET/HEAD: resolve `objects_current` → manifest → stream from segments.
-- Range GET: single range or `multipart/byteranges` for multiple ranges.
+- Encrypted GET unwraps the manifest DEK with the configured KEK, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Authentication failure fails the read and must not return partial plaintext.
+- Range GET: single range or `multipart/byteranges` for multiple ranges. Encrypted ranges map by plaintext length, read full ciphertext chunks, decrypt, then slice plaintext.
 
 ### 3.8 Recovery
 - On startup: open segments are sealed (footer appended) or marked SEALED

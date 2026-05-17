@@ -29,6 +29,7 @@ Secrets handling (ops runbook expectations):
 - Store API keys and secrets in a dedicated secret manager (or encrypted env file on disk).
 - Rotate secrets on a fixed schedule (e.g., every 90 days) and on incident.
 - Audit access to secrets and remove unused keys.
+- For SSE-S3, back up KEKs separately from object data and metadata. Losing a KEK makes all object versions wrapped by that key unreadable; leaking a KEK compromises all DEKs wrapped by it.
 
 ## Online backups (recommended flow)
 
@@ -156,6 +157,19 @@ Server flags:
 - `SEGLAKE_TLS` → `-tls` (true/false)
 - `SEGLAKE_TLS_CERT` → `-tls-cert`
 - `SEGLAKE_TLS_KEY` → `-tls-key`
+- `SEGLAKE_SSE_S3_ENABLED` → `-sse-s3-enabled`
+- `SEGLAKE_SSE_S3_ACTIVE_KEY` → `-sse-s3-active-key`
+- `SEGLAKE_SSE_S3_KEKS` → comma-separated KEK specs: `key-id=env:ENV_NAME` or `key-id=file:/path/to/key`
+- `SEGLAKE_SSE_S3_KEK_B64` → single-key convenience secret for the active key
+
+SSE-S3 KEKs are base64-encoded 32-byte keys. CLI flags and env config support multiple KEKs so an old key can remain readable while a new active key handles writes:
+```
+SEGLAKE_SSE_S3_ENABLED=true
+SEGLAKE_SSE_S3_ACTIVE_KEY=local:v2
+SEGLAKE_SSE_S3_KEKS=local:v2=env:SEGLAKE_SSE_S3_KEK_V2_B64,local:v1=file:/etc/seglake/sse/local-v1.key
+```
+
+Do not place raw KEK values in logs or command histories. Prefer `file:` sources with restrictive permissions or env vars loaded from a secret manager.
 
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
@@ -175,6 +189,11 @@ AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-ea
 PUT object:
 ```
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp ./file.bin s3://demo/file.bin --endpoint-url http://localhost:9000
+```
+
+PUT object with explicit SSE-S3:
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp ./file.bin s3://demo/file.bin --endpoint-url http://localhost:9000 --sse AES256
 ```
 
 GET object:

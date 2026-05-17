@@ -93,10 +93,14 @@ type OplogEntry struct {
 }
 
 type oplogPutPayload struct {
-	ETag         string `json:"etag"`
-	Size         int64  `json:"size"`
-	LastModified string `json:"last_modified_utc"`
-	ContentType  string `json:"content_type,omitempty"`
+	ETag                   string `json:"etag"`
+	Size                   int64  `json:"size"`
+	LastModified           string `json:"last_modified_utc"`
+	ContentType            string `json:"content_type,omitempty"`
+	EncryptionMode         string `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm    string `json:"encryption_algorithm,omitempty"`
+	EncryptionKeyIDs       string `json:"encryption_key_ids,omitempty"`
+	EncryptionFingerprints string `json:"encryption_edek_fingerprints,omitempty"`
 }
 
 type oplogDeletePayload struct {
@@ -113,9 +117,13 @@ type ReplRemoteState struct {
 }
 
 type oplogMPUCompletePayload struct {
-	ETag         string `json:"etag"`
-	Size         int64  `json:"size"`
-	LastModified string `json:"last_modified_utc"`
+	ETag                   string `json:"etag"`
+	Size                   int64  `json:"size"`
+	LastModified           string `json:"last_modified_utc"`
+	EncryptionMode         string `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm    string `json:"encryption_algorithm,omitempty"`
+	EncryptionKeyIDs       string `json:"encryption_key_ids,omitempty"`
+	EncryptionFingerprints string `json:"encryption_edek_fingerprints,omitempty"`
 }
 
 type oplogBucketPolicyPayload struct {
@@ -563,6 +571,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 20 {
+		if err = applyV20(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(20, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -894,6 +910,30 @@ func applyV14(ctx context.Context, tx *sql.Tx) error {
 func applyV15(ctx context.Context, tx *sql.Tx) error {
 	ddl := []string{
 		`ALTER TABLE multipart_uploads ADD COLUMN content_type TEXT`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV20(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`ALTER TABLE versions ADD COLUMN encryption_mode TEXT`,
+		`ALTER TABLE versions ADD COLUMN encryption_algorithm TEXT`,
+		`ALTER TABLE versions ADD COLUMN encryption_key_ids TEXT`,
+		`ALTER TABLE versions ADD COLUMN encryption_edek_fingerprints TEXT`,
+		`ALTER TABLE multipart_uploads ADD COLUMN encryption_mode TEXT`,
+		`ALTER TABLE multipart_uploads ADD COLUMN encryption_algorithm TEXT`,
+		`ALTER TABLE multipart_uploads ADD COLUMN encryption_key_ids TEXT`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -1758,6 +1798,115 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`,
 	return nil
 }
 
+func (s *Store) SetVersionEncryptionTx(tx *sql.Tx, versionID, mode, algorithm, keyIDs, fingerprints string) error {
+	if tx == nil {
+		return fmt.Errorf("meta: transaction required")
+	}
+	if versionID == "" {
+		return fmt.Errorf("meta: version id required")
+	}
+	_, err := tx.Exec(`
+UPDATE versions
+SET encryption_mode=?, encryption_algorithm=?, encryption_key_ids=?, encryption_edek_fingerprints=?
+WHERE version_id=?`, mode, algorithm, keyIDs, fingerprints, versionID)
+	if err != nil {
+		return err
+	}
+	return s.updateOplogEncryptionTx(tx, versionID, mode, algorithm, keyIDs, fingerprints)
+}
+
+func (s *Store) updateOplogEncryptionTx(tx *sql.Tx, versionID, mode, algorithm, keyIDs, fingerprints string) error {
+	rows, err := tx.Query(`
+SELECT id, op_type, payload
+FROM oplog
+WHERE version_id=? AND op_type IN ('put','mpu_complete')`, versionID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	type update struct {
+		id      int64
+		opType  string
+		payload string
+	}
+	var updates []update
+	for rows.Next() {
+		var id int64
+		var opType string
+		var payload string
+		if err := rows.Scan(&id, &opType, &payload); err != nil {
+			return err
+		}
+		if opType == "mpu_complete" {
+			var p oplogMPUCompletePayload
+			if payload != "" {
+				if err := json.Unmarshal([]byte(payload), &p); err != nil {
+					return err
+				}
+			}
+			p.EncryptionMode = mode
+			p.EncryptionAlgorithm = algorithm
+			p.EncryptionKeyIDs = keyIDs
+			p.EncryptionFingerprints = fingerprints
+			data, err := json.Marshal(p)
+			if err != nil {
+				return err
+			}
+			updates = append(updates, update{id: id, opType: opType, payload: string(data)})
+			continue
+		}
+		var p oplogPutPayload
+		if payload != "" {
+			if err := json.Unmarshal([]byte(payload), &p); err != nil {
+				return err
+			}
+		}
+		p.EncryptionMode = mode
+		p.EncryptionAlgorithm = algorithm
+		p.EncryptionKeyIDs = keyIDs
+		p.EncryptionFingerprints = fingerprints
+		data, err := json.Marshal(p)
+		if err != nil {
+			return err
+		}
+		updates = append(updates, update{id: id, opType: opType, payload: string(data)})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.Exec("UPDATE oplog SET payload=?, bytes=? WHERE id=?", update.payload, oplogPayloadBytes(update.opType, update.payload), update.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type versionEncryptionSummary struct {
+	Mode         string
+	Algorithm    string
+	KeyIDs       string
+	Fingerprints string
+}
+
+func (s *Store) versionEncryptionSummaryTx(tx *sql.Tx, versionID string) (versionEncryptionSummary, error) {
+	var out versionEncryptionSummary
+	if tx == nil || versionID == "" {
+		return out, nil
+	}
+	err := tx.QueryRow(`
+SELECT COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,''), COALESCE(encryption_edek_fingerprints,'')
+FROM versions
+WHERE version_id=?`, versionID).Scan(&out.Mode, &out.Algorithm, &out.KeyIDs, &out.Fingerprints)
+	if errors.Is(err, sql.ErrNoRows) {
+		return versionEncryptionSummary{}, nil
+	}
+	return out, err
+}
+
 // RecordMPUComplete records an MPU completion in the oplog.
 func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, etag string, size int64) error {
 	if bucket == "" || key == "" || versionID == "" {
@@ -1774,10 +1923,18 @@ func (s *Store) RecordMPUComplete(ctx context.Context, bucket, key, versionID, e
 	}()
 	hlcTS, _ := s.nextHLC()
 	lastModified := s.now().UTC().Format(time.RFC3339Nano)
+	enc, err := s.versionEncryptionSummaryTx(tx, versionID)
+	if err != nil {
+		return err
+	}
 	payload, err := json.Marshal(oplogMPUCompletePayload{
-		ETag:         etag,
-		Size:         size,
-		LastModified: lastModified,
+		ETag:                   etag,
+		Size:                   size,
+		LastModified:           lastModified,
+		EncryptionMode:         enc.Mode,
+		EncryptionAlgorithm:    enc.Algorithm,
+		EncryptionKeyIDs:       enc.KeyIDs,
+		EncryptionFingerprints: enc.Fingerprints,
 	})
 	if err != nil {
 		return err
@@ -1804,10 +1961,18 @@ func (s *Store) RecordMPUCompleteTx(ctx context.Context, tx *sql.Tx, bucket, key
 	}
 	hlcTS, _ := s.nextHLC()
 	lastModified := s.now().UTC().Format(time.RFC3339Nano)
+	enc, err := s.versionEncryptionSummaryTx(tx, versionID)
+	if err != nil {
+		return err
+	}
 	payload, err := json.Marshal(oplogMPUCompletePayload{
-		ETag:         etag,
-		Size:         size,
-		LastModified: lastModified,
+		ETag:                   etag,
+		Size:                   size,
+		LastModified:           lastModified,
+		EncryptionMode:         enc.Mode,
+		EncryptionAlgorithm:    enc.Algorithm,
+		EncryptionKeyIDs:       enc.KeyIDs,
+		EncryptionFingerprints: enc.Fingerprints,
 	})
 	if err != nil {
 		return err
@@ -2033,9 +2198,13 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 							return err
 						}
 						payload = oplogPutPayload{
-							ETag:         mpuPayload.ETag,
-							Size:         mpuPayload.Size,
-							LastModified: mpuPayload.LastModified,
+							ETag:                   mpuPayload.ETag,
+							Size:                   mpuPayload.Size,
+							LastModified:           mpuPayload.LastModified,
+							EncryptionMode:         mpuPayload.EncryptionMode,
+							EncryptionAlgorithm:    mpuPayload.EncryptionAlgorithm,
+							EncryptionKeyIDs:       mpuPayload.EncryptionKeyIDs,
+							EncryptionFingerprints: mpuPayload.EncryptionFingerprints,
 						}
 					} else {
 						if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
@@ -2049,8 +2218,9 @@ func (s *Store) ApplyOplogEntries(ctx context.Context, entries []OplogEntry) (in
 				}
 				if entry.OpType == "mpu_complete" {
 					if _, err := tx.Exec(`
-INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+INSERT INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state,
+	encryption_mode, encryption_algorithm, encryption_key_ids, encryption_edek_fingerprints)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
 ON CONFLICT(version_id) DO UPDATE SET
 	etag=excluded.etag,
 	size=excluded.size,
@@ -2058,15 +2228,22 @@ ON CONFLICT(version_id) DO UPDATE SET
 	last_modified_utc=excluded.last_modified_utc,
 	hlc_ts=excluded.hlc_ts,
 	site_id=excluded.site_id,
+	encryption_mode=excluded.encryption_mode,
+	encryption_algorithm=excluded.encryption_algorithm,
+	encryption_key_ids=excluded.encryption_key_ids,
+	encryption_edek_fingerprints=excluded.encryption_edek_fingerprints,
 	state='ACTIVE'`,
-						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull)); err != nil {
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull),
+						payload.EncryptionMode, payload.EncryptionAlgorithm, payload.EncryptionKeyIDs, payload.EncryptionFingerprints); err != nil {
 						return err
 					}
 				} else {
 					if _, err := tx.Exec(`
-INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull)); err != nil {
+INSERT OR IGNORE INTO versions(version_id, bucket, key, etag, size, content_type, last_modified_utc, hlc_ts, site_id, is_null, state,
+	encryption_mode, encryption_algorithm, encryption_key_ids, encryption_edek_fingerprints)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`,
+						entry.VersionID, entry.Bucket, entry.Key, payload.ETag, payload.Size, payload.ContentType, lastModified, entry.HLCTS, entry.SiteID, boolToInt(isNull),
+						payload.EncryptionMode, payload.EncryptionAlgorithm, payload.EncryptionKeyIDs, payload.EncryptionFingerprints); err != nil {
 						return err
 					}
 				}
@@ -2633,12 +2810,15 @@ func (s *Store) ManifestPath(ctx context.Context, versionID string) (string, err
 
 // MultipartUpload holds upload metadata.
 type MultipartUpload struct {
-	UploadID    string
-	Bucket      string
-	Key         string
-	CreatedAt   string
-	State       string
-	ContentType string
+	UploadID            string
+	Bucket              string
+	Key                 string
+	CreatedAt           string
+	State               string
+	ContentType         string
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	EncryptionKeyIDs    string
 }
 
 // MultipartPart holds part metadata.
@@ -2678,6 +2858,20 @@ VALUES(?, ?, ?, ?, 'ACTIVE', ?)`, uploadID, bucket, key, now, contentType)
 	return err
 }
 
+func (s *Store) SetMultipartUploadEncryptionTx(ctx context.Context, tx *sql.Tx, uploadID, mode, algorithm, keyIDs string) error {
+	if uploadID == "" {
+		return fmt.Errorf("meta: upload id required")
+	}
+	if tx == nil {
+		return fmt.Errorf("meta: tx required")
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE multipart_uploads
+SET encryption_mode=?, encryption_algorithm=?, encryption_key_ids=?
+WHERE upload_id=?`, mode, algorithm, keyIDs, uploadID)
+	return err
+}
+
 // ListMultipartUploads returns active uploads for a bucket and optional prefix/markers.
 func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker string, limit int) (out []MultipartUpload, err error) {
 	if limit <= 0 {
@@ -2686,7 +2880,8 @@ func (s *Store) ListMultipartUploads(ctx context.Context, bucket, prefix, keyMar
 	pattern := escapeLike(prefix) + "%"
 	rows, err := queryWithMarkers(ctx, s.db,
 		`
-SELECT upload_id, bucket, key, created_at, state, content_type
+SELECT upload_id, bucket, key, created_at, state, content_type,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
 FROM multipart_uploads
 WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 		"key", "upload_id", bucket, pattern, keyMarker, uploadIDMarker, limit,
@@ -2696,7 +2891,7 @@ WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 	}
 	return out, scanRows(rows, func(scan func(dest ...any) error) error {
 		var up MultipartUpload
-		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType); err != nil {
+		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType, &up.EncryptionMode, &up.EncryptionAlgorithm, &up.EncryptionKeyIDs); err != nil {
 			return err
 		}
 		out = append(out, up)
@@ -2707,11 +2902,12 @@ WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='ACTIVE'`,
 // GetMultipartUpload returns upload metadata.
 func (s *Store) GetMultipartUpload(ctx context.Context, uploadID string) (*MultipartUpload, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT upload_id, bucket, key, created_at, state, content_type
+SELECT upload_id, bucket, key, created_at, state, content_type,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
 FROM multipart_uploads
 WHERE upload_id=?`, uploadID)
 	var up MultipartUpload
-	if err := row.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType); err != nil {
+	if err := row.Scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType, &up.EncryptionMode, &up.EncryptionAlgorithm, &up.EncryptionKeyIDs); err != nil {
 		return nil, err
 	}
 	return &up, nil
@@ -2972,14 +3168,17 @@ WHERE u.state='ACTIVE'`)
 
 // ObjectMeta describes the current object version metadata.
 type ObjectMeta struct {
-	Key          string
-	VersionID    string
-	ETag         string
-	Size         int64
-	ContentType  string
-	LastModified string
-	State        string
-	IsNull       bool
+	Key                 string
+	VersionID           string
+	ETag                string
+	Size                int64
+	ContentType         string
+	LastModified        string
+	State               string
+	IsNull              bool
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	EncryptionKeyIDs    string
 }
 
 // ConflictMeta describes a conflicting object version.
@@ -2995,13 +3194,14 @@ type ConflictMeta struct {
 // GetObjectMeta returns metadata for the current object version.
 func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT v.version_id, v.etag, v.size, v.content_type, v.last_modified_utc, v.state, v.is_null
+SELECT v.version_id, v.etag, v.size, v.content_type, v.last_modified_utc, v.state, v.is_null,
+	COALESCE(v.encryption_mode,''), COALESCE(v.encryption_algorithm,''), COALESCE(v.encryption_key_ids,'')
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key=?`, bucket, key)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -3079,12 +3279,13 @@ func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID str
 		return nil, errors.New("meta: bucket, key, and version id required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null
+SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
 FROM versions
 WHERE bucket=? AND key=? AND version_id=?`, bucket, key, versionID)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -3096,14 +3297,15 @@ func (s *Store) GetNullObjectVersion(ctx context.Context, bucket, key string) (*
 		return nil, errors.New("meta: bucket and key required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null
+SELECT version_id, etag, size, content_type, last_modified_utc, state, is_null,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
 FROM versions
 WHERE bucket=? AND key=? AND is_null=1 AND state<>'DELETED'
 ORDER BY hlc_ts DESC, site_id DESC
 LIMIT 1`, bucket, key)
 	var meta ObjectMeta
 	meta.Key = key
-	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull); err != nil {
+	if err := row.Scan(&meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -3117,7 +3319,8 @@ func (s *Store) ListObjects(ctx context.Context, bucket, prefix, afterKey, after
 	pattern := escapeLike(prefix) + "%"
 	rows, err := queryWithMarkers(ctx, s.db,
 		`
-SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc
+SELECT o.key, v.version_id, v.etag, v.size, v.last_modified_utc,
+	COALESCE(v.encryption_mode,''), COALESCE(v.encryption_algorithm,''), COALESCE(v.encryption_key_ids,'')
 FROM objects_current o
 JOIN versions v ON v.version_id = o.version_id
 WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND v.state<>'DELETE_MARKER'`,
@@ -3128,7 +3331,7 @@ WHERE o.bucket=? AND o.key LIKE ? ESCAPE '\' AND v.state<>'DELETE_MARKER'`,
 	}
 	return out, scanRows(rows, func(scan func(dest ...any) error) error {
 		var meta ObjectMeta
-		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified); err != nil {
+		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.LastModified, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
 			return err
 		}
 		out = append(out, meta)
@@ -3143,7 +3346,8 @@ func (s *Store) ListObjectVersions(ctx context.Context, bucket, prefix, keyMarke
 	}
 	pattern := escapeLike(prefix) + "%"
 	baseQuery := `
-SELECT key, version_id, etag, size, content_type, last_modified_utc, state, is_null, hlc_ts, site_id
+SELECT key, version_id, etag, size, content_type, last_modified_utc, state, is_null, hlc_ts, site_id,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
 FROM versions
 WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state<>'DELETED'`
 	orderClause := " ORDER BY key ASC, hlc_ts DESC, site_id DESC, version_id DESC LIMIT ?"
@@ -3178,7 +3382,7 @@ WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state<>'DELETED'`
 		var meta ObjectMeta
 		var hlcTS string
 		var siteID string
-		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &hlcTS, &siteID); err != nil {
+		if err := scan(&meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &hlcTS, &siteID, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
 			return err
 		}
 		out = append(out, meta)

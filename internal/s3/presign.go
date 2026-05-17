@@ -3,6 +3,7 @@ package s3
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -12,6 +13,11 @@ import (
 
 // Presign builds a presigned URL for a request.
 func (c *AuthConfig) Presign(method, rawURL string, expires time.Duration) (string, error) {
+	return c.PresignWithHeaders(method, rawURL, expires, nil)
+}
+
+// PresignWithHeaders builds a presigned URL that requires the provided headers.
+func (c *AuthConfig) PresignWithHeaders(method, rawURL string, expires time.Duration, headers http.Header) (string, error) {
 	if c == nil || c.AccessKey == "" || c.SecretKey == "" {
 		return "", errAccessDenied
 	}
@@ -22,24 +28,37 @@ func (c *AuthConfig) Presign(method, rawURL string, expires time.Duration) (stri
 	if err != nil {
 		return "", err
 	}
+	req := &http.Request{
+		Method: method,
+		URL:    u,
+		Host:   u.Host,
+		Header: headers.Clone(),
+	}
 	amzDate := c.now().UTC().Format("20060102T150405Z")
 	dateScope := amzDate[:8]
 	scope := dateScope + "/" + c.Region + "/s3/aws4_request"
+	signedHeaderNames := signedHeadersForPresign(req)
+	canonicalHeaders, signedHeadersLower, err := buildCanonicalHeaders(req, strings.Join(signedHeaderNames, ";"))
+	if err != nil {
+		return "", err
+	}
+	signedHeaders := strings.Join(signedHeadersLower, ";")
 
 	query := u.Query()
 	query.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
 	query.Set("X-Amz-Credential", c.AccessKey+"/"+scope)
 	query.Set("X-Amz-Date", amzDate)
 	query.Set("X-Amz-Expires", strconv.FormatInt(int64(expires/time.Second), 10))
-	query.Set("X-Amz-SignedHeaders", "host")
+	query.Set("X-Amz-SignedHeaders", signedHeaders)
 	u.RawQuery = query.Encode()
+	req.URL = u
 
 	canonicalRequest := strings.Join([]string{
 		method,
 		u.EscapedPath(),
 		canonicalQueryPresignedFromValues(u.Query()),
-		"host:" + u.Host + "\n",
-		"host",
+		canonicalHeaders,
+		signedHeaders,
 		"UNSIGNED-PAYLOAD",
 	}, "\n")
 	hash := sha256.Sum256([]byte(canonicalRequest))
@@ -55,6 +74,24 @@ func (c *AuthConfig) Presign(method, rawURL string, expires time.Duration) (stri
 	query.Set("X-Amz-Signature", signature)
 	u.RawQuery = query.Encode()
 	return u.String(), nil
+}
+
+func signedHeadersForPresign(r *http.Request) []string {
+	seen := map[string]struct{}{"host": {}}
+	headers := []string{"host"}
+	for name := range r.Header {
+		lower := strings.ToLower(name)
+		if lower == "" {
+			continue
+		}
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		headers = append(headers, lower)
+	}
+	sort.Strings(headers)
+	return headers
 }
 
 func canonicalQueryPresignedFromValues(values url.Values) string {

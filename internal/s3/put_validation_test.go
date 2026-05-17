@@ -144,6 +144,124 @@ func TestSSECustomerHeadersRejected(t *testing.T) {
 	}
 }
 
+func TestSSES3PutGetHeadAndInvalidHeaders(t *testing.T) {
+	h := newTestHandler(t)
+	put := httptest.NewRequest(http.MethodPut, "/bucket/encrypted", strings.NewReader("secret payload"))
+	put.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	putW := httptest.NewRecorder()
+	h.ServeHTTP(putW, put)
+	if putW.Code != http.StatusOK {
+		t.Fatalf("PUT status: %d body=%s", putW.Code, putW.Body.String())
+	}
+	if got := putW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected SSE header on PUT, got %q", got)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/bucket/encrypted", nil)
+	getW := httptest.NewRecorder()
+	h.ServeHTTP(getW, get)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("GET status: %d body=%s", getW.Code, getW.Body.String())
+	}
+	if getW.Body.String() != "secret payload" {
+		t.Fatalf("GET body mismatch: %q", getW.Body.String())
+	}
+	if got := getW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected SSE header on GET, got %q", got)
+	}
+
+	head := httptest.NewRequest(http.MethodHead, "/bucket/encrypted", nil)
+	headW := httptest.NewRecorder()
+	h.ServeHTTP(headW, head)
+	if headW.Code != http.StatusOK {
+		t.Fatalf("HEAD status: %d", headW.Code)
+	}
+	if got := headW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected SSE header on HEAD, got %q", got)
+	}
+
+	badGet := httptest.NewRequest(http.MethodGet, "/bucket/encrypted", nil)
+	badGet.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	badGetW := httptest.NewRecorder()
+	h.ServeHTTP(badGetW, badGet)
+	if badGetW.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", badGetW.Code)
+	}
+
+	badPut := httptest.NewRequest(http.MethodPut, "/bucket/bad", strings.NewReader("x"))
+	badPut.Header.Set("X-Amz-Server-Side-Encryption", "AES128")
+	badPutW := httptest.NewRecorder()
+	h.ServeHTTP(badPutW, badPut)
+	if badPutW.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", badPutW.Code)
+	}
+
+	kmsPut := httptest.NewRequest(http.MethodPut, "/bucket/kms", strings.NewReader("x"))
+	kmsPut.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	kmsPutW := httptest.NewRecorder()
+	h.ServeHTTP(kmsPutW, kmsPut)
+	if kmsPutW.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", kmsPutW.Code)
+	}
+}
+
+func TestSSES3RequestFailsWhenDisabled(t *testing.T) {
+	h := newTestHandlerWithoutSSE(t)
+
+	put := httptest.NewRequest(http.MethodPut, "/bucket/encrypted", strings.NewReader("secret"))
+	put.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	putW := httptest.NewRecorder()
+	h.ServeHTTP(putW, put)
+	if putW.Code != http.StatusBadRequest {
+		t.Fatalf("expected PUT 400, got %d body=%s", putW.Code, putW.Body.String())
+	}
+	if !strings.Contains(putW.Body.String(), "InvalidRequest") {
+		t.Fatalf("expected InvalidRequest, got %s", putW.Body.String())
+	}
+
+	init := httptest.NewRequest(http.MethodPost, "/bucket/encrypted?uploads", nil)
+	init.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	initW := httptest.NewRecorder()
+	h.ServeHTTP(initW, init)
+	if initW.Code != http.StatusBadRequest {
+		t.Fatalf("expected initiate 400, got %d body=%s", initW.Code, initW.Body.String())
+	}
+}
+
+func TestSSES3CopyModes(t *testing.T) {
+	h := newTestHandler(t)
+	put := httptest.NewRequest(http.MethodPut, "/bucket/src", strings.NewReader("copy me"))
+	put.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	putW := httptest.NewRecorder()
+	h.ServeHTTP(putW, put)
+	if putW.Code != http.StatusOK {
+		t.Fatalf("source PUT status: %d", putW.Code)
+	}
+
+	copyPlain := httptest.NewRequest(http.MethodPut, "/bucket/plain-copy", nil)
+	copyPlain.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	copyPlainW := httptest.NewRecorder()
+	h.ServeHTTP(copyPlainW, copyPlain)
+	if copyPlainW.Code != http.StatusOK {
+		t.Fatalf("copy plaintext status: %d body=%s", copyPlainW.Code, copyPlainW.Body.String())
+	}
+	if got := copyPlainW.Header().Get("x-amz-server-side-encryption"); got != "" {
+		t.Fatalf("expected plaintext copy without SSE header, got %q", got)
+	}
+
+	copyEncrypted := httptest.NewRequest(http.MethodPut, "/bucket/encrypted-copy", nil)
+	copyEncrypted.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	copyEncrypted.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	copyEncryptedW := httptest.NewRecorder()
+	h.ServeHTTP(copyEncryptedW, copyEncrypted)
+	if copyEncryptedW.Code != http.StatusOK {
+		t.Fatalf("copy encrypted status: %d body=%s", copyEncryptedW.Code, copyEncryptedW.Body.String())
+	}
+	if got := copyEncryptedW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected encrypted copy SSE header, got %q", got)
+	}
+}
+
 func TestPutEnforcesMaxObjectSize(t *testing.T) {
 	h := newTestHandler(t)
 	h.MaxObjectSize = 3

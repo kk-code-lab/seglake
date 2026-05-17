@@ -53,6 +53,58 @@ func TestBinaryCodecRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBinaryCodecV3EncryptionRoundTrip(t *testing.T) {
+	c := &BinaryCodec{}
+	manifest := &Manifest{
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Size:      5,
+		Chunks: []ChunkRef{{
+			Index:     0,
+			Hash:      [32]byte{1},
+			SegmentID: "seg",
+			Offset:    8,
+			Len:       21,
+			PlainLen:  5,
+			KeyRef:    7,
+		}},
+		Encryption: &Encryption{
+			Mode:          "SSE-S3",
+			Algorithm:     "AES-256-GCM",
+			WrapAlgorithm: "AES-256-GCM",
+			AADScheme:     "seglake-sse-s3-aad-v1",
+			Keys: []KeyEntry{{
+				KeyRef:          7,
+				KeyID:           "local:v1",
+				EncryptedDEK:    []byte{1, 2, 3},
+				WrapNonce:       []byte{4, 5, 6},
+				NoncePrefix:     []byte{7, 8, 9},
+				NonceScheme:     "random64-counter32-v1",
+				EDEKFingerprint: []byte{10, 11},
+			}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := c.Encode(&buf, manifest); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := c.Decode(&buf)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if !got.Encrypted() {
+		t.Fatalf("expected encrypted manifest")
+	}
+	if got.Chunks[0].PlainLen != manifest.Chunks[0].PlainLen || got.Chunks[0].KeyRef != manifest.Chunks[0].KeyRef {
+		t.Fatalf("chunk encryption metadata mismatch: %+v", got.Chunks[0])
+	}
+	if len(got.Encryption.Keys) != 1 || got.Encryption.Keys[0].KeyID != "local:v1" {
+		t.Fatalf("key metadata mismatch: %+v", got.Encryption)
+	}
+}
+
 func TestBinaryCodecChecksumMismatch(t *testing.T) {
 	c := &BinaryCodec{}
 	manifest := &Manifest{

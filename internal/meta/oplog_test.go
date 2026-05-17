@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -376,6 +377,102 @@ func TestRecordMPUCompleteWritesOplog(t *testing.T) {
 	}
 	if entries[0].OpType != "mpu_complete" {
 		t.Fatalf("expected mpu_complete, got %s", entries[0].OpType)
+	}
+}
+
+func TestOplogCarriesEncryptionSummary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		if err := store.RecordPutTx(tx, "bucket", "key", "v1", "etag", 10, "", ""); err != nil {
+			return err
+		}
+		if err := store.SetVersionEncryptionTx(tx, "v1", "SSE-S3", "AES-256-GCM", "local:v1", "abcd1234"); err != nil {
+			return err
+		}
+		return store.RecordMPUCompleteTx(ctx, tx, "bucket", "key", "v1", "etag-mpu", 10)
+	}); err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	entries, err := store.ListOplog(ctx)
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	for _, entry := range entries {
+		switch entry.OpType {
+		case "put":
+			var payload oplogPutPayload
+			if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+				t.Fatalf("unmarshal put payload: %v", err)
+			}
+			if payload.EncryptionMode != "SSE-S3" || payload.EncryptionAlgorithm != "AES-256-GCM" || payload.EncryptionKeyIDs != "local:v1" || payload.EncryptionFingerprints != "abcd1234" {
+				t.Fatalf("put encryption payload mismatch: %+v", payload)
+			}
+		case "mpu_complete":
+			var payload oplogMPUCompletePayload
+			if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+				t.Fatalf("unmarshal mpu payload: %v", err)
+			}
+			if payload.EncryptionMode != "SSE-S3" || payload.EncryptionAlgorithm != "AES-256-GCM" || payload.EncryptionKeyIDs != "local:v1" || payload.EncryptionFingerprints != "abcd1234" {
+				t.Fatalf("mpu encryption payload mismatch: %+v", payload)
+			}
+		default:
+			t.Fatalf("unexpected oplog op: %s", entry.OpType)
+		}
+	}
+}
+
+func TestApplyOplogEntriesPersistsEncryptionSummary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	payload, err := json.Marshal(oplogPutPayload{
+		ETag:                   "etag",
+		Size:                   10,
+		LastModified:           "2026-01-01T00:00:00Z",
+		EncryptionMode:         "SSE-S3",
+		EncryptionAlgorithm:    "AES-256-GCM",
+		EncryptionKeyIDs:       "local:v1",
+		EncryptionFingerprints: "abcd1234",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	_, err = store.ApplyOplogEntries(context.Background(), []OplogEntry{{
+		SiteID:    "remote-a",
+		HLCTS:     "0000000000000000001-0001",
+		OpType:    "put",
+		Bucket:    "bucket",
+		Key:       "key",
+		VersionID: "v1",
+		Payload:   string(payload),
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	metaObj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.EncryptionMode != "SSE-S3" || metaObj.EncryptionAlgorithm != "AES-256-GCM" || metaObj.EncryptionKeyIDs != "local:v1" {
+		t.Fatalf("encryption summary mismatch: %+v", metaObj)
 	}
 }
 

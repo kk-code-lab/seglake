@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
@@ -394,6 +395,115 @@ func TestS3E2EPresignedPut(t *testing.T) {
 	}
 	if string(data) != "presigned-put" {
 		t.Fatalf("GET body mismatch")
+	}
+}
+
+func TestS3E2EPresignedPutSignedSSES3Header(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	key := ssecrypto.Key{ID: "local:v1"}
+	for i := range key.Bytes {
+		key.Bytes[i] = byte(i + 1)
+	}
+	provider, err := ssecrypto.NewProvider(key.ID, []ssecrypto.Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+		SSE:       provider,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	headers := http.Header{"X-Amz-Server-Side-Encryption": []string{"AES256"}}
+	putURL := server.URL + "/bucket/presigned-sse"
+	presigned, err := handler.Auth.PresignWithHeaders(http.MethodPut, putURL, 5*time.Minute, headers)
+	if err != nil {
+		t.Fatalf("PresignWithHeaders: %v", err)
+	}
+
+	missingReq, err := http.NewRequest(http.MethodPut, presigned, bytes.NewReader([]byte("missing-header")))
+	if err != nil {
+		t.Fatalf("NewRequest missing: %v", err)
+	}
+	missingResp, err := http.DefaultClient.Do(missingReq)
+	if err != nil {
+		t.Fatalf("missing PUT error: %v", err)
+	}
+	missingResp.Body.Close()
+	if missingResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing header PUT status: %d", missingResp.StatusCode)
+	}
+
+	changedReq, err := http.NewRequest(http.MethodPut, presigned, bytes.NewReader([]byte("changed-header")))
+	if err != nil {
+		t.Fatalf("NewRequest changed: %v", err)
+	}
+	changedReq.Header.Set("X-Amz-Server-Side-Encryption", "AES128")
+	changedResp, err := http.DefaultClient.Do(changedReq)
+	if err != nil {
+		t.Fatalf("changed PUT error: %v", err)
+	}
+	changedResp.Body.Close()
+	if changedResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("changed header PUT status: %d", changedResp.StatusCode)
+	}
+
+	goodReq, err := http.NewRequest(http.MethodPut, presigned, bytes.NewReader([]byte("presigned-sse")))
+	if err != nil {
+		t.Fatalf("NewRequest good: %v", err)
+	}
+	goodReq.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	goodResp, err := http.DefaultClient.Do(goodReq)
+	if err != nil {
+		t.Fatalf("good PUT error: %v", err)
+	}
+	goodResp.Body.Close()
+	if goodResp.StatusCode != http.StatusOK {
+		t.Fatalf("good PUT status: %d", goodResp.StatusCode)
+	}
+	if got := goodResp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected SSE response header, got %q", got)
+	}
+
+	headReq, err := http.NewRequest(http.MethodHead, putURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest HEAD: %v", err)
+	}
+	signRequest(headReq, "test", "testsecret", "us-east-1")
+	headResp, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		t.Fatalf("HEAD error: %v", err)
+	}
+	headResp.Body.Close()
+	if headResp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD status: %d", headResp.StatusCode)
+	}
+	if got := headResp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected HEAD SSE response header, got %q", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
@@ -123,6 +124,85 @@ func TestEngineGetRange(t *testing.T) {
 	if string(got) != string(input[3:10]) {
 		t.Fatalf("range mismatch: %q", string(got))
 	}
+}
+
+func TestEngineSSES3PutGetRangeAndTamper(t *testing.T) {
+	dir := t.TempDir()
+	key := ssecrypto.Key{ID: "local:v1"}
+	copy(key.Bytes[:], bytes.Repeat([]byte{7}, 32))
+	provider, err := ssecrypto.NewProvider(key.ID, []ssecrypto.Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	engine, err := New(Options{
+		Layout: fs.NewLayout(filepath.Join(dir, "data")),
+		SSE:    provider,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := []byte("hello encrypted world")
+	man, result, err := engine.PutObjectSSES3(context.Background(), "bucket", "key", "", bytes.NewReader(input))
+	if err != nil {
+		t.Fatalf("PutObjectSSES3: %v", err)
+	}
+	if !man.Encrypted() {
+		t.Fatalf("expected encrypted manifest")
+	}
+	raw, err := os.ReadFile(engine.Layout().SegmentPath(man.Chunks[0].SegmentID))
+	if err != nil {
+		t.Fatalf("ReadFile segment: %v", err)
+	}
+	if bytes.Contains(raw, input) {
+		t.Fatalf("segment contains plaintext")
+	}
+
+	reader, _, err := engine.Get(context.Background(), result.VersionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("plaintext mismatch")
+	}
+
+	rangeReader, _, err := engine.GetRange(context.Background(), result.VersionID, 6, 9)
+	if err != nil {
+		t.Fatalf("GetRange: %v", err)
+	}
+	rangeGot, err := io.ReadAll(rangeReader)
+	_ = rangeReader.Close()
+	if err != nil {
+		t.Fatalf("ReadAll range: %v", err)
+	}
+	if string(rangeGot) != string(input[6:15]) {
+		t.Fatalf("range mismatch: %q", rangeGot)
+	}
+
+	segPath := engine.Layout().SegmentPath(man.Chunks[0].SegmentID)
+	file, err := os.OpenFile(segPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, man.Chunks[0].Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("WriteAt: %v", err)
+	}
+	_ = file.Close()
+	badReader, _, err := engine.Get(context.Background(), result.VersionID)
+	if err != nil {
+		t.Fatalf("Get tampered: %v", err)
+	}
+	if _, err := io.ReadAll(badReader); err == nil {
+		_ = badReader.Close()
+		t.Fatalf("expected authentication failure")
+	}
+	_ = badReader.Close()
 }
 
 func TestEngineGetManifestFallbackToWalk(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/s3"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
@@ -126,6 +127,29 @@ type serverOptions struct {
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
 	shutdownTimeout   time.Duration
+	sseS3Enabled      bool
+	sseS3ActiveKey    string
+	sseS3KEKs         multiString
+	sseS3KEKsEnv      string
+	sseS3SingleKeyB64 string
+}
+
+type multiString []string
+
+func (m *multiString) String() string {
+	if m == nil {
+		return ""
+	}
+	return strings.Join(*m, ",")
+}
+
+func (m *multiString) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	*m = append(*m, value)
+	return nil
 }
 
 type opsOptions struct {
@@ -655,6 +679,11 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.DurationVar(&opts.writeTimeout, "write-timeout", defaultWriteTimeout, "HTTP write timeout")
 	fs.DurationVar(&opts.idleTimeout, "idle-timeout", defaultIdleTimeout, "HTTP idle timeout")
 	fs.DurationVar(&opts.shutdownTimeout, "shutdown-timeout", 10*time.Second, "Graceful shutdown timeout")
+	fs.BoolVar(&opts.sseS3Enabled, "sse-s3-enabled", envBoolOrDefault("SEGLAKE_SSE_S3_ENABLED", false), "Enable explicit SSE-S3 object encryption")
+	fs.StringVar(&opts.sseS3ActiveKey, "sse-s3-active-key", envOrDefault("SEGLAKE_SSE_S3_ACTIVE_KEY", ""), "Active SSE-S3 key id for new encrypted writes")
+	fs.Var(&opts.sseS3KEKs, "sse-s3-kek", "SSE-S3 KEK spec key-id=file:/path or key-id=env:NAME (repeatable)")
+	opts.sseS3KEKsEnv = envOrDefault("SEGLAKE_SSE_S3_KEKS", "")
+	opts.sseS3SingleKeyB64 = envOrDefault("SEGLAKE_SSE_S3_KEK_B64", "")
 	return fs, opts
 }
 
@@ -835,7 +864,11 @@ func runServer(opts *serverOptions) error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	eng, err := openEngine(opts.dataDir, store, opts.syncInterval, opts.syncBytes)
+	sseProvider, err := buildSSEProvider(opts)
+	if err != nil {
+		return err
+	}
+	eng, err := openEngine(opts.dataDir, store, opts.syncInterval, opts.syncBytes, sseProvider)
 	if err != nil {
 		return err
 	}
@@ -944,6 +977,74 @@ func runServer(opts *serverOptions) error {
 	}
 }
 
+func buildSSEProvider(opts *serverOptions) (*ssecrypto.Provider, error) {
+	if opts == nil || !opts.sseS3Enabled {
+		return nil, nil
+	}
+	specs := make([]string, 0, len(opts.sseS3KEKs)+4)
+	specs = append(specs, opts.sseS3KEKs...)
+	specs = append(specs, splitComma(opts.sseS3KEKsEnv)...)
+	if opts.sseS3SingleKeyB64 != "" {
+		if strings.TrimSpace(opts.sseS3ActiveKey) == "" {
+			return nil, fmt.Errorf("sse-s3: active key required with SEGLAKE_SSE_S3_KEK_B64")
+		}
+		specs = append(specs, strings.TrimSpace(opts.sseS3ActiveKey)+"=inline:"+opts.sseS3SingleKeyB64)
+	}
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("sse-s3: at least one -sse-s3-kek or SEGLAKE_SSE_S3_KEKS entry required")
+	}
+	keys := make([]ssecrypto.Key, 0, len(specs))
+	for _, spec := range specs {
+		key, err := parseSSEKeySpec(spec)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return ssecrypto.NewProvider(opts.sseS3ActiveKey, keys)
+}
+
+func parseSSEKeySpec(spec string) (ssecrypto.Key, error) {
+	spec = strings.TrimSpace(spec)
+	keyID, source, ok := strings.Cut(spec, "=")
+	if !ok {
+		return ssecrypto.Key{}, fmt.Errorf("sse-s3: invalid kek spec %q", spec)
+	}
+	keyID = strings.TrimSpace(keyID)
+	source = strings.TrimSpace(source)
+	var b64 string
+	switch {
+	case strings.HasPrefix(source, "env:"):
+		envName := strings.TrimSpace(strings.TrimPrefix(source, "env:"))
+		if envName == "" {
+			return ssecrypto.Key{}, fmt.Errorf("sse-s3: empty env source for key %q", keyID)
+		}
+		value, ok := os.LookupEnv(envName)
+		if !ok {
+			value, ok = secretEnv[envName]
+		}
+		if !ok {
+			return ssecrypto.Key{}, fmt.Errorf("sse-s3: env source %q not set", envName)
+		}
+		b64 = value
+	case strings.HasPrefix(source, "file:"):
+		path := strings.TrimSpace(strings.TrimPrefix(source, "file:"))
+		if path == "" {
+			return ssecrypto.Key{}, fmt.Errorf("sse-s3: empty file source for key %q", keyID)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ssecrypto.Key{}, fmt.Errorf("sse-s3: read key file: %w", err)
+		}
+		b64 = strings.TrimSpace(string(data))
+	case strings.HasPrefix(source, "inline:"):
+		b64 = strings.TrimSpace(strings.TrimPrefix(source, "inline:"))
+	default:
+		return ssecrypto.Key{}, fmt.Errorf("sse-s3: unsupported key source for %q", keyID)
+	}
+	return ssecrypto.DecodeKey(keyID, b64)
+}
+
 func newHTTPServer(opts *serverOptions, handler http.Handler) *http.Server {
 	addr := ":9000"
 	readHeaderTimeout := defaultReadHeaderTimeout
@@ -1006,7 +1107,7 @@ func runReplPullMode(opts *replPullOptions) error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	eng, err := openEngine(opts.dataDir, store, opts.syncInterval, opts.syncBytes)
+	eng, err := openEngine(opts.dataDir, store, opts.syncInterval, opts.syncBytes, nil)
 	if err != nil {
 		return err
 	}
@@ -1052,12 +1153,13 @@ func openStore(dataDir, siteID string) (*meta.Store, error) {
 	return store, nil
 }
 
-func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, syncBytes int64) (*engine.Engine, error) {
+func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, syncBytes int64, sseProvider *ssecrypto.Provider) (*engine.Engine, error) {
 	return engine.New(engine.Options{
 		Layout:          fs.NewLayout(filepath.Join(dataDir, "objects")),
 		MetaStore:       store,
 		BarrierInterval: syncInterval,
 		BarrierMaxBytes: syncBytes,
+		SSE:             sseProvider,
 	})
 }
 

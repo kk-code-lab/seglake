@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
@@ -67,11 +68,26 @@ const (
 func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	encrypt, reqErr := sseS3Requested(r)
+	if reqErr != nil {
+		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, resource)
+		return
+	}
+	if encrypt && !h.Engine.SSES3Enabled() {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, resource)
+		return
+	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
 		if h.Meta == nil {
 			return fmt.Errorf("meta store not configured")
 		}
-		return h.Meta.CreateMultipartUploadTx(ctx, tx, bucket, key, uploadID, contentType)
+		if err := h.Meta.CreateMultipartUploadTx(ctx, tx, bucket, key, uploadID, contentType); err != nil {
+			return err
+		}
+		if encrypt {
+			return h.Meta.SetMultipartUploadEncryptionTx(ctx, tx, uploadID, ssecrypto.ModeSSES3, ssecrypto.AlgorithmAES256GCM, "")
+		}
+		return nil
 	}); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
 		return
@@ -82,6 +98,9 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 		UploadID: uploadID,
 	}
 	w.Header().Set("Content-Type", "application/xml")
+	if encrypt {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	}
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(resp)
 }
@@ -92,7 +111,8 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid part number", requestID, r.URL.Path)
 		return
 	}
-	if _, err := h.Meta.GetMultipartUpload(ctx, uploadID); err != nil {
+	upload, err := h.Meta.GetMultipartUpload(ctx, uploadID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErrorWithResource(w, http.StatusNotFound, "NoSuchUpload", "upload not found", requestID, r.URL.Path)
 			return
@@ -166,34 +186,33 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	if verifyPayload || len(expectedMD5) > 0 {
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
-	_, result, err := h.Engine.PutObjectWithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
-		if h.Meta == nil {
-			return fmt.Errorf("meta store not configured")
-		}
-		return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
-	})
+	var result *engine.PutResult
+	if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSES3) {
+		_, result, err = h.Engine.PutObjectSSES3WithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+			if h.Meta == nil {
+				return fmt.Errorf("meta store not configured")
+			}
+			return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
+		})
+	} else {
+		_, result, err = h.Engine.PutObjectWithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+			if h.Meta == nil {
+				return fmt.Errorf("meta store not configured")
+			}
+			return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
+		})
+	}
 	if err != nil {
-		switch {
-		case errors.Is(err, errPayloadHashMismatch):
-			writeErrorWithResource(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "payload hash mismatch", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errInvalidDigest):
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidDigest", "invalid payload hash", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errBadDigest):
-			writeErrorWithResource(w, http.StatusBadRequest, "BadDigest", "content-md5 mismatch", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errInvalidContentLength):
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, r.URL.Path)
-			return
-		case errors.Is(err, errEntityTooLarge):
-			writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, r.URL.Path)
+		if writeObjectWriteError(w, err, requestID, r.URL.Path) {
 			return
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
 	w.Header().Set("ETag", `"`+result.ETag+`"`)
+	if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSES3) {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -292,6 +311,8 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	}
 
 	chunks := make([]manifest.ChunkRef, 0, len(ordered))
+	var finalEnc *manifest.Encryption
+	nextKeyRef := uint32(0)
 	totalSize := int64(0)
 	chunkIndex := 0
 	for _, part := range ordered {
@@ -304,8 +325,30 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "part size mismatch", requestID, r.URL.Path)
 			return
 		}
+		keyMap := map[uint32]uint32{}
+		if partManifest.Encrypted() {
+			if finalEnc == nil {
+				finalEnc = &manifest.Encryption{
+					Mode:          partManifest.Encryption.Mode,
+					Algorithm:     partManifest.Encryption.Algorithm,
+					WrapAlgorithm: partManifest.Encryption.WrapAlgorithm,
+					AADScheme:     partManifest.Encryption.AADScheme,
+				}
+			}
+			for _, keyEntry := range partManifest.Encryption.Keys {
+				newEntry := keyEntry
+				newEntry.KeyRef = nextKeyRef
+				keyMap[keyEntry.KeyRef] = nextKeyRef
+				finalEnc.Keys = append(finalEnc.Keys, newEntry)
+				nextKeyRef++
+			}
+		}
 		for _, ch := range partManifest.Chunks {
-			ch.Index = chunkIndex
+			if partManifest.Encrypted() {
+				ch.KeyRef = keyMap[ch.KeyRef]
+			} else {
+				ch.Index = chunkIndex
+			}
 			chunkIndex++
 			chunks = append(chunks, ch)
 		}
@@ -322,7 +365,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	_, result, err := h.Engine.PutManifestWithCommit(ctx, upload.Bucket, upload.Key, upload.ContentType, totalSize, multiETag, chunks, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+	_, result, err := h.Engine.PutManifestWithCommitEx(ctx, upload.Bucket, upload.Key, upload.ContentType, totalSize, multiETag, chunks, finalEnc, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 		if h.Meta == nil {
 			return fmt.Errorf("meta store not configured")
 		}
@@ -341,6 +384,9 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 		ETag:   `"` + multiETag + `"`,
 	}
 	w.Header().Set("ETag", `"`+multiETag+`"`)
+	if finalEnc != nil {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	}
 	if result != nil {
 		_ = result
 	}

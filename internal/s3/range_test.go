@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
@@ -67,6 +68,16 @@ func TestRangeHeadReturnsPartialContent(t *testing.T) {
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
+	return newTestHandlerWithSSE(t, testSSEProvider(t))
+}
+
+func newTestHandlerWithoutSSE(t *testing.T) *Handler {
+	t.Helper()
+	return newTestHandlerWithSSE(t, nil)
+}
+
+func newTestHandlerWithSSE(t *testing.T, provider *ssecrypto.Provider) *Handler {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
 	if err != nil {
@@ -75,6 +86,7 @@ func newTestHandler(t *testing.T) *Handler {
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(filepath.Join(dir, "data")),
 		MetaStore: store,
+		SSE:       provider,
 	})
 	if err != nil {
 		_ = store.Close()
@@ -84,6 +96,19 @@ func newTestHandler(t *testing.T) *Handler {
 		_ = store.Close()
 	})
 	return &Handler{Engine: eng, Meta: store}
+}
+
+func testSSEProvider(t *testing.T) *ssecrypto.Provider {
+	t.Helper()
+	key := ssecrypto.Key{ID: "local:v1"}
+	for i := range key.Bytes {
+		key.Bytes[i] = byte(i + 1)
+	}
+	provider, err := ssecrypto.NewProvider(key.ID, []ssecrypto.Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	return provider
 }
 
 func putObject(t *testing.T, h *Handler, bucket, key, body string) {

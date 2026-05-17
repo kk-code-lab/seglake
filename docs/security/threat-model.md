@@ -15,12 +15,14 @@ Update assumptions and add mitigations/tests as the system evolves.
 - Request limits (recommended): max object size 5 GiB (app); proxy body limit 5.1 GiB; header size 16–32 KB; URL/query length 16–32 KB; timeouts tuned to expected throughput.
 - Proxy/WAF global rate limits (baseline): per-IP 200 RPS (burst 400), per-key 500 RPS (burst 1000), global 2000 RPS (burst 4000).
 - Replication peers: auth required if API keys exist; repl client can presign via repl-access-key/secret-key.
- - Compatibility-first defaults: replay protection is off unless explicitly enabled; Content-MD5 is optional; SigV4 UNSIGNED-PAYLOAD is allowed by default for client compatibility.
+- Compatibility-first defaults: replay protection is off unless explicitly enabled; Content-MD5 is optional; SigV4 UNSIGNED-PAYLOAD is allowed by default for client compatibility.
+- SSE-S3 is explicit per request in the MVP. Plaintext writes remain the default unless `x-amz-server-side-encryption: AES256` is present.
 
 ## Assets
 - Object data (confidentiality, integrity, availability).
 - Metadata (policies, versions, oplog, replication state).
 - Credentials (API keys, secrets).
+- SSE-S3 KEKs and wrapped DEK metadata.
 - Service availability.
 
 ## Threats and Mitigations
@@ -30,6 +32,8 @@ Update assumptions and add mitigations/tests as the system evolves.
 | Object data | S3 API (PUT/GET) | Tampering/Info disclosure | Read/write without auth | SigV4; public buckets require explicit allow + policy | code | auth enabled only when keys exist; public buckets off | `-access-key/-secret-key` or stored API keys; `-public-buckets` (default empty) | `internal/s3/e2e_test.go`, `internal/s3/policy_integration_test.go`, `internal/s3/authz_test.go` |
 | Metadata | On-disk formats | Tampering/DoS | Corrupt manifest/segment -> crash | Checksums, decoder validation | code | on | N/A | `internal/storage/manifest/codec_fuzz_test.go`, `internal/storage/segment/format_fuzz_test.go`, `internal/storage/segment/index_fuzz_test.go`, `internal/ops/crash_harness_test.go` |
 | Credentials | Config/env/API keys | Spoofing/Disclosure | Key leak -> full access | Least privilege; operational rotation and secret handling | code + ops | least privilege on; rotation ops-only | Ops practices in `docs/ops.md` | Ops runbook (`docs/ops.md`) + periodic secrets review |
+| Object data / KEKs | Segments/manifests/config | Offline disclosure | Attacker copies data dir without KEKs | SSE-S3 envelope encryption for requests with `x-amz-server-side-encryption: AES256`; KEKs are external config and are not stored in SQLite/manifests | code + ops | off unless requested per object | `-sse-s3-enabled`, `-sse-s3-active-key`, `-sse-s3-kek`; back up KEKs separately | `internal/sse`, `internal/storage/engine`, `internal/s3` tests |
+| Object data / KEKs | Runtime process | Key compromise | Compromised host/process reads KEK or plaintext during request | Operational host hardening; do not log key material; prefer secret manager/file permissions | ops | N/A | SSE-S3 does not protect against a compromised running Seglake process | Ops runbook (`docs/ops.md`) |
 | Auth (SigV4) | Headers/query | Spoofing/Replay | Bad canonicalization | Strict canonicalization; optional replay cache for presigned requests (opt-in) | code | canonicalization on; replay off | Replay defaults: `-replay-ttl=0`, `-replay-block=false` | `internal/s3/auth_test.go`, `internal/s3/sigv4_test.go`, `internal/s3/handler_replay_test.go`, `internal/s3/replay_test.go`, `internal/s3/auth_fuzz_test.go` |
 | Policies | Policy endpoints | Elevation/Disclosure | Policy parse bug bypass; read/modify policies without auth | Validate inputs, deny-by-default; authz on Get/Put/DeleteBucketPolicy | code | on | `GET/PUT/DELETE /<bucket>?policy` requires policy allow | `internal/s3/policy_test.go`, `internal/s3/policy_integration_test.go` |
 | Bucket names | ListBuckets (`GET /`) | Info disclosure | Enumerate buckets outside tenant scope | Policy enforcement + per-key bucket allowlist filter | code | allowlist filter applies when configured; otherwise all buckets visible | Allowlist set via `keys allow-bucket` | `internal/s3/policy_integration_test.go` |

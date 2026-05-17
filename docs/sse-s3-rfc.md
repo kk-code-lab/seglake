@@ -1,6 +1,6 @@
 # RFC: SSE-S3 support
 
-Status: Draft  
+Status: Accepted / MVP implemented
 Scope: Seglake S3 API, storage format, metadata, ops, and security model.  
 Target: SSE-S3 MVP before considering SSE-C or external KMS integrations.
 
@@ -8,7 +8,7 @@ Target: SSE-S3 MVP before considering SSE-C or external KMS integrations.
 
 ## 1) Summary
 
-This RFC proposes adding server-side encryption with Seglake-managed keys, exposed through the S3-compatible `x-amz-server-side-encryption: AES256` API surface. The implementation should use envelope encryption: each object version gets a fresh data encryption key (DEK), object bytes are encrypted with that DEK, and the DEK is stored only as an encrypted data encryption key (EDEK) wrapped by a configured key encryption key (KEK).
+This RFC describes server-side encryption with Seglake-managed keys, exposed through the S3-compatible `x-amz-server-side-encryption: AES256` API surface. The implementation uses envelope encryption: each single PUT or CopyObject write gets a fresh data encryption key (DEK), object bytes are encrypted with that DEK, and the DEK is stored only as an encrypted data encryption key (EDEK) wrapped by a configured key encryption key (KEK). Multipart-created objects may contain one DEK per uploaded part in the MVP because CompleteMultipartUpload preserves encrypted part chunks without decrypting and rewriting them.
 
 The MVP should preserve Seglake's current durability model, range GET support, manifests, append-only segments, versioning, crash recovery, and ops workflows. It should not implement SSE-C or SSE-KMS yet.
 
@@ -39,7 +39,7 @@ Sources:
 
 - Support explicit SSE-S3 object creation with `x-amz-server-side-encryption: AES256`.
 - Encrypt object payload bytes at rest in segment files.
-- Use a fresh DEK per object version.
+- Use a fresh DEK per object write; multipart-created versions may carry multiple per-part DEKs in manifest v3.
 - Store only EDEKs, never plaintext DEKs or KEKs, in manifests/SQLite.
 - Preserve single-range and multi-range GET without decrypting unrelated object data.
 - Preserve current durability ordering: segment sync before manifest and metadata visibility.
@@ -160,22 +160,19 @@ This keeps the implementation in the Go standard library. If nonce management or
 Nonce uniqueness is mandatory for AES-GCM. The design should avoid deriving nonces from mutable storage coordinates alone.
 
 MVP recommendation:
-- Generate a random 96-bit object nonce base for each object version.
-- Encrypt each object chunk with a nonce derived from `(object_nonce_base, chunk_index)`.
-- Use a derivation that cannot repeat within one object version. A simple option is to reserve 32 bits for the chunk index and 64 random bits for the object nonce prefix, limiting encrypted chunk count to `2^32 - 1` per object version.
-- Store nonce base/prefix and nonce scheme in the manifest encryption metadata.
+- Generate a random nonce prefix for each encrypted object or uploaded part write.
+- Encrypt each chunk with a nonce derived from `(nonce_prefix, chunk_index)`.
+- Use a derivation that cannot repeat within one DEK. The MVP reserves 32 bits for the chunk index and 64 random bits for the nonce prefix, limiting encrypted chunk count to `2^32 - 1` per DEK.
+- Store nonce prefix and nonce scheme in the manifest encryption metadata.
 
 ### 6.4 Associated authenticated data
 
-Use AEAD AAD to bind ciphertext to object/version/chunk context. MVP AAD should include:
+Use AEAD AAD to bind ciphertext to the stable logical chunk context needed for safe ciphertext-preserving rewrites. MVP AAD includes:
 - format marker, for example `seglake:sse-s3:v1`;
-- bucket;
-- key;
-- version ID;
 - chunk index;
 - plaintext chunk length.
 
-Open question: whether to include segment ID and offset. Including physical location gives stronger tamper binding to current placement, but makes future segment rewrite/compaction more complex because ciphertext would need re-encryption or AAD-compatible relocation metadata. The MVP should not include segment ID/offset in AAD unless the GC rewrite design is updated accordingly.
+Decision: AAD deliberately excludes bucket, key, version ID, segment ID, and offset. This is required by the current virtual-manifest MPU complete path, which composes already encrypted temporary part chunks into the final object manifest, and by GC rewrite, which moves raw ciphertext between segments. Binding to bucket/key/version can be reconsidered only with a pending-upload-DEK design or a rewrite path that decrypts and re-encrypts chunks.
 
 ### 6.5 Key providers
 
@@ -232,8 +229,8 @@ SQLite should store enough encryption metadata for HEAD/list/debug and migration
 Add optional columns or an auxiliary table keyed by `version_id`:
 - `encryption_mode`;
 - `encryption_algorithm`;
-- `encryption_key_id`;
-- `encrypted_dek_sha256` or short diagnostic fingerprint, not the EDEK itself unless needed for ops.
+- `encryption_key_ids`;
+- `encryption_edek_fingerprints`, short diagnostic fingerprints, not EDEKs.
 
 Recommendation: store full EDEK only in the manifest for MVP. Store a fingerprint and key ID in SQLite to support operational queries without duplicating sensitive wrapped-key material.
 
@@ -242,7 +239,7 @@ Decision: do not store full EDEK values in SQLite. SQLite stores only summary fi
 Multipart uploads need a separate metadata extension:
 - `multipart_uploads.encryption_mode`;
 - `multipart_uploads.encryption_algorithm`;
-- possibly a small JSON/text summary of key IDs used by uploaded parts, or rely on part manifests until completion.
+- `multipart_uploads.encryption_key_ids`.
 
 ### 7.3 Segment records
 

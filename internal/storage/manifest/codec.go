@@ -13,6 +13,7 @@ const (
 	magic       = 0x53474c4d // "SGLM"
 	versionV1   = 1
 	versionV2   = 2
+	versionV3   = 3
 	headerLen   = 4 + 4
 	checksumLen = 32
 )
@@ -33,8 +34,14 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 	}
 	buf := make([]byte, 0, 256)
 	buf = appendU32(buf, magic)
-	if m.Bucket != "" || m.Key != "" {
-		buf = appendU32(buf, versionV2)
+	version := versionV1
+	if m.Encrypted() {
+		version = versionV3
+	} else if m.Bucket != "" || m.Key != "" {
+		version = versionV2
+	}
+	buf = appendU32(buf, uint32(version))
+	if version == versionV2 || version == versionV3 {
 		var err error
 		buf, err = appendString(buf, m.Bucket)
 		if err != nil {
@@ -44,8 +51,6 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		buf = appendU32(buf, versionV1)
 	}
 	var err error
 	buf, err = appendString(buf, m.VersionID)
@@ -63,6 +68,19 @@ func (c *BinaryCodec) Encode(w io.Writer, m *Manifest) error {
 		}
 		buf = appendU64(buf, uint64(ch.Offset))
 		buf = appendU32(buf, ch.Len)
+		if version == versionV3 {
+			buf = appendU32(buf, ch.PlainLen)
+			buf = appendU32(buf, ch.KeyRef)
+		}
+	}
+	if version == versionV3 {
+		if m.Encryption == nil {
+			return fmt.Errorf("manifest: v3 requires encryption metadata")
+		}
+		buf, err = appendEncryption(buf, m.Encryption)
+		if err != nil {
+			return err
+		}
 	}
 	checksum := blake3.Sum256(buf[headerLen:])
 	if _, err := w.Write(buf); err != nil {
@@ -91,13 +109,13 @@ func (c *BinaryCodec) Decode(r io.Reader) (*Manifest, error) {
 		return nil, errors.New("manifest: bad magic")
 	}
 	version := binary.LittleEndian.Uint32(body[4:8])
-	if version != versionV1 && version != versionV2 {
+	if version != versionV1 && version != versionV2 && version != versionV3 {
 		return nil, errors.New("manifest: unsupported version")
 	}
 	offset := headerLen
 	bucket := ""
 	key := ""
-	if version == versionV2 {
+	if version == versionV2 || version == versionV3 {
 		var n int
 		var err error
 		bucket, n, err = readString(body[offset:])
@@ -145,24 +163,173 @@ func (c *BinaryCodec) Decode(r io.Reader) (*Manifest, error) {
 		offset += 8
 		length := binary.LittleEndian.Uint32(body[offset:])
 		offset += 4
+		plainLen := uint32(0)
+		keyRef := uint32(0)
+		if version == versionV3 {
+			if offset+8 > len(body) {
+				return nil, errors.New("manifest: truncated encrypted chunk")
+			}
+			plainLen = binary.LittleEndian.Uint32(body[offset:])
+			offset += 4
+			keyRef = binary.LittleEndian.Uint32(body[offset:])
+			offset += 4
+		}
 		chunks = append(chunks, ChunkRef{
 			Index:     index,
 			Hash:      hash,
 			SegmentID: segmentID,
 			Offset:    off,
 			Len:       length,
+			PlainLen:  plainLen,
+			KeyRef:    keyRef,
 		})
+	}
+	var enc *Encryption
+	if version == versionV3 {
+		var n int
+		enc, n, err = readEncryption(body[offset:])
+		if err != nil {
+			return nil, err
+		}
+		offset += n
 	}
 	if offset != len(body) {
 		return nil, errors.New("manifest: trailing bytes")
 	}
 	return &Manifest{
-		Bucket:    bucket,
-		Key:       key,
-		VersionID: versionID,
-		Size:      size,
-		Chunks:    chunks,
+		Bucket:     bucket,
+		Key:        key,
+		VersionID:  versionID,
+		Size:       size,
+		Chunks:     chunks,
+		Encryption: enc,
 	}, nil
+}
+
+func appendEncryption(buf []byte, enc *Encryption) ([]byte, error) {
+	var err error
+	buf, err = appendString(buf, enc.Mode)
+	if err != nil {
+		return nil, err
+	}
+	buf, err = appendString(buf, enc.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+	buf, err = appendString(buf, enc.WrapAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	buf, err = appendString(buf, enc.AADScheme)
+	if err != nil {
+		return nil, err
+	}
+	buf = appendU32(buf, uint32(len(enc.Keys)))
+	for _, key := range enc.Keys {
+		buf = appendU32(buf, key.KeyRef)
+		buf, err = appendString(buf, key.KeyID)
+		if err != nil {
+			return nil, err
+		}
+		buf, err = appendBytes(buf, key.EncryptedDEK)
+		if err != nil {
+			return nil, err
+		}
+		buf, err = appendBytes(buf, key.WrapNonce)
+		if err != nil {
+			return nil, err
+		}
+		buf, err = appendBytes(buf, key.NoncePrefix)
+		if err != nil {
+			return nil, err
+		}
+		buf, err = appendString(buf, key.NonceScheme)
+		if err != nil {
+			return nil, err
+		}
+		buf, err = appendBytes(buf, key.EDEKFingerprint)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buf, nil
+}
+
+func readEncryption(data []byte) (*Encryption, int, error) {
+	offset := 0
+	mode, n, err := readString(data[offset:])
+	if err != nil {
+		return nil, 0, err
+	}
+	offset += n
+	algorithm, n, err := readString(data[offset:])
+	if err != nil {
+		return nil, 0, err
+	}
+	offset += n
+	wrapAlgorithm, n, err := readString(data[offset:])
+	if err != nil {
+		return nil, 0, err
+	}
+	offset += n
+	aadScheme, n, err := readString(data[offset:])
+	if err != nil {
+		return nil, 0, err
+	}
+	offset += n
+	if offset+4 > len(data) {
+		return nil, 0, errors.New("manifest: truncated encryption keys")
+	}
+	keyCount := int(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	keys := make([]KeyEntry, 0, keyCount)
+	for i := 0; i < keyCount; i++ {
+		if offset+4 > len(data) {
+			return nil, 0, errors.New("manifest: truncated encryption key")
+		}
+		keyRef := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		keyID, n, err := readString(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		edek, n, err := readBytes(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		wrapNonce, n, err := readBytes(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		noncePrefix, n, err := readBytes(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		nonceScheme, n, err := readString(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		fp, n, err := readBytes(data[offset:])
+		if err != nil {
+			return nil, 0, err
+		}
+		offset += n
+		keys = append(keys, KeyEntry{
+			KeyRef:          keyRef,
+			KeyID:           keyID,
+			EncryptedDEK:    edek,
+			WrapNonce:       wrapNonce,
+			NoncePrefix:     noncePrefix,
+			NonceScheme:     nonceScheme,
+			EDEKFingerprint: fp,
+		})
+	}
+	return &Encryption{Mode: mode, Algorithm: algorithm, WrapAlgorithm: wrapAlgorithm, AADScheme: aadScheme, Keys: keys}, offset, nil
 }
 
 func appendU32(buf []byte, v uint32) []byte {
@@ -185,6 +352,14 @@ func appendString(buf []byte, v string) ([]byte, error) {
 	return append(buf, v...), nil
 }
 
+func appendBytes(buf []byte, v []byte) ([]byte, error) {
+	if len(v) > int(^uint32(0)) {
+		return nil, errors.New("manifest: bytes too large")
+	}
+	buf = appendU32(buf, uint32(len(v)))
+	return append(buf, v...), nil
+}
+
 func readString(data []byte) (string, int, error) {
 	if len(data) < 4 {
 		return "", 0, errors.New("manifest: truncated string length")
@@ -194,6 +369,19 @@ func readString(data []byte) (string, int, error) {
 		return "", 0, errors.New("manifest: truncated string")
 	}
 	return string(data[4 : 4+n]), 4 + n, nil
+}
+
+func readBytes(data []byte) ([]byte, int, error) {
+	if len(data) < 4 {
+		return nil, 0, errors.New("manifest: truncated bytes length")
+	}
+	n := int(binary.LittleEndian.Uint32(data[:4]))
+	if len(data) < 4+n {
+		return nil, 0, errors.New("manifest: truncated bytes")
+	}
+	out := make([]byte, n)
+	copy(out, data[4:4+n])
+	return out, 4 + n, nil
 }
 
 func equalBytes(a, b []byte) bool {

@@ -22,7 +22,7 @@ Tag legend (order used below):
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [ops][integrity] Add manifest-gc (plan/run) to prune orphan manifests by TTL during maintenance windows (non-automatic).
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
-- [api][integrity][ops] Add SSE-S3 (MVP+): PUT/GET/HEAD + `x-amz-server-side-encryption: AES256`, per-object DEK/EDEK, documented ETag semantics, presign header enforcement, and KEK re-wrap tooling for rotation.
+- [api][integrity][ops] Add SSE-S3 follow-ups: KEK re-wrap tooling for rotation, bucket default encryption, deep encrypted scrub, and optional opaque ETag mode.
 
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
