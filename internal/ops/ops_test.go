@@ -2,8 +2,11 @@ package ops
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +96,69 @@ func TestFsckReportsMissingSegment(t *testing.T) {
 	}
 	if report.MissingSegments == 0 {
 		t.Fatalf("expected missing segments")
+	}
+}
+
+func TestSupportBundleWritesRedactedSSEDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	layout := fs.NewLayout(filepath.Join(dir, "data"))
+	if err := os.MkdirAll(layout.ManifestsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll manifests: %v", err)
+	}
+	if err := os.MkdirAll(layout.SegmentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segments: %v", err)
+	}
+	metaPath := filepath.Join(layout.Root, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	if err := store.RecordPut(ctx, "bucket", "plain", "v-plain", "etag", 1, filepath.Join(layout.ManifestsDir, "plain.man"), ""); err != nil {
+		t.Fatalf("RecordPut plaintext: %v", err)
+	}
+	if err := store.RecordPut(ctx, "bucket", "encrypted", "v-encrypted", "etag", 1, filepath.Join(layout.ManifestsDir, "encrypted.man"), ""); err != nil {
+		t.Fatalf("RecordPut encrypted: %v", err)
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return store.SetVersionEncryptionTx(tx, "v-encrypted", "SSE-KMS", "aws:kms", "vault:orders", "abcdef1234567890")
+	}); err != nil {
+		t.Fatalf("SetVersionEncryption: %v", err)
+	}
+
+	outDir := filepath.Join(dir, "bundle")
+	if _, err := SupportBundle(layout, metaPath, outDir); err != nil {
+		t.Fatalf("SupportBundle: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(outDir, "sse-diagnostics.json"))
+	if err != nil {
+		t.Fatalf("read sse-diagnostics.json: %v", err)
+	}
+	var diag meta.SSEDiagnostics
+	if err := json.Unmarshal(data, &diag); err != nil {
+		t.Fatalf("decode sse diagnostics: %v", err)
+	}
+	if diag.PlaintextActiveVersions != 1 || diag.EncryptedActiveVersions != 1 {
+		t.Fatalf("unexpected diagnostics: %+v", diag)
+	}
+	if diag.ByKeyID["vault:orders"] != 1 || diag.ByEDEKFingerprintPrefix["abcdef12"] != 1 {
+		t.Fatalf("unexpected diagnostic maps: %+v", diag)
+	}
+	body := string(data)
+	for _, forbidden := range []string{
+		"abcdef1234567890",
+		"encrypted_dek",
+		"plain_dek",
+		"kek",
+		"vault_token",
+		"wrap_nonce",
+		"nonce_prefix",
+	} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("support bundle diagnostics leaked %q: %s", forbidden, body)
+		}
 	}
 }
 

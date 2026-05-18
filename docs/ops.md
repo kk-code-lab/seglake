@@ -257,6 +257,8 @@ SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a re
 
 The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, Vault tokens, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so provider credentials are not sent to the running server process. Peers must have the target local KEK or Vault provider access before they can read rewrapped encrypted objects after replication.
 
+Support bundles include `sse-diagnostics.json`, a shallow metadata-only SSE summary with plaintext/encrypted active version counts, damaged encrypted version counts, mode and algorithm counts, key ID counts, and short EDEK fingerprint prefix counts. This file is safe to generate without local KEKs or Vault access: it does not decrypt manifests and does not include KEKs, DEKs, raw EDEKs, Vault tokens, wrap nonces, nonce prefixes, or provider secret material.
+
 Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs or Vault access. Deep scrub is local-only when key-provider config is supplied. With the local provider it uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
 ```
 ./build/seglake -mode scrub -data-dir ./data \
@@ -495,6 +497,7 @@ Notes:
 - `maintenance status` reports `write_inflight` when the server is running.
 - `/v1/meta/stats` includes `maintenance_state`, `maintenance_updated_at`, `write_inflight`, and `maintenance_transitions`.
 - `/v1/meta/stats` includes `live_manifests` (count from meta + MPU parts) and `manifests_total` (all manifest files on disk).
+- `/v1/meta/stats` includes `sse_diagnostics`, the same redacted metadata-only SSE summary used by support bundles. It is observability only; use `scrub -scrub-deep-encrypted` when you need decryptability and AEAD verification.
 - Smoke script: `scripts/maintenance_smoke.sh` (expects a running server and `SEGLAKE_DATA_DIR`).
 - `segctl` helper:
   - `scripts/segctl maintenance status|enable|disable`

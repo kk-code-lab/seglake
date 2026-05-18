@@ -526,6 +526,9 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 			if repl, err := store.GetReplStats(context.Background()); err == nil {
 				_ = writeJSON(filepath.Join(outDir, "repl.json"), repl)
 			}
+			if sseDiagnostics, err := store.GetSSEDiagnostics(context.Background()); err == nil {
+				_ = writeJSON(filepath.Join(outDir, "sse-diagnostics.json"), sseDiagnostics)
+			}
 			_ = store.Close()
 		}
 	}

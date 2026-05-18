@@ -21,7 +21,6 @@ Tag legend (order used below):
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
-- [observability][ops] Add redacted SSE-S3 diagnostics to support bundles and stats: encrypted/plaintext counts, key IDs, EDEK fingerprint prefixes, and missing-key summaries.
 
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).

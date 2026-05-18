@@ -264,7 +264,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `scrub` — verify stored chunk hashes; damaged → `DAMAGED`. With `-scrub-deep-encrypted`, encrypted SSE-S3 chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced local KEKs or Vault provider access.
 - `rebuild-index` — rebuild meta from manifests.
 - `snapshot` — copy meta.db(+wal/shm) + report.
-- `support-bundle` — snapshot + fsck + scrub.
+- `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics.
 - `buckets` — manage bucket entries (admin; bypasses S3 API).
 - `repl-validate` — compare manifests and versions (live + all versions) between two data dirs.
 - `db-integrity-check` — run SQLite integrity_check on meta.db.
@@ -290,7 +290,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - gc_trends: GC history (mode, finished_at, errors, reclaimed/rewritten, reclaim_rate),
 - replication: per-remote {last_pull_hlc, last_push_hlc, push_backlog, push_backlog_bytes, oplog_bytes_total, last_oplog_hlc, pull_lag_seconds, push_lag_seconds},
 - replication_conflicts: conflict count from apply (LWW),
-- replication_bytes_in_total: total bytes pulled by replication (manifests + chunk data).
+- replication_bytes_in_total: total bytes pulled by replication (manifests + chunk data),
+- sse_diagnostics: redacted metadata-only summary with plaintext/encrypted active version counts, damaged encrypted version count, counts by encryption mode, algorithm, key ID, and short EDEK fingerprint prefix. It is derived from SQLite version summaries and does not read manifests, decrypt objects, require KEKs/Vault, or expose KEKs, DEKs, raw EDEKs, Vault tokens, or nonce bytes.
 
 ### 5.3 Crash harness
 - Integration test (optional): `go test -tags crashharness ./internal/ops -run TestCrashHarness`

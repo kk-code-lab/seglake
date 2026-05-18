@@ -3,8 +3,10 @@ package meta
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -203,6 +205,75 @@ func TestStatsIncludesReplBytes(t *testing.T) {
 	}
 	if stats.ReplBytesInTotal != 128 {
 		t.Fatalf("expected repl bytes 128, got %d", stats.ReplBytesInTotal)
+	}
+}
+
+func TestGetSSEDiagnosticsAggregatesVersionSummaries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	if err := store.RecordPut(ctx, "b1", "plain", "v-plain", "etag", 1, "/tmp/plain", ""); err != nil {
+		t.Fatalf("RecordPut plaintext: %v", err)
+	}
+	if err := store.RecordPut(ctx, "b1", "sse-s3", "v-sse-s3", "etag", 1, "/tmp/sse-s3", ""); err != nil {
+		t.Fatalf("RecordPut sse-s3: %v", err)
+	}
+	if err := store.RecordPut(ctx, "b1", "sse-kms", "v-sse-kms", "etag", 1, "/tmp/sse-kms", ""); err != nil {
+		t.Fatalf("RecordPut sse-kms: %v", err)
+	}
+	if err := store.RecordPut(ctx, "b1", "damaged", "v-damaged", "etag", 1, "/tmp/damaged", ""); err != nil {
+		t.Fatalf("RecordPut damaged: %v", err)
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		if err := store.SetVersionEncryptionTx(tx, "v-sse-s3", "SSE-S3", "AES-256-GCM", "local:v1,local:v2", "abcdef1234567890,0123456789abcdef"); err != nil {
+			return err
+		}
+		if err := store.SetVersionEncryptionTx(tx, "v-sse-kms", "SSE-KMS", "aws:kms", "vault:orders", "fedcba9876543210"); err != nil {
+			return err
+		}
+		return store.SetVersionEncryptionTx(tx, "v-damaged", "SSE-S3", "AES-256-GCM", "local:v1", "1111111122222222")
+	}); err != nil {
+		t.Fatalf("SetVersionEncryption: %v", err)
+	}
+	if err := store.MarkDamaged(ctx, "v-damaged"); err != nil {
+		t.Fatalf("MarkDamaged: %v", err)
+	}
+
+	diag, err := store.GetSSEDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("GetSSEDiagnostics: %v", err)
+	}
+	if diag.PlaintextActiveVersions != 1 || diag.EncryptedActiveVersions != 2 || diag.DamagedEncryptedVersions != 1 {
+		t.Fatalf("unexpected version counts: %+v", diag)
+	}
+	if diag.ByMode["SSE-S3"] != 1 || diag.ByMode["SSE-KMS"] != 1 {
+		t.Fatalf("unexpected mode counts: %+v", diag.ByMode)
+	}
+	if diag.ByAlgorithm["AES-256-GCM"] != 1 || diag.ByAlgorithm["aws:kms"] != 1 {
+		t.Fatalf("unexpected algorithm counts: %+v", diag.ByAlgorithm)
+	}
+	for _, keyID := range []string{"local:v1", "local:v2", "vault:orders"} {
+		if diag.ByKeyID[keyID] != 1 {
+			t.Fatalf("expected key %q count 1, got %+v", keyID, diag.ByKeyID)
+		}
+	}
+	for _, prefix := range []string{"abcdef12", "01234567", "fedcba98"} {
+		if diag.ByEDEKFingerprintPrefix[prefix] != 1 {
+			t.Fatalf("expected fingerprint prefix %q count 1, got %+v", prefix, diag.ByEDEKFingerprintPrefix)
+		}
+	}
+	data, err := json.Marshal(diag)
+	if err != nil {
+		t.Fatalf("Marshal diagnostics: %v", err)
+	}
+	if strings.Contains(string(data), "abcdef1234567890") || strings.Contains(string(data), "fedcba9876543210") {
+		t.Fatalf("diagnostics leaked full fingerprint: %s", data)
 	}
 }
 

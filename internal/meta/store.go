@@ -3831,24 +3831,36 @@ type ReportOps struct {
 
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
-	Objects            int64  `json:"objects"`
-	Segments           int64  `json:"segments"`
-	BytesLive          int64  `json:"bytes_live"`
-	LastFsckAt         string `json:"last_fsck_at,omitempty"`
-	LastFsckErrors     int    `json:"last_fsck_errors,omitempty"`
-	LastScrubAt        string `json:"last_scrub_at,omitempty"`
-	LastScrubErrors    int    `json:"last_scrub_errors,omitempty"`
-	LastGCAt           string `json:"last_gc_at,omitempty"`
-	LastGCErrors       int    `json:"last_gc_errors,omitempty"`
-	LastGCReclaimed    int64  `json:"last_gc_reclaimed_bytes,omitempty"`
-	LastGCRewritten    int64  `json:"last_gc_rewritten_bytes,omitempty"`
-	LastGCNewSegments  int    `json:"last_gc_new_segments,omitempty"`
-	LastMPUGCAt        string `json:"last_mpu_gc_at,omitempty"`
-	LastMPUGCErrors    int    `json:"last_mpu_gc_errors,omitempty"`
-	LastMPUGCDeleted   int    `json:"last_mpu_gc_deleted,omitempty"`
-	LastMPUGCReclaimed int64  `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
-	ReplConflicts      int64  `json:"repl_conflicts,omitempty"`
-	ReplBytesInTotal   int64  `json:"repl_bytes_in_total,omitempty"`
+	Objects            int64          `json:"objects"`
+	Segments           int64          `json:"segments"`
+	BytesLive          int64          `json:"bytes_live"`
+	LastFsckAt         string         `json:"last_fsck_at,omitempty"`
+	LastFsckErrors     int            `json:"last_fsck_errors,omitempty"`
+	LastScrubAt        string         `json:"last_scrub_at,omitempty"`
+	LastScrubErrors    int            `json:"last_scrub_errors,omitempty"`
+	LastGCAt           string         `json:"last_gc_at,omitempty"`
+	LastGCErrors       int            `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed    int64          `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten    int64          `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments  int            `json:"last_gc_new_segments,omitempty"`
+	LastMPUGCAt        string         `json:"last_mpu_gc_at,omitempty"`
+	LastMPUGCErrors    int            `json:"last_mpu_gc_errors,omitempty"`
+	LastMPUGCDeleted   int            `json:"last_mpu_gc_deleted,omitempty"`
+	LastMPUGCReclaimed int64          `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
+	ReplConflicts      int64          `json:"repl_conflicts,omitempty"`
+	ReplBytesInTotal   int64          `json:"repl_bytes_in_total,omitempty"`
+	SSEDiagnostics     SSEDiagnostics `json:"sse_diagnostics"`
+}
+
+// SSEDiagnostics summarizes redacted encryption state from metadata only.
+type SSEDiagnostics struct {
+	PlaintextActiveVersions  int64            `json:"plaintext_active_versions"`
+	EncryptedActiveVersions  int64            `json:"encrypted_active_versions"`
+	DamagedEncryptedVersions int64            `json:"damaged_encrypted_versions"`
+	ByMode                   map[string]int64 `json:"by_mode,omitempty"`
+	ByAlgorithm              map[string]int64 `json:"by_algorithm,omitempty"`
+	ByKeyID                  map[string]int64 `json:"by_key_id,omitempty"`
+	ByEDEKFingerprintPrefix  map[string]int64 `json:"by_edek_fingerprint_prefix,omitempty"`
 }
 
 // ReplStat describes replication state and lag per remote.
@@ -3888,6 +3900,11 @@ func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM versions WHERE state='ACTIVE'").Scan(&stats.BytesLive); err != nil {
 		return nil, err
 	}
+	sseDiagnostics, err := s.GetSSEDiagnostics(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats.SSEDiagnostics = *sseDiagnostics
 	_ = s.db.QueryRowContext(ctx, `
 SELECT finished_at, errors
 FROM ops_runs
@@ -3921,6 +3938,88 @@ LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDelet
 		}
 	}
 	return stats, nil
+}
+
+// GetSSEDiagnostics returns redacted encryption diagnostics from version summaries.
+func (s *Store) GetSSEDiagnostics(ctx context.Context) (*SSEDiagnostics, error) {
+	diag := &SSEDiagnostics{
+		ByMode:                  map[string]int64{},
+		ByAlgorithm:             map[string]int64{},
+		ByKeyID:                 map[string]int64{},
+		ByEDEKFingerprintPrefix: map[string]int64{},
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM versions
+WHERE state='ACTIVE' AND COALESCE(encryption_mode,'')=''`).Scan(&diag.PlaintextActiveVersions); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM versions
+WHERE state='ACTIVE' AND COALESCE(encryption_mode,'')<>''`).Scan(&diag.EncryptedActiveVersions); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM versions
+WHERE state='DAMAGED' AND COALESCE(encryption_mode,'')<>''`).Scan(&diag.DamagedEncryptedVersions); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,''), COALESCE(encryption_edek_fingerprints,'')
+FROM versions
+WHERE state='ACTIVE' AND COALESCE(encryption_mode,'')<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var mode, algorithm, keyIDs, fingerprints string
+		if err := rows.Scan(&mode, &algorithm, &keyIDs, &fingerprints); err != nil {
+			return nil, err
+		}
+		if mode != "" {
+			diag.ByMode[mode]++
+		}
+		if algorithm != "" {
+			diag.ByAlgorithm[algorithm]++
+		}
+		for _, keyID := range splitSummaryCSV(keyIDs) {
+			diag.ByKeyID[keyID]++
+		}
+		for _, fingerprint := range splitSummaryCSV(fingerprints) {
+			diag.ByEDEKFingerprintPrefix[edekFingerprintPrefix(fingerprint)]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return diag, nil
+}
+
+func splitSummaryCSV(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func edekFingerprintPrefix(raw string) string {
+	raw = strings.TrimSpace(raw)
+	const prefixLen = 8
+	if len(raw) <= prefixLen {
+		return raw
+	}
+	return raw[:prefixLen]
 }
 
 // GetReplStats returns replication state and lag metrics.
