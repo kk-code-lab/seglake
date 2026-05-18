@@ -101,12 +101,7 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 		UploadID: uploadID,
 	}
 	w.Header().Set("Content-Type", "application/xml")
-	if encrypt.SSES3() {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
-	} else if encrypt.SSEKMS() {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
-		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", encrypt.KeyID)
-	}
+	setEffectiveEncryptionResponseHeaders(w.Header(), encrypt)
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(resp)
 }
@@ -223,14 +218,7 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	w.Header().Set("ETag", `"`+result.ETag+`"`)
-	if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSES3) {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
-	} else if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSEKMS) {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
-		if upload.EncryptionKeyIDs != "" {
-			w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", upload.EncryptionKeyIDs)
-		}
-	}
+	setEncryptionResponseHeaders(w.Header(), upload.EncryptionMode, upload.EncryptionKeyIDs)
 	w.WriteHeader(http.StatusOK)
 }
 

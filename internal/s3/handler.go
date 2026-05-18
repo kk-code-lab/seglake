@@ -676,6 +676,9 @@ func writeSSEProviderError(w http.ResponseWriter, err error, requestID, resource
 }
 
 func setEncryptionResponseHeaders(header http.Header, mode, keyID string) {
+	if strings.Contains(keyID, ",") {
+		keyID = firstCSVValue(keyID)
+	}
 	switch {
 	case strings.EqualFold(mode, ssecrypto.ModeSSES3):
 		header.Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
@@ -684,6 +687,15 @@ func setEncryptionResponseHeaders(header http.Header, mode, keyID string) {
 		if keyID != "" {
 			header.Set("x-amz-server-side-encryption-aws-kms-key-id", keyID)
 		}
+	}
+}
+
+func setEffectiveEncryptionResponseHeaders(header http.Header, effective effectiveEncryption) {
+	switch {
+	case effective.SSES3():
+		setEncryptionResponseHeaders(header, ssecrypto.ModeSSES3, "")
+	case effective.SSEKMS():
+		setEncryptionResponseHeaders(header, ssecrypto.ModeSSEKMS, effective.KeyID)
 	}
 }
 
@@ -1202,8 +1214,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	setEncryptionResponseHeaders(w.Header(), result.EncryptionMode, result.EncryptionKeyID)
 	if encrypt.SSEKMS() && result.EncryptionKeyID == "" {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
-		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", encrypt.KeyID)
+		setEffectiveEncryptionResponseHeaders(w.Header(), encrypt)
 	}
 	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
@@ -1262,14 +1273,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	if objMeta.ContentType != "" {
 		w.Header().Set("Content-Type", objMeta.ContentType)
 	}
-	if strings.EqualFold(objMeta.EncryptionMode, ssecrypto.ModeSSES3) {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
-	} else if strings.EqualFold(objMeta.EncryptionMode, ssecrypto.ModeSSEKMS) {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
-		if objMeta.EncryptionKeyIDs != "" {
-			w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", firstCSVValue(objMeta.EncryptionKeyIDs))
-		}
-	}
+	setEncryptionResponseHeaders(w.Header(), objMeta.EncryptionMode, objMeta.EncryptionKeyIDs)
 	if objMeta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, objMeta.LastModified); err == nil {
 			w.Header().Set("Last-Modified", formatHTTPTime(t))
