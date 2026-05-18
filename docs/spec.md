@@ -261,7 +261,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 5.1 Modes
 - `status` — count of manifests and segments.
 - `fsck` — consistency of manifests and segment boundaries.
-- `scrub` — verify chunk hashes; damaged → `DAMAGED`.
+- `scrub` — verify stored chunk hashes; damaged → `DAMAGED`. With `-scrub-deep-encrypted`, encrypted SSE-S3 chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced KEKs.
 - `rebuild-index` — rebuild meta from manifests.
 - `snapshot` — copy meta.db(+wal/shm) + report.
 - `support-bundle` — snapshot + fsck + scrub.

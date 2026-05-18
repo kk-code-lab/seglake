@@ -159,6 +159,7 @@ type opsOptions struct {
 	replCompareDir     string
 	fsckAllManifests   bool
 	scrubAllManifests  bool
+	scrubDeepEncrypted bool
 	gcMinAge           time.Duration
 	gcForce            bool
 	gcWarnSegments     int
@@ -181,6 +182,7 @@ type opsOptions struct {
 	mpuMaxUploads      int
 	mpuMaxReclaim      int64
 	dbReindexTable     string
+	sseS3ActiveKey     string
 	sseS3KEKs          multiString
 	sseS3KEKsEnv       string
 	sseS3SingleKeyB64  string
@@ -707,6 +709,7 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
 	fs.BoolVar(&opts.fsckAllManifests, "fsck-all-manifests", false, "Fsck scan all manifests instead of live set from meta")
 	fs.BoolVar(&opts.scrubAllManifests, "scrub-all-manifests", false, "Scrub scan all manifests instead of live set from meta")
+	fs.BoolVar(&opts.scrubDeepEncrypted, "scrub-deep-encrypted", false, "Scrub encrypted SSE-S3 chunks by unwrapping DEKs and verifying AEAD tags")
 	fs.DurationVar(&opts.gcMinAge, "gc-min-age", 24*time.Hour, "GC minimum segment age")
 	fs.BoolVar(&opts.gcForce, "gc-force", false, "GC delete segments (required for gc-run)")
 	fs.IntVar(&opts.gcWarnSegments, "gc-warn-segments", 100, "GC warn when candidates exceed this count (0 disables)")
@@ -729,6 +732,7 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.IntVar(&opts.mpuMaxUploads, "mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
 	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
+	opts.sseS3ActiveKey = envOrDefault("SEGLAKE_SSE_S3_ACTIVE_KEY", "")
 	fs.Var(&opts.sseS3KEKs, "sse-s3-kek", "SSE-S3 KEK spec key-id=file:/path or key-id=env:NAME (repeatable)")
 	opts.sseS3KEKsEnv = envOrDefault("SEGLAKE_SSE_S3_KEKS", "")
 	opts.sseS3SingleKeyB64 = envOrDefault("SEGLAKE_SSE_S3_KEK_B64", "")
@@ -1008,14 +1012,31 @@ func buildSSEProvider(opts *serverOptions) (*ssecrypto.Provider, error) {
 
 func buildSSEProviderFrom(activeKey string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
 	activeKey = strings.TrimSpace(activeKey)
+	keys, err := loadSSEKeys(activeKey, kekSpecs, kekEnv, singleKeyB64)
+	if err != nil {
+		return nil, err
+	}
+	return ssecrypto.NewProvider(activeKey, keys)
+}
+
+func buildSSELookupProviderFrom(singleKeyID string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
+	keys, err := loadSSEKeys(singleKeyID, kekSpecs, kekEnv, singleKeyB64)
+	if err != nil {
+		return nil, err
+	}
+	return ssecrypto.NewLookupProvider(keys)
+}
+
+func loadSSEKeys(singleKeyID string, kekSpecs []string, kekEnv, singleKeyB64 string) ([]ssecrypto.Key, error) {
+	singleKeyID = strings.TrimSpace(singleKeyID)
 	specs := make([]string, 0, len(kekSpecs)+4)
 	specs = append(specs, kekSpecs...)
 	specs = append(specs, splitComma(kekEnv)...)
 	if singleKeyB64 != "" {
-		if activeKey == "" {
+		if singleKeyID == "" {
 			return nil, fmt.Errorf("sse-s3: active key required with SEGLAKE_SSE_S3_KEK_B64")
 		}
-		specs = append(specs, activeKey+"=inline:"+singleKeyB64)
+		specs = append(specs, singleKeyID+"=inline:"+singleKeyB64)
 	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("sse-s3: at least one -sse-s3-kek or SEGLAKE_SSE_S3_KEKS entry required")
@@ -1028,7 +1049,7 @@ func buildSSEProviderFrom(activeKey string, kekSpecs []string, kekEnv, singleKey
 		}
 		keys = append(keys, key)
 	}
-	return ssecrypto.NewProvider(activeKey, keys)
+	return keys, nil
 }
 
 func parseSSEKeySpec(spec string) (ssecrypto.Key, error) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
@@ -56,6 +57,12 @@ type Report struct {
 	CompareVersionsExtra    int             `json:"compare_versions_extra,omitempty"`
 	CompareVersionsLocal    int             `json:"compare_versions_local,omitempty"`
 	CompareVersionsRemote   int             `json:"compare_versions_remote,omitempty"`
+	EncryptedManifests      int             `json:"encrypted_manifests,omitempty"`
+	EncryptedChunks         int             `json:"encrypted_chunks,omitempty"`
+	MissingKEKs             int             `json:"missing_keks,omitempty"`
+	EDEKUnwrapFailures      int             `json:"edek_unwrap_failures,omitempty"`
+	AEADFailures            int             `json:"aead_failures,omitempty"`
+	EncryptedMetadataErrors int             `json:"encrypted_metadata_errors,omitempty"`
 }
 
 const reportSchemaVersion = 1
@@ -85,6 +92,12 @@ type MPUGCGuardrails struct {
 	WarnReclaimedBytes int64
 	MaxUploads         int
 	MaxReclaimedBytes  int64
+}
+
+type ScrubOptions struct {
+	LiveOnly      bool
+	DeepEncrypted bool
+	SSEProvider   *ssecrypto.Provider
 }
 
 func (r *Report) addWarning(msg string) {
@@ -275,8 +288,13 @@ func Fsck(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 
 // Scrub verifies chunk hashes against stored data.
 func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
+	return ScrubWithOptions(layout, metaPath, ScrubOptions{LiveOnly: liveOnly})
+}
+
+// ScrubWithOptions verifies chunk hashes and can optionally validate SSE-S3 AEAD tags.
+func ScrubWithOptions(layout fs.Layout, metaPath string, opts ScrubOptions) (*Report, error) {
 	report := newReport("scrub")
-	manifests, store, err := listManifestPaths(layout, metaPath, liveOnly, report)
+	manifests, store, err := listManifestPaths(layout, metaPath, opts.LiveOnly, report)
 	if err != nil {
 		return nil, err
 	}
@@ -311,11 +329,18 @@ func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 			addError(err)
 			continue
 		}
+		deep := newDeepScrubState(layout, man, opts.SSEProvider, report, store)
+		if opts.DeepEncrypted && man.Encrypted() {
+			report.EncryptedManifests++
+		}
 		for _, ch := range man.Chunks {
 			segPath := layout.SegmentPath(ch.SegmentID)
 			f, err := os.Open(segPath)
 			if err != nil {
 				addError(err)
+				if opts.DeepEncrypted && man.Encrypted() && store != nil {
+					_ = store.MarkDamaged(context.Background(), man.VersionID)
+				}
 				continue
 			}
 			buf := make([]byte, ch.Len)
@@ -323,10 +348,16 @@ func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 			_ = f.Close()
 			if err != nil && err != io.EOF {
 				addError(err)
+				if opts.DeepEncrypted && man.Encrypted() && store != nil {
+					_ = store.MarkDamaged(context.Background(), man.VersionID)
+				}
 				continue
 			}
 			if n != int(ch.Len) {
 				addError(fmt.Errorf("short read segment=%s", ch.SegmentID))
+				if opts.DeepEncrypted && man.Encrypted() && store != nil {
+					_ = store.MarkDamaged(context.Background(), man.VersionID)
+				}
 				continue
 			}
 			if segmentHash := segment.HashChunk(buf); segmentHash != ch.Hash {
@@ -334,6 +365,9 @@ func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 				if store != nil {
 					_ = store.MarkDamaged(context.Background(), man.VersionID)
 				}
+			}
+			if opts.DeepEncrypted && man.Encrypted() {
+				deep.verifyChunk(ch, buf, addError)
 			}
 		}
 	}
@@ -343,6 +377,108 @@ func Scrub(layout fs.Layout, metaPath string, liveOnly bool) (*Report, error) {
 		_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
 	}
 	return report, nil
+}
+
+type deepScrubState struct {
+	layout   fs.Layout
+	manifest *manifest.Manifest
+	provider *ssecrypto.Provider
+	report   *Report
+	store    *meta.Store
+	keys     map[uint32][32]byte
+}
+
+func newDeepScrubState(layout fs.Layout, man *manifest.Manifest, provider *ssecrypto.Provider, report *Report, store *meta.Store) *deepScrubState {
+	return &deepScrubState{
+		layout:   layout,
+		manifest: man,
+		provider: provider,
+		report:   report,
+		store:    store,
+		keys:     make(map[uint32][32]byte),
+	}
+}
+
+func (s *deepScrubState) verifyChunk(ref manifest.ChunkRef, ciphertext []byte, addError func(error)) {
+	if s == nil || s.manifest == nil || s.report == nil {
+		return
+	}
+	s.report.EncryptedChunks++
+	entry, err := scrubManifestKey(s.manifest, ref.KeyRef)
+	if err != nil {
+		s.report.EncryptedMetadataErrors++
+		s.markDamaged()
+		addError(fmt.Errorf("encrypted metadata invalid version=%s key_ref=%d", s.manifest.VersionID, ref.KeyRef))
+		return
+	}
+	dek, ok := s.keys[ref.KeyRef]
+	if !ok {
+		if s.provider == nil {
+			s.report.MissingKEKs++
+			s.markDamaged()
+			addError(fmt.Errorf("missing SSE-S3 KEK version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
+			return
+		}
+		kek, err := s.provider.LookupKey(entry.KeyID)
+		if err != nil {
+			if errors.Is(err, ssecrypto.ErrNoSuchKey) || errors.Is(err, ssecrypto.ErrDisabled) {
+				s.report.MissingKEKs++
+				s.markDamaged()
+				addError(fmt.Errorf("missing SSE-S3 KEK version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
+				return
+			}
+			s.report.EncryptedMetadataErrors++
+			s.markDamaged()
+			addError(fmt.Errorf("SSE-S3 KEK lookup failed version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
+			return
+		}
+		dek, err = ssecrypto.UnwrapDEK(kek, entry.WrapNonce, entry.EncryptedDEK, ssecrypto.WrapAAD(entry.KeyID))
+		if err != nil {
+			s.report.EDEKUnwrapFailures++
+			s.markDamaged()
+			addError(fmt.Errorf("SSE-S3 EDEK unwrap failed version=%s key_id=%s key_ref=%d", s.manifest.VersionID, entry.KeyID, ref.KeyRef))
+			return
+		}
+		s.keys[ref.KeyRef] = dek
+	}
+	aead, err := ssecrypto.NewGCM(dek)
+	if err != nil {
+		s.report.EncryptedMetadataErrors++
+		s.markDamaged()
+		addError(fmt.Errorf("SSE-S3 AEAD setup failed version=%s key_ref=%d", s.manifest.VersionID, ref.KeyRef))
+		return
+	}
+	nonce, err := ssecrypto.ChunkNonce(entry.NoncePrefix, uint32(ref.Index))
+	if err != nil {
+		s.report.EncryptedMetadataErrors++
+		s.markDamaged()
+		addError(fmt.Errorf("SSE-S3 nonce metadata invalid version=%s key_ref=%d", s.manifest.VersionID, ref.KeyRef))
+		return
+	}
+	if _, err := aead.Open(nil, nonce, ciphertext, ssecrypto.ChunkAAD(ref.Index, int(ref.PlainLength()))); err != nil {
+		s.report.AEADFailures++
+		s.markDamaged()
+		addError(fmt.Errorf("SSE-S3 AEAD verification failed version=%s segment=%s key_ref=%d", s.manifest.VersionID, ref.SegmentID, ref.KeyRef))
+	}
+}
+
+func (s *deepScrubState) markDamaged() {
+	if s == nil || s.store == nil || s.manifest == nil || s.manifest.VersionID == "" {
+		return
+	}
+	_ = s.store.MarkDamaged(context.Background(), s.manifest.VersionID)
+}
+
+func scrubManifestKey(man *manifest.Manifest, keyRef uint32) (manifest.KeyEntry, error) {
+	if man == nil || man.Encryption == nil {
+		return manifest.KeyEntry{}, errors.New("encrypted metadata missing")
+	}
+	for _, key := range man.Encryption.Keys {
+		if key.KeyRef == keyRef {
+			return key, nil
+		}
+	}
+	return manifest.KeyEntry{}, fmt.Errorf("encrypted key ref %d missing", keyRef)
 }
 
 // Snapshot writes a minimal snapshot manifest and copies the SQLite files.

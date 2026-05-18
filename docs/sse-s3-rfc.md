@@ -432,7 +432,8 @@ Backups of encrypted data are useless without the KEK material. Ops docs must sa
 
 Ops tools need encryption awareness:
 - shallow checks can validate segment and manifest structure without KEKs;
-- deep checks require KEKs to decrypt and verify AEAD tags/plaintext hashes;
+- `scrub -scrub-deep-encrypted` requires KEKs to unwrap DEKs and verify AEAD tags for encrypted chunks;
+- plaintext hashes are not stored in the MVP, so deep scrub validates authenticated decryption rather than an additional plaintext hash;
 - support bundles must never include KEKs, DEKs, or raw EDEKs unless explicitly redacted/hashed.
 
 ### 10.5 Logging and redaction
@@ -567,7 +568,7 @@ S3 handler/e2e tests:
 Ops tests:
 - startup fails on invalid KEK config;
 - fsck/scrub shallow works without KEK;
-- deep validation fails clearly without KEK;
+- deep scrub fails clearly without KEK;
 - rewrap plan/run changes key ID/EDEK but leaves ciphertext payload unchanged.
 
 ---

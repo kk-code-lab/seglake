@@ -21,7 +21,6 @@ Tag legend (order used below):
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
-- [integrity][ops] Add deep encrypted fsck/scrub mode that unwraps DEKs, validates AEAD tags, and reports missing KEKs clearly.
 - [observability][ops] Add redacted SSE-S3 diagnostics to support bundles and stats: encrypted/plaintext counts, key IDs, EDEK fingerprint prefixes, and missing-key summaries.
 
 ## Later / Research

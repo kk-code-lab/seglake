@@ -41,7 +41,20 @@ func NewProvider(active string, keys []Key) (*Provider, error) {
 	if active == "" {
 		return nil, fmt.Errorf("%w: active key required", ErrBadKeySpec)
 	}
-	out := &Provider{active: active, keys: make(map[string]Key, len(keys))}
+	out, err := NewLookupProvider(keys)
+	if err != nil {
+		return nil, err
+	}
+	out.active = active
+	if _, ok := out.keys[active]; !ok {
+		return nil, fmt.Errorf("%w: active key %q", ErrNoSuchKey, active)
+	}
+	return out, nil
+}
+
+// NewLookupProvider builds a read-only provider for operations that only need key lookup.
+func NewLookupProvider(keys []Key) (*Provider, error) {
+	out := &Provider{keys: make(map[string]Key, len(keys))}
 	for _, key := range keys {
 		if err := ValidateKeyID(key.ID); err != nil {
 			return nil, err
@@ -51,8 +64,8 @@ func NewProvider(active string, keys []Key) (*Provider, error) {
 		}
 		out.keys[key.ID] = key
 	}
-	if _, ok := out.keys[active]; !ok {
-		return nil, fmt.Errorf("%w: active key %q", ErrNoSuchKey, active)
+	if len(out.keys) == 0 {
+		return nil, fmt.Errorf("%w: at least one key required", ErrBadKeySpec)
 	}
 	return out, nil
 }

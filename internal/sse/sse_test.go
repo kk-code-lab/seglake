@@ -65,3 +65,24 @@ func TestRejectsInvalidKeyIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupProviderDoesNotRequireActiveKey(t *testing.T) {
+	key, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey: %v", err)
+	}
+	provider, err := NewLookupProvider([]Key{key})
+	if err != nil {
+		t.Fatalf("NewLookupProvider: %v", err)
+	}
+	got, err := provider.LookupKey("local:v1")
+	if err != nil {
+		t.Fatalf("LookupKey: %v", err)
+	}
+	if got.ID != key.ID || got.Bytes != key.Bytes {
+		t.Fatalf("lookup mismatch")
+	}
+	if _, err := provider.ActiveKey(); err == nil {
+		t.Fatalf("expected ActiveKey to fail without active writer key")
+	}
+}

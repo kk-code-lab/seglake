@@ -12,6 +12,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/clock"
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/ops"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
@@ -21,6 +22,12 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 	}
 	if mode == "sse-rewrap-plan" || mode == "sse-rewrap-run" {
 		return runSSERewrapMode(mode, opts)
+	}
+	if mode == "scrub" && opts.scrubDeepEncrypted {
+		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
+		gcGuard := ops.GCGuardrails{}
+		mpuGuard := ops.MPUGCGuardrails{}
+		return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.scrubDeepEncrypted, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.manifestGCTTL, opts.manifestGCPlan, opts.manifestGCFromPlan, opts.manifestGCForce, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut, opts)
 	}
 	if client, ok, err := adminClientIfRunning(opts.dataDir); err != nil {
 		return err
@@ -78,10 +85,10 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 		MaxUploads:         opts.mpuMaxUploads,
 		MaxReclaimedBytes:  opts.mpuMaxReclaim,
 	}
-	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.manifestGCTTL, opts.manifestGCPlan, opts.manifestGCFromPlan, opts.manifestGCForce, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut)
+	return runOps(mode, opts.dataDir, metaPath, opts.snapshotDir, opts.replCompareDir, opts.fsckAllManifests, opts.scrubAllManifests, opts.scrubDeepEncrypted, opts.gcMinAge, opts.gcForce, opts.gcLiveThreshold, opts.gcRewritePlanFile, opts.gcRewriteFromPlan, opts.gcRewriteBps, opts.gcPauseFile, opts.manifestGCTTL, opts.manifestGCPlan, opts.manifestGCFromPlan, opts.manifestGCForce, opts.mpuTTL, opts.mpuForce, gcGuard, mpuGuard, opts.dbReindexTable, opts.jsonOut, opts)
 }
 
-func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool) error {
+func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests, scrubDeepEncrypted bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string, jsonOut bool, opts *opsOptions) error {
 	layout := fs.NewLayout(filepath.Join(dataDir, "objects"))
 	var (
 		report *ops.Report
@@ -93,7 +100,19 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 	case "fsck":
 		report, err = ops.Fsck(layout, metaPath, !fsckAllManifests)
 	case "scrub":
-		report, err = ops.Scrub(layout, metaPath, !scrubAllManifests)
+		if scrubDeepEncrypted {
+			var provider *ssecrypto.Provider
+			if opts.hasSSEKeyConfig() {
+				var providerErr error
+				provider, providerErr = buildSSELookupProviderFrom(opts.sseS3ActiveKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+				if providerErr != nil {
+					return providerErr
+				}
+			}
+			report, err = ops.ScrubWithOptions(layout, metaPath, ops.ScrubOptions{LiveOnly: !scrubAllManifests, DeepEncrypted: true, SSEProvider: provider})
+		} else {
+			report, err = ops.Scrub(layout, metaPath, !scrubAllManifests)
+		}
 	case "snapshot":
 		if snapshotDir == "" {
 			snapshotDir = filepath.Join(dataDir, "snapshots", "snapshot-"+fmtTime())
@@ -259,6 +278,13 @@ func runSSERewrapMode(mode string, opts *opsOptions) error {
 	}
 }
 
+func (opts *opsOptions) hasSSEKeyConfig() bool {
+	if opts == nil {
+		return false
+	}
+	return len(opts.sseS3KEKs) > 0 || strings.TrimSpace(opts.sseS3KEKsEnv) != "" || strings.TrimSpace(opts.sseS3SingleKeyB64) != ""
+}
+
 func fmtTime() string {
 	return fmt.Sprintf("%d", clock.RealClock{}.Now().UTC().Unix())
 }
@@ -295,6 +321,19 @@ func formatReport(report *ops.Report) string {
 	if report.Mode == "manifest-gc-run" {
 		return fmt.Sprintf("mode=%s candidates=%d deleted=%d reclaimed_bytes=%d skipped=%d errors=%d", report.Mode, report.Candidates, report.Deleted, report.Reclaimed, report.SkippedManifests, report.Errors)
 	}
+	if report.Mode == "scrub" && report.EncryptedManifests > 0 {
+		return fmt.Sprintf("mode=%s manifests=%d segments=%d encrypted_manifests=%d encrypted_chunks=%d missing_keks=%d edek_unwrap_failures=%d aead_failures=%d errors=%d",
+			report.Mode,
+			report.Manifests,
+			report.Segments,
+			report.EncryptedManifests,
+			report.EncryptedChunks,
+			report.MissingKEKs,
+			report.EDEKUnwrapFailures,
+			report.AEADFailures,
+			report.Errors,
+		)
+	}
 	if report.Warnings > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d errors=%d warnings=%d", report.Mode, report.Manifests, report.Segments, report.Errors, report.Warnings)
 	}
@@ -317,7 +356,7 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 	case "fsck":
 		fmt.Println("Mode fsck: validates segment headers/footers and chunk bounds.")
 	case "scrub":
-		fmt.Println("Mode scrub: verifies chunk hashes against stored data.")
+		fmt.Println("Mode scrub: verifies chunk hashes against stored data; -scrub-deep-encrypted also verifies SSE-S3 AEAD tags.")
 	case "snapshot":
 		fmt.Println("Mode snapshot: copies meta.db (+wal/shm) and writes snapshot.json.")
 	case "rebuild-index":

@@ -188,6 +188,16 @@ SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a re
 
 The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so KEK material is not sent to the running server process. Peers must have the target KEK before they can read rewrapped encrypted objects after replication.
 
+Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs. Deep scrub is local-only when KEKs are supplied and uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
+```
+./build/seglake -mode scrub -data-dir ./data \
+  -scrub-deep-encrypted \
+  -sse-s3-kek local:v2=file:/etc/seglake/sse/local-v2.key \
+  -sse-s3-kek local:v1=file:/etc/seglake/sse/local-v1.key
+```
+
+Missing KEKs, EDEK unwrap failures, malformed encryption metadata, short encrypted reads, and AEAD tag failures are reported as scrub errors. Affected encrypted versions are marked `DAMAGED`. The report includes only redacted diagnostics such as key IDs and counters; it never includes KEKs, DEKs, or raw EDEKs.
+
 Manifest GC removes orphan manifest files left by operations such as SSE-S3 KEK rewrap. It never removes segments, SQLite rows, object versions, or MPU metadata. Build a plan first, then run it explicitly:
 ```
 ./build/seglake -mode manifest-gc-plan -data-dir ./data \
@@ -372,6 +382,7 @@ Unsafe (prompt required, maintenance quiesced):
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
 - Use `-fsck-all-manifests` / `-scrub-all-manifests` to scan every manifest file on disk (including orphans).
+- Use `-scrub-deep-encrypted` to verify SSE-S3 DEK unwrap and AEAD tags for encrypted manifests selected by the same scrub scope.
 
 Status:
 - `status` reports `live_manifests` (from `meta.db` + MPU parts) when available; falls back to disk-only counts if meta can't be opened.
