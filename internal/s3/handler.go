@@ -766,6 +766,11 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 		}
 	}
 	if err := h.authorizeRequest(r.Context(), r); err != nil {
+		var reqErr *requestError
+		if errors.As(err, &reqErr) {
+			writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
+			return requestID, false
+		}
 		writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
 		return requestID, false
 	}
@@ -840,7 +845,13 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if targetBucket == "" {
 			targetBucket = "*"
 		}
-		reqCtx := h.policyContextFromRequest(r)
+		reqCtx, reqErr := h.policyContextForAction(ctx, r, action, bucket)
+		if reqErr != nil {
+			return reqErr
+		}
+		if pol.RequiresSSES3(action, targetBucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
+			return errAccessDenied
+		}
 		identityAllowed, identityDenied := pol.DecisionWithContext(action, targetBucket, keyName, reqCtx)
 		if identityDenied {
 			return errAccessDenied
@@ -850,6 +861,9 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 		if bucket != "" {
 			if bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket); err == nil && bucketPolicy != "" {
 				if bpol, err := ParsePolicy(bucketPolicy); err == nil {
+					if bpol.RequiresSSES3(action, bucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
+						return errAccessDenied
+					}
 					bucketAllowed, bucketDenied = bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
 				} else {
 					return errAccessDenied
@@ -910,7 +924,13 @@ func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request)
 	if _, keyParsed, ok := h.parseBucketKey(r); ok {
 		keyName = keyParsed
 	}
-	reqCtx := h.policyContextFromRequest(r)
+	reqCtx, reqErr := h.policyContextForAction(ctx, r, action, bucket)
+	if reqErr != nil {
+		return reqErr
+	}
+	if bpol.RequiresSSES3(action, bucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
+		return errAccessDenied
+	}
 	allowed, denied := bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
 	if denied || !allowed {
 		return errAccessDenied
@@ -1005,6 +1025,34 @@ func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 		Prefix:          prefix,
 		Delimiter:       delimiter,
 		SecureTransport: secure,
+	}
+}
+
+func (h *Handler) policyContextForAction(ctx context.Context, r *http.Request, action, bucket string) (*PolicyContext, *requestError) {
+	reqCtx := h.policyContextFromRequest(r)
+	if !policyActionRequiresEffectiveSSES3(action) {
+		return reqCtx, nil
+	}
+	if header, ok := sseCustomerHeader(r); ok {
+		return nil, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-C is not supported: " + header}
+	}
+	if header, ok := sseKMSHeader(r); ok {
+		return nil, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-KMS is not supported: " + header}
+	}
+	effective, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
+	if reqErr != nil {
+		return nil, reqErr
+	}
+	reqCtx.EffectiveSSES3 = effective
+	return reqCtx, nil
+}
+
+func policyActionRequiresEffectiveSSES3(action string) bool {
+	switch action {
+	case policyActionPutObject, policyActionCopyObject, policyActionCreateMultipartUpload:
+		return true
+	default:
+		return false
 	}
 }
 

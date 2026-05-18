@@ -573,6 +573,33 @@ Conditions (optional) in statements:
 - `source_ip`: list of CIDR blocks (e.g. `"10.0.0.0/8"`).
 - `before` / `after`: RFC3339 time window.
 - `headers`: exact match on request headers (lowercased keys).
+- `require_sse_s3`: `true` requires effective SSE-S3 for PutObject, CopyObject destinations, and CreateMultipartUpload. Explicit `--sse AES256` and bucket default encryption both satisfy the requirement.
+
+Example requiring SSE-S3 for future writes under a prefix:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["PutObject", "CopyObject", "CreateMultipartUpload"],
+      "resources": [
+        { "bucket": "demo", "prefix": "secure/" }
+      ],
+      "conditions": {
+        "require_sse_s3": true
+      }
+    },
+    {
+      "effect": "allow",
+      "actions": ["UploadPart", "CompleteMultipartUpload", "AbortMultipartUpload"],
+      "resources": [
+        { "bucket": "demo", "prefix": "secure/" }
+      ]
+    }
+  ]
+}
+```
 
 Example with deny override:
 ```

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,17 @@ import (
 	"time"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/engine"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
 func newPolicyHandler(t *testing.T, policy string) *Handler {
+	t.Helper()
+	return newPolicyHandlerWithSSE(t, policy, nil)
+}
+
+func newPolicyHandlerWithSSE(t *testing.T, policy string, provider *ssecrypto.Provider) *Handler {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
@@ -31,6 +38,7 @@ func newPolicyHandler(t *testing.T, policy string) *Handler {
 	eng, err := engine.New(engine.Options{
 		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
 		MetaStore: store,
+		SSE:       provider,
 		// Ensure segment writers seal quickly to avoid temp dir cleanup races.
 		SegmentMaxAge: time.Nanosecond,
 	})
@@ -135,6 +143,179 @@ func TestPolicyCopyDenied(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("COPY status: %d", resp.StatusCode)
+	}
+}
+
+func TestPolicyRequireSSES3PutObject(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject","HeadObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+
+	plainReq := newTestRequest(http.MethodPut, "/demo/plain", bytes.NewReader([]byte("plain")))
+	signRequestTest(plainReq, "ak", "sk", "us-east-1")
+	plainResp := doRequest(t, handler, plainReq)
+	_ = plainResp.Body.Close()
+	if plainResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plaintext PUT status: %d", plainResp.StatusCode)
+	}
+
+	encryptedReq := newTestRequest(http.MethodPut, "/demo/encrypted", bytes.NewReader([]byte("secret")))
+	encryptedReq.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	signRequestTest(encryptedReq, "ak", "sk", "us-east-1")
+	encryptedResp := doRequest(t, handler, encryptedReq)
+	_ = encryptedResp.Body.Close()
+	if encryptedResp.StatusCode != http.StatusOK {
+		t.Fatalf("encrypted PUT status: %d", encryptedResp.StatusCode)
+	}
+	if got := encryptedResp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected SSE response header, got %q", got)
+	}
+}
+
+func TestPolicyRequireSSES3PutObjectSatisfiedByBucketDefault(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject","HeadObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+	if err := handler.Meta.CreateBucket(context.Background(), "demo"); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := handler.Meta.SetBucketEncryption(context.Background(), "demo", meta.BucketEncryptionModeSSES3, meta.BucketEncryptionAlgorithmAES256); err != nil {
+		t.Fatalf("SetBucketEncryption: %v", err)
+	}
+
+	req := newTestRequest(http.MethodPut, "/demo/default-encrypted", bytes.NewReader([]byte("secret")))
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp := doRequest(t, handler, req)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected bucket default SSE response header, got %q", got)
+	}
+}
+
+func TestPolicyRequireSSES3InvalidExplicitHeadersKeepSSEErrors(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+
+	badReq := newTestRequest(http.MethodPut, "/demo/bad", bytes.NewReader([]byte("x")))
+	badReq.Header.Set("X-Amz-Server-Side-Encryption", "AES128")
+	signRequestTest(badReq, "ak", "sk", "us-east-1")
+	badResp := doRequest(t, handler, badReq)
+	_ = badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad SSE status: %d", badResp.StatusCode)
+	}
+
+	kmsReq := newTestRequest(http.MethodPut, "/demo/kms", bytes.NewReader([]byte("x")))
+	kmsReq.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	signRequestTest(kmsReq, "ak", "sk", "us-east-1")
+	kmsResp := doRequest(t, handler, kmsReq)
+	_ = kmsResp.Body.Close()
+	if kmsResp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("KMS SSE status: %d", kmsResp.StatusCode)
+	}
+}
+
+func TestPolicyRequireSSES3CopyObject(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["CopyObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+	if _, _, err := handler.Engine.PutObject(context.Background(), "demo", "src", "", bytes.NewReader([]byte("copy me"))); err != nil {
+		t.Fatalf("PutObject seed: %v", err)
+	}
+
+	plainReq := newTestRequest(http.MethodPut, "/demo/plain-copy", nil)
+	plainReq.Header.Set("X-Amz-Copy-Source", "/demo/src")
+	signRequestTest(plainReq, "ak", "sk", "us-east-1")
+	plainResp := doRequest(t, handler, plainReq)
+	_ = plainResp.Body.Close()
+	if plainResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plaintext COPY status: %d", plainResp.StatusCode)
+	}
+
+	encryptedReq := newTestRequest(http.MethodPut, "/demo/encrypted-copy", nil)
+	encryptedReq.Header.Set("X-Amz-Copy-Source", "/demo/src")
+	encryptedReq.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	signRequestTest(encryptedReq, "ak", "sk", "us-east-1")
+	encryptedResp := doRequest(t, handler, encryptedReq)
+	_ = encryptedResp.Body.Close()
+	if encryptedResp.StatusCode != http.StatusOK {
+		t.Fatalf("encrypted COPY status: %d", encryptedResp.StatusCode)
+	}
+	if got := encryptedResp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected COPY SSE response header, got %q", got)
+	}
+}
+
+func TestPolicyRequireSSES3MultipartInitiate(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["CreateMultipartUpload"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}},{"effect":"allow","actions":["UploadPart","CompleteMultipartUpload"],"resources":[{"bucket":"demo"}]}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+
+	plainReq := newTestRequest(http.MethodPost, "/demo/plain-mpu?uploads", nil)
+	signRequestTest(plainReq, "ak", "sk", "us-east-1")
+	plainResp := doRequest(t, handler, plainReq)
+	_ = plainResp.Body.Close()
+	if plainResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plaintext MPU initiate status: %d", plainResp.StatusCode)
+	}
+
+	initReq := newTestRequest(http.MethodPost, "/demo/encrypted-mpu?uploads", nil)
+	initReq.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	signRequestTest(initReq, "ak", "sk", "us-east-1")
+	initResp := doRequest(t, handler, initReq)
+	defer func() { _ = initResp.Body.Close() }()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("encrypted MPU initiate status: %d", initResp.StatusCode)
+	}
+	var initResult initiateMultipartResult
+	if err := xml.NewDecoder(initResp.Body).Decode(&initResult); err != nil {
+		t.Fatalf("decode initiate response: %v", err)
+	}
+
+	partReq := newTestRequest(http.MethodPut, "/demo/encrypted-mpu?partNumber=1&uploadId="+initResult.UploadID, bytes.NewReader([]byte("part")))
+	signRequestTest(partReq, "ak", "sk", "us-east-1")
+	partResp := doRequest(t, handler, partReq)
+	_ = partResp.Body.Close()
+	if partResp.StatusCode != http.StatusOK {
+		t.Fatalf("upload part status: %d", partResp.StatusCode)
+	}
+	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>` + partResp.Header.Get("ETag") + `</ETag></Part></CompleteMultipartUpload>`
+	completeReq := newTestRequest(http.MethodPost, "/demo/encrypted-mpu?uploadId="+initResult.UploadID, bytes.NewReader([]byte(completeBody)))
+	signRequestTest(completeReq, "ak", "sk", "us-east-1")
+	completeResp := doRequest(t, handler, completeReq)
+	_ = completeResp.Body.Close()
+	if completeResp.StatusCode != http.StatusOK {
+		t.Fatalf("complete MPU status: %d", completeResp.StatusCode)
+	}
+	if got := completeResp.Header.Get("x-amz-server-side-encryption"); got != "AES256" {
+		t.Fatalf("expected encrypted MPU response header, got %q", got)
+	}
+}
+
+func TestBucketPolicyRequireSSES3ConstrainsWideIdentityPolicy(t *testing.T) {
+	bucketPolicy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo","prefix":"secure/"}],"conditions":{"require_sse_s3":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, "rw", testSSEProvider(t))
+	if err := handler.Meta.CreateBucket(context.Background(), "demo"); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := handler.Meta.SetBucketPolicy(context.Background(), "demo", bucketPolicy); err != nil {
+		t.Fatalf("SetBucketPolicy: %v", err)
+	}
+
+	plainReq := newTestRequest(http.MethodPut, "/demo/secure/plain", bytes.NewReader([]byte("plain")))
+	signRequestTest(plainReq, "ak", "sk", "us-east-1")
+	plainResp := doRequest(t, handler, plainReq)
+	_ = plainResp.Body.Close()
+	if plainResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("bucket policy plaintext PUT status: %d", plainResp.StatusCode)
+	}
+
+	encryptedReq := newTestRequest(http.MethodPut, "/demo/secure/encrypted", bytes.NewReader([]byte("secret")))
+	encryptedReq.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	signRequestTest(encryptedReq, "ak", "sk", "us-east-1")
+	encryptedResp := doRequest(t, handler, encryptedReq)
+	_ = encryptedResp.Body.Close()
+	if encryptedResp.StatusCode != http.StatusOK {
+		t.Fatalf("bucket policy encrypted PUT status: %d", encryptedResp.StatusCode)
 	}
 }
 

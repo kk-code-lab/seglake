@@ -109,6 +109,46 @@ func TestPolicyConditionsHeaders(t *testing.T) {
 	}
 }
 
+func TestPolicyConditionRequireSSES3(t *testing.T) {
+	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveSSES3: true}
+	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); !allowed {
+		t.Fatalf("expected allow for effective SSE-S3")
+	}
+	ctx.EffectiveSSES3 = false
+	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
+		t.Fatalf("expected deny without effective SSE-S3")
+	}
+	if !pol.RequiresSSES3("PutObject", "demo", "k", ctx) {
+		t.Fatalf("expected policy to report SSE-S3 requirement")
+	}
+	if pol.Allows("PutObject", "demo", "k") {
+		t.Fatalf("expected context-free evaluation to deny require_sse_s3")
+	}
+}
+
+func TestPolicyConditionRequireSSES3RejectsInvalidValues(t *testing.T) {
+	cases := []string{
+		`false`,
+		`null`,
+		`"true"`,
+		`1`,
+	}
+	for _, value := range cases {
+		value := value
+		t.Run(value, func(t *testing.T) {
+			raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":` + value + `}}]}`
+			if _, err := ParsePolicy(raw); err == nil {
+				t.Fatalf("expected invalid require_sse_s3 value %s to fail", value)
+			}
+		})
+	}
+}
+
 func TestParsePolicyAWSBasic(t *testing.T) {
 	raw := `{
   "Version": "2012-10-17",

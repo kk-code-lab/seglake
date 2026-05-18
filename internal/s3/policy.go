@@ -35,6 +35,7 @@ type Conditions struct {
 	PrefixLike      bool              `json:"prefix_like,omitempty"`
 	Delimiter       string            `json:"delimiter,omitempty"`
 	SecureTransport *bool             `json:"secure_transport,omitempty"`
+	RequireSSES3    *bool             `json:"require_sse_s3,omitempty"`
 }
 
 type PolicyContext struct {
@@ -44,6 +45,7 @@ type PolicyContext struct {
 	Prefix          string
 	Delimiter       string
 	SecureTransport bool
+	EffectiveSSES3  bool
 }
 
 const (
@@ -220,6 +222,30 @@ func (p *Policy) validate() error {
 	return nil
 }
 
+func (c *Conditions) UnmarshalJSON(data []byte) error {
+	type conditionsAlias Conditions
+	var alias conditionsAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if value, ok := raw["require_sse_s3"]; ok {
+		var required bool
+		if err := json.Unmarshal(value, &required); err != nil {
+			return fmt.Errorf("policy condition require_sse_s3 must be true")
+		}
+		if !required {
+			return fmt.Errorf("policy condition require_sse_s3 must be true")
+		}
+		alias.RequireSSES3 = &required
+	}
+	*c = Conditions(alias)
+	return nil
+}
+
 // Allows returns whether the policy permits the action for a bucket/key pair.
 func (p *Policy) Allows(action, bucket, key string) bool {
 	if p == nil {
@@ -287,6 +313,23 @@ func (p *Policy) DecisionWithContext(action, bucket, key string, ctx *PolicyCont
 	return allowed, denied
 }
 
+// RequiresSSES3 reports whether a matching statement requires effective SSE-S3.
+func (p *Policy) RequiresSSES3(action, bucket, key string, ctx *PolicyContext) bool {
+	if p == nil {
+		return false
+	}
+	action = normalizeAction(action)
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimSpace(key)
+	for _, stmt := range p.Statements {
+		if !stmt.requiresSSES3(action, bucket, key, ctx) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (s *Statement) matches(action, bucket, key string, ctx *PolicyContext) bool {
 	if s == nil {
 		return false
@@ -295,6 +338,26 @@ func (s *Statement) matches(action, bucket, key string, ctx *PolicyContext) bool
 		return false
 	}
 	if !s.Conditions.match(ctx) {
+		return false
+	}
+	for _, res := range s.Resources {
+		if res.matches(bucket, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Statement) requiresSSES3(action, bucket, key string, ctx *PolicyContext) bool {
+	if s == nil || s.Conditions.RequireSSES3 == nil || !*s.Conditions.RequireSSES3 {
+		return false
+	}
+	if !actionsMatch(s.Actions, action) {
+		return false
+	}
+	conditions := s.Conditions
+	conditions.RequireSSES3 = nil
+	if !conditions.match(ctx) {
 		return false
 	}
 	for _, res := range s.Resources {
@@ -351,6 +414,9 @@ func (c *Conditions) validate() error {
 	if c.PrefixLike && c.Prefix == "" {
 		return fmt.Errorf("policy condition prefix_like requires prefix")
 	}
+	if c.RequireSSES3 != nil && !*c.RequireSSES3 {
+		return fmt.Errorf("policy condition require_sse_s3 must be true")
+	}
 	return nil
 }
 
@@ -359,7 +425,7 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 		return true
 	}
 	if ctx == nil {
-		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0 && c.Prefix == "" && c.Delimiter == "" && c.SecureTransport == nil
+		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0 && c.Prefix == "" && c.Delimiter == "" && c.SecureTransport == nil && c.RequireSSES3 == nil
 	}
 	if len(c.SourceIP) > 0 {
 		ip := net.ParseIP(ctx.SourceIP)
@@ -417,6 +483,9 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 		return false
 	}
 	if c.SecureTransport != nil && ctx.SecureTransport != *c.SecureTransport {
+		return false
+	}
+	if c.RequireSSES3 != nil && *c.RequireSSES3 && !ctx.EffectiveSSES3 {
 		return false
 	}
 	return true
