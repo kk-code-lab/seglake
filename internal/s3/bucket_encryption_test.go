@@ -518,6 +518,23 @@ func TestBucketDefaultKMSAffectsMultipartInitiate(t *testing.T) {
 	}
 }
 
+func TestEffectiveEncryptionForWriteUsesAuthorizedContext(t *testing.T) {
+	h := newTestHandler(t)
+	createBucket(t, h, "bucket")
+
+	req := httptest.NewRequest(http.MethodPut, "/bucket/key", strings.NewReader("body"))
+	authorized := effectiveEncryption{Mode: effectiveEncryptionSSEKMS, KeyID: "local:v1"}
+	req = withEffectiveEncryption(req, authorized)
+
+	got, reqErr := h.effectiveEncryptionForWriteCached(req.Context(), req, "bucket")
+	if reqErr != nil {
+		t.Fatalf("effectiveEncryptionForWriteCached: %v", reqErr)
+	}
+	if !got.SSEKMS() || got.KeyID != "local:v1" {
+		t.Fatalf("expected cached KMS effective encryption, got %+v", got)
+	}
+}
+
 func TestBucketDefaultEncryptionFailsWhenSSES3Disabled(t *testing.T) {
 	h := newTestHandlerWithoutSSE(t)
 	createBucket(t, h, "bucket")

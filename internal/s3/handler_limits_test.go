@@ -36,7 +36,7 @@ func TestPrepareRequestMaxURLLength(t *testing.T) {
 	t.Run("rejects_over_limit", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/"+strings.Repeat("a", 11), nil)
 		rec := httptest.NewRecorder()
-		_, ok := h.prepareRequest(rec, req)
+		_, _, ok := h.prepareRequest(rec, req)
 		if ok {
 			t.Fatalf("expected request to be rejected")
 		}
@@ -48,7 +48,7 @@ func TestPrepareRequestMaxURLLength(t *testing.T) {
 	t.Run("accepts_within_limit", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/"+strings.Repeat("a", 5), nil)
 		rec := httptest.NewRecorder()
-		_, ok := h.prepareRequest(rec, req)
+		_, _, ok := h.prepareRequest(rec, req)
 		if !ok {
 			t.Fatalf("expected request to be accepted")
 		}

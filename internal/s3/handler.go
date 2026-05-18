@@ -120,10 +120,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleOptions(mw, r, requestID)
 		return
 	}
-	requestID, ok := h.prepareRequest(mw, r)
+	requestID, prepared, ok := h.prepareRequest(mw, r)
 	if !ok {
 		return
 	}
+	r = prepared
 	if h.Meta != nil {
 		state, err := h.Meta.MaintenanceState(r.Context())
 		if err != nil {
@@ -695,7 +696,7 @@ func firstCSVValue(raw string) string {
 	return ""
 }
 
-func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, *http.Request, bool) {
 	requestID := newRequestID()
 	w.Header().Set("x-amz-request-id", requestID)
 	w.Header().Set("x-amz-id-2", hostID())
@@ -710,7 +711,7 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 				resource = r.URL.Path
 			}
 			writeErrorWithResource(w, http.StatusRequestURITooLong, "InvalidURI", "request uri too long", requestID, resource)
-			return requestID, false
+			return requestID, r, false
 		}
 	}
 	if bucket, ok := h.bucketFromRequest(r); ok {
@@ -723,19 +724,19 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 	}
 	if h.Engine == nil || h.Meta == nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "storage not initialized", requestID, r.URL.Path)
-		return requestID, false
+		return requestID, r, false
 	}
 	if h.Auth == nil {
-		return requestID, true
+		return requestID, r, true
 	}
 	if h.Auth.AccessKey == "" && h.Auth.SecretKey == "" {
 		hasKeys, err := h.Meta.HasAPIKeys(r.Context())
 		if err != nil {
 			writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "auth state unavailable", requestID, r.URL.Path)
-			return requestID, false
+			return requestID, r, false
 		}
 		if !hasKeys {
-			return requestID, true
+			return requestID, r, true
 		}
 	}
 	skipVerify := false
@@ -751,7 +752,7 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 				key := extractAccessKey(r)
 				if !h.AuthLimiter.Allow(ip, key) {
 					writeErrorWithResource(w, http.StatusServiceUnavailable, "SlowDown", "too many auth failures", requestID, r.URL.Path)
-					return requestID, false
+					return requestID, r, false
 				}
 				h.AuthLimiter.ObserveFailure(ip, key)
 			}
@@ -767,7 +768,7 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 			default:
 				writeErrorWithResource(w, http.StatusForbidden, "SignatureDoesNotMatch", "signature mismatch", requestID, r.URL.Path)
 			}
-			return requestID, false
+			return requestID, r, false
 		}
 	}
 	if h.ReplayCacheTTL > 0 && r.URL.Query().Get("X-Amz-Signature") != "" {
@@ -782,62 +783,66 @@ func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string
 			log.Printf("replay_detected method=%s path=%s req_id=%s", r.Method, redactURL(r.URL), requestID)
 			if h.ReplayBlock {
 				writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "replay detected", requestID, r.URL.Path)
-				return requestID, false
+				return requestID, r, false
 			}
 		}
 	}
-	if err := h.authorizeRequest(r.Context(), r); err != nil {
+	authorizedRequest, err := h.authorizeRequest(r.Context(), r)
+	if err != nil {
 		var reqErr *requestError
 		if errors.As(err, &reqErr) {
 			writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
-			return requestID, false
+			return requestID, r, false
 		}
 		writeErrorWithResource(w, http.StatusForbidden, "AccessDenied", "access denied", requestID, r.URL.Path)
-		return requestID, false
+		return requestID, r, false
 	}
-	return requestID, true
+	if authorizedRequest != nil {
+		r = authorizedRequest
+	}
+	return requestID, r, true
 }
 
-func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
+func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) (*http.Request, error) {
 	if h == nil || h.Meta == nil || r == nil {
-		return nil
+		return r, nil
 	}
 	accessKey := extractAccessKey(r)
 	if accessKey == "" {
 		if h.Auth == nil {
-			return nil
+			return r, nil
 		}
 		if h.Auth.AccessKey == "" && h.Auth.SecretKey == "" {
 			hasKeys, err := h.Meta.HasAPIKeys(ctx)
 			if err != nil {
-				return err
+				return r, err
 			}
 			if !hasKeys {
-				return nil
+				return r, nil
 			}
 		}
 		return h.authorizeUnsignedRequest(ctx, r)
 	}
 	action := policyActionForRequest(h.opForRequest(r))
 	if action == policyActionOps && h.Auth != nil && h.Auth.OpsAccessKey != "" && h.Auth.OpsSecretKey != "" && accessKey == h.Auth.OpsAccessKey {
-		return nil
+		return r, nil
 	}
 	hasKeys, err := h.Meta.HasAPIKeys(ctx)
 	if err != nil {
-		return err
+		return r, err
 	}
 	key, err := h.Meta.GetAPIKey(ctx, accessKey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if hasKeys {
-				return errAccessDenied
+				return r, errAccessDenied
 			}
-			return nil
+			return r, nil
 		}
-		return err
+		return r, err
 	}
 	if !key.Enabled {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	policy := strings.TrimSpace(key.Policy)
 	bucket := ""
@@ -851,31 +856,34 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 	if bucket != "" {
 		allowed, err := h.Meta.IsBucketAllowed(ctx, accessKey, bucket)
 		if err != nil {
-			return err
+			return r, err
 		}
 		if !allowed {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 	}
 	if action != "" {
 		pol, err := ParsePolicy(policy)
 		if err != nil {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 		targetBucket := bucket
 		if targetBucket == "" {
 			targetBucket = "*"
 		}
-		reqCtx, reqErr := h.policyContextForAction(ctx, r, action, bucket)
+		reqCtx, effective, hasEffective, reqErr := h.policyContextForAction(ctx, r, action, bucket)
 		if reqErr != nil {
-			return reqErr
+			return r, reqErr
+		}
+		if hasEffective {
+			r = withEffectiveEncryption(r, effective)
 		}
 		if pol.RequiresSSES3(action, targetBucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 		identityAllowed, identityDenied := pol.DecisionWithContext(action, targetBucket, keyName, reqCtx)
 		if identityDenied {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 		bucketAllowed := false
 		bucketDenied := false
@@ -883,30 +891,30 @@ func (h *Handler) authorizeRequest(ctx context.Context, r *http.Request) error {
 			if bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket); err == nil && bucketPolicy != "" {
 				if bpol, err := ParsePolicy(bucketPolicy); err == nil {
 					if bpol.RequiresSSES3(action, bucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
-						return errAccessDenied
+						return r, errAccessDenied
 					}
 					bucketAllowed, bucketDenied = bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
 				} else {
-					return errAccessDenied
+					return r, errAccessDenied
 				}
 			}
 		}
 		if bucketDenied {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 		if !identityAllowed && !bucketAllowed {
-			return errAccessDenied
+			return r, errAccessDenied
 		}
 	}
 	if action == policyActionOps && strings.EqualFold(strings.TrimSpace(key.Policy), "rw") {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	if h.Engine != nil && h.Meta != nil {
 		if maintenanceStateFromContext(ctx) == "off" {
 			h.recordAPIKeyUse(accessKey)
 		}
 	}
-	return nil
+	return r, nil
 }
 
 func maintenanceStateFromContext(ctx context.Context) string {
@@ -921,42 +929,45 @@ func maintenanceStateFromContext(ctx context.Context) string {
 	return "off"
 }
 
-func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request) error {
+func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request) (*http.Request, error) {
 	if h == nil || h.Meta == nil || r == nil {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	bucket, ok := h.bucketFromRequest(r)
 	if !ok || !h.isPublicBucket(bucket) {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	action := policyActionForRequest(h.opForRequest(r))
 	if action == "" {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket)
 	if err != nil || strings.TrimSpace(bucketPolicy) == "" {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	bpol, err := ParsePolicy(bucketPolicy)
 	if err != nil {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	keyName := ""
 	if _, keyParsed, ok := h.parseBucketKey(r); ok {
 		keyName = keyParsed
 	}
-	reqCtx, reqErr := h.policyContextForAction(ctx, r, action, bucket)
+	reqCtx, effective, hasEffective, reqErr := h.policyContextForAction(ctx, r, action, bucket)
 	if reqErr != nil {
-		return reqErr
+		return r, reqErr
+	}
+	if hasEffective {
+		r = withEffectiveEncryption(r, effective)
 	}
 	if bpol.RequiresSSES3(action, bucket, keyName, reqCtx) && !reqCtx.EffectiveSSES3 {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
 	allowed, denied := bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
 	if denied || !allowed {
-		return errAccessDenied
+		return r, errAccessDenied
 	}
-	return nil
+	return r, nil
 }
 
 func (h *Handler) publicBucketForRequest(r *http.Request) (string, bool) {
@@ -1049,21 +1060,21 @@ func (h *Handler) policyContextFromRequest(r *http.Request) *PolicyContext {
 	}
 }
 
-func (h *Handler) policyContextForAction(ctx context.Context, r *http.Request, action, bucket string) (*PolicyContext, *requestError) {
+func (h *Handler) policyContextForAction(ctx context.Context, r *http.Request, action, bucket string) (*PolicyContext, effectiveEncryption, bool, *requestError) {
 	reqCtx := h.policyContextFromRequest(r)
 	if !policyActionRequiresEffectiveSSES3(action) {
-		return reqCtx, nil
+		return reqCtx, effectiveEncryption{}, false, nil
 	}
 	if header, ok := sseCustomerHeader(r); ok {
-		return nil, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-C is not supported: " + header}
+		return nil, effectiveEncryption{}, false, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-C is not supported: " + header}
 	}
 	effective, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
 	if reqErr != nil {
-		return nil, reqErr
+		return nil, effectiveEncryption{}, false, reqErr
 	}
 	reqCtx.EffectiveSSES3 = effective.SSES3()
 	reqCtx.EffectiveEncryption = effective.Encrypted()
-	return reqCtx, nil
+	return reqCtx, effective, true, nil
 }
 
 func policyActionRequiresEffectiveSSES3(action string) bool {
@@ -1158,7 +1169,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	encrypt, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
+	encrypt, reqErr := h.effectiveEncryptionForWriteCached(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
@@ -1400,7 +1411,7 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = reader.Close() }()
 
 	contentType := srcMeta.ContentType
-	encrypt, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
+	encrypt, reqErr := h.effectiveEncryptionForWriteCached(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return

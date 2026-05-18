@@ -179,6 +179,23 @@ type effectiveEncryption struct {
 	Explicit bool
 }
 
+type effectiveEncryptionContextKey struct{}
+
+func withEffectiveEncryption(r *http.Request, effective effectiveEncryption) *http.Request {
+	if r == nil {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), effectiveEncryptionContextKey{}, effective))
+}
+
+func effectiveEncryptionFromContext(ctx context.Context) (effectiveEncryption, bool) {
+	if ctx == nil {
+		return effectiveEncryption{}, false
+	}
+	effective, ok := ctx.Value(effectiveEncryptionContextKey{}).(effectiveEncryption)
+	return effective, ok
+}
+
 func (e effectiveEncryption) Encrypted() bool {
 	return e.Mode == effectiveEncryptionSSES3 || e.Mode == effectiveEncryptionSSEKMS
 }
@@ -250,6 +267,13 @@ func (h *Handler) effectiveEncryptionForWrite(ctx context.Context, r *http.Reque
 		return effectiveEncryption{Mode: effectiveEncryptionSSEKMS, KeyID: keyID}, nil
 	}
 	return effectiveEncryption{}, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: "unsupported bucket encryption configuration"}
+}
+
+func (h *Handler) effectiveEncryptionForWriteCached(ctx context.Context, r *http.Request, bucket string) (effectiveEncryption, *requestError) {
+	if effective, ok := effectiveEncryptionFromContext(ctx); ok {
+		return effective, nil
+	}
+	return h.effectiveEncryptionForWrite(ctx, r, bucket)
 }
 
 func explicitEncryptionForWrite(r *http.Request) (effectiveEncryption, *requestError) {
