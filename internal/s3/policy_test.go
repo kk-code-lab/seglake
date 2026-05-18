@@ -109,53 +109,64 @@ func TestPolicyConditionsHeaders(t *testing.T) {
 	}
 }
 
-func TestPolicyConditionRequireSSES3(t *testing.T) {
-	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
-	pol, err := ParsePolicy(raw)
-	if err != nil {
-		t.Fatalf("ParsePolicy: %v", err)
+func TestPolicyEncryptionConditions(t *testing.T) {
+	cases := []struct {
+		name        string
+		condition   string
+		allowCtx    PolicyContext
+		denyCtx     PolicyContext
+		checkSSES3  bool
+		denyMessage string
+	}{
+		{
+			name:        "require_sse_s3",
+			condition:   `"require_sse_s3":true`,
+			allowCtx:    PolicyContext{EffectiveEncryption: true, EffectiveSSES3: true},
+			denyCtx:     PolicyContext{EffectiveEncryption: false, EffectiveSSES3: false},
+			checkSSES3:  true,
+			denyMessage: "expected deny without effective SSE-S3",
+		},
+		{
+			name:        "require_sse_s3_rejects_kms_only",
+			condition:   `"require_sse_s3":true`,
+			allowCtx:    PolicyContext{EffectiveEncryption: true, EffectiveSSES3: true},
+			denyCtx:     PolicyContext{EffectiveEncryption: true, EffectiveSSES3: false},
+			checkSSES3:  true,
+			denyMessage: "expected require_sse_s3 to reject non-SSE-S3 encryption",
+		},
+		{
+			name:        "require_encryption",
+			condition:   `"require_encryption":true`,
+			allowCtx:    PolicyContext{EffectiveEncryption: true},
+			denyCtx:     PolicyContext{EffectiveEncryption: false},
+			denyMessage: "expected deny without effective encryption",
+		},
 	}
-	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveSSES3: true}
-	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); !allowed {
-		t.Fatalf("expected allow for effective SSE-S3")
-	}
-	ctx.EffectiveSSES3 = false
-	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
-		t.Fatalf("expected deny without effective SSE-S3")
-	}
-	if !pol.RequiresSSES3("PutObject", "demo", "k", ctx) {
-		t.Fatalf("expected policy to report SSE-S3 requirement")
-	}
-	if pol.Allows("PutObject", "demo", "k") {
-		t.Fatalf("expected context-free evaluation to deny require_sse_s3")
-	}
-}
-
-func TestPolicyConditionRequireEncryption(t *testing.T) {
-	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_encryption":true}}]}`
-	pol, err := ParsePolicy(raw)
-	if err != nil {
-		t.Fatalf("ParsePolicy: %v", err)
-	}
-	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveEncryption: true}
-	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); !allowed {
-		t.Fatalf("expected allow for effective encryption")
-	}
-	ctx.EffectiveEncryption = false
-	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
-		t.Fatalf("expected deny without effective encryption")
-	}
-}
-
-func TestPolicyConditionRequireSSES3RejectsKMSOnly(t *testing.T) {
-	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
-	pol, err := ParsePolicy(raw)
-	if err != nil {
-		t.Fatalf("ParsePolicy: %v", err)
-	}
-	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveEncryption: true, EffectiveSSES3: false}
-	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
-		t.Fatalf("expected require_sse_s3 to reject non-SSE-S3 encryption")
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{` + tc.condition + `}}]}`
+			pol, err := ParsePolicy(raw)
+			if err != nil {
+				t.Fatalf("ParsePolicy: %v", err)
+			}
+			allowCtx := tc.allowCtx
+			allowCtx.Now = time.Now().UTC()
+			if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", &allowCtx); !allowed {
+				t.Fatalf("expected allow for %s", tc.name)
+			}
+			denyCtx := tc.denyCtx
+			denyCtx.Now = time.Now().UTC()
+			if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", &denyCtx); allowed {
+				t.Fatalf("%s", tc.denyMessage)
+			}
+			if tc.checkSSES3 && !pol.RequiresSSES3("PutObject", "demo", "k", &denyCtx) {
+				t.Fatalf("expected policy to report SSE-S3 requirement")
+			}
+			if pol.Allows("PutObject", "demo", "k") {
+				t.Fatalf("expected context-free evaluation to deny %s", tc.name)
+			}
+		})
 	}
 }
 

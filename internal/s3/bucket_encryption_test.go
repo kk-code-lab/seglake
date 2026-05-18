@@ -404,98 +404,42 @@ func TestBucketDefaultKMSAffectsCopyObject(t *testing.T) {
 	}
 }
 
-func TestBucketDefaultEncryptionAffectsMultipartInitiate(t *testing.T) {
-	h := newTestHandler(t)
-	createBucket(t, h, "bucket")
-	putBucketEncryption(t, h, "bucket")
-
-	initReq := httptest.NewRequest(http.MethodPost, "/bucket/default-mpu?uploads", nil)
-	initW := httptest.NewRecorder()
-	h.ServeHTTP(initW, initReq)
-	if initW.Code != http.StatusOK {
-		t.Fatalf("init status: %d body=%s", initW.Code, initW.Body.String())
+func TestEncryptedMultipartFlows(t *testing.T) {
+	cases := []struct {
+		name       string
+		key        string
+		setup      func(*testing.T, *Handler)
+		initHeader func(http.Header)
+		wantSSE    string
+		wantKeyID  string
+	}{
+		{
+			name:    "bucket_default_sse_s3",
+			key:     "default-mpu",
+			setup:   func(t *testing.T, h *Handler) { putBucketEncryption(t, h, "bucket") },
+			wantSSE: "AES256",
+		},
+		{
+			name: "explicit_kms",
+			key:  "kms-mpu",
+			initHeader: func(h http.Header) {
+				h.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+				h.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
+			},
+			wantSSE:   "aws:kms",
+			wantKeyID: "local:v1",
+		},
 	}
-	if got := initW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
-		t.Fatalf("expected init SSE header, got %q", got)
-	}
-	var initResp initiateMultipartResult
-	if err := xml.Unmarshal(initW.Body.Bytes(), &initResp); err != nil {
-		t.Fatalf("unmarshal init: %v", err)
-	}
-
-	partReq := httptest.NewRequest(http.MethodPut, "/bucket/default-mpu?partNumber=1&uploadId="+initResp.UploadID, strings.NewReader("tail"))
-	partW := httptest.NewRecorder()
-	h.ServeHTTP(partW, partReq)
-	if partW.Code != http.StatusOK {
-		t.Fatalf("part status: %d body=%s", partW.Code, partW.Body.String())
-	}
-	if got := partW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
-		t.Fatalf("expected part SSE header, got %q", got)
-	}
-
-	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>` + partW.Header().Get("ETag") + `</ETag></Part></CompleteMultipartUpload>`
-	completeReq := httptest.NewRequest(http.MethodPost, "/bucket/default-mpu?uploadId="+initResp.UploadID, strings.NewReader(completeBody))
-	completeW := httptest.NewRecorder()
-	h.ServeHTTP(completeW, completeReq)
-	if completeW.Code != http.StatusOK {
-		t.Fatalf("complete status: %d body=%s", completeW.Code, completeW.Body.String())
-	}
-	if got := completeW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
-		t.Fatalf("expected complete SSE header, got %q", got)
-	}
-	getReq := httptest.NewRequest(http.MethodGet, "/bucket/default-mpu", nil)
-	getW := httptest.NewRecorder()
-	h.ServeHTTP(getW, getReq)
-	if getW.Code != http.StatusOK || getW.Body.String() != "tail" {
-		t.Fatalf("GET status/body: %d %q", getW.Code, getW.Body.String())
-	}
-}
-
-func TestKMSMultipartInitiateAndComplete(t *testing.T) {
-	h := newTestHandler(t)
-	createBucket(t, h, "bucket")
-
-	initReq := httptest.NewRequest(http.MethodPost, "/bucket/kms-mpu?uploads", nil)
-	initReq.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
-	initReq.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
-	initW := httptest.NewRecorder()
-	h.ServeHTTP(initW, initReq)
-	if initW.Code != http.StatusOK {
-		t.Fatalf("init status: %d body=%s", initW.Code, initW.Body.String())
-	}
-	if got := initW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
-		t.Fatalf("expected init KMS header, got %q", got)
-	}
-	var initResp initiateMultipartResult
-	if err := xml.Unmarshal(initW.Body.Bytes(), &initResp); err != nil {
-		t.Fatalf("unmarshal init: %v", err)
-	}
-
-	partReq := httptest.NewRequest(http.MethodPut, "/bucket/kms-mpu?partNumber=1&uploadId="+initResp.UploadID, strings.NewReader("tail"))
-	partW := httptest.NewRecorder()
-	h.ServeHTTP(partW, partReq)
-	if partW.Code != http.StatusOK {
-		t.Fatalf("part status: %d body=%s", partW.Code, partW.Body.String())
-	}
-	if got := partW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
-		t.Fatalf("expected part KMS header, got %q", got)
-	}
-
-	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>` + partW.Header().Get("ETag") + `</ETag></Part></CompleteMultipartUpload>`
-	completeReq := httptest.NewRequest(http.MethodPost, "/bucket/kms-mpu?uploadId="+initResp.UploadID, strings.NewReader(completeBody))
-	completeW := httptest.NewRecorder()
-	h.ServeHTTP(completeW, completeReq)
-	if completeW.Code != http.StatusOK {
-		t.Fatalf("complete status: %d body=%s", completeW.Code, completeW.Body.String())
-	}
-	if got := completeW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
-		t.Fatalf("expected complete KMS header, got %q", got)
-	}
-	getReq := httptest.NewRequest(http.MethodGet, "/bucket/kms-mpu", nil)
-	getW := httptest.NewRecorder()
-	h.ServeHTTP(getW, getReq)
-	if getW.Code != http.StatusOK || getW.Body.String() != "tail" {
-		t.Fatalf("GET status/body: %d %q", getW.Code, getW.Body.String())
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHandler(t)
+			createBucket(t, h, "bucket")
+			if tc.setup != nil {
+				tc.setup(t, h)
+			}
+			runEncryptedMultipartFlow(t, h, tc.key, tc.initHeader, tc.wantSSE, tc.wantKeyID)
+		})
 	}
 }
 
@@ -515,6 +459,59 @@ func TestBucketDefaultKMSAffectsMultipartInitiate(t *testing.T) {
 	}
 	if got := initW.Header().Get("x-amz-server-side-encryption-aws-kms-key-id"); got != "local:v1" {
 		t.Fatalf("expected init KMS key id, got %q", got)
+	}
+}
+
+func runEncryptedMultipartFlow(t *testing.T, h *Handler, key string, setInitHeaders func(http.Header), wantSSE, wantKeyID string) {
+	t.Helper()
+	initReq := httptest.NewRequest(http.MethodPost, "/bucket/"+key+"?uploads", nil)
+	if setInitHeaders != nil {
+		setInitHeaders(initReq.Header)
+	}
+	initW := httptest.NewRecorder()
+	h.ServeHTTP(initW, initReq)
+	if initW.Code != http.StatusOK {
+		t.Fatalf("init status: %d body=%s", initW.Code, initW.Body.String())
+	}
+	assertEncryptionHeaders(t, initW.Header(), "init", wantSSE, wantKeyID)
+	var initResp initiateMultipartResult
+	if err := xml.Unmarshal(initW.Body.Bytes(), &initResp); err != nil {
+		t.Fatalf("unmarshal init: %v", err)
+	}
+
+	partReq := httptest.NewRequest(http.MethodPut, "/bucket/"+key+"?partNumber=1&uploadId="+initResp.UploadID, strings.NewReader("tail"))
+	partW := httptest.NewRecorder()
+	h.ServeHTTP(partW, partReq)
+	if partW.Code != http.StatusOK {
+		t.Fatalf("part status: %d body=%s", partW.Code, partW.Body.String())
+	}
+	assertEncryptionHeaders(t, partW.Header(), "part", wantSSE, wantKeyID)
+
+	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>` + partW.Header().Get("ETag") + `</ETag></Part></CompleteMultipartUpload>`
+	completeReq := httptest.NewRequest(http.MethodPost, "/bucket/"+key+"?uploadId="+initResp.UploadID, strings.NewReader(completeBody))
+	completeW := httptest.NewRecorder()
+	h.ServeHTTP(completeW, completeReq)
+	if completeW.Code != http.StatusOK {
+		t.Fatalf("complete status: %d body=%s", completeW.Code, completeW.Body.String())
+	}
+	assertEncryptionHeaders(t, completeW.Header(), "complete", wantSSE, wantKeyID)
+	getReq := httptest.NewRequest(http.MethodGet, "/bucket/"+key, nil)
+	getW := httptest.NewRecorder()
+	h.ServeHTTP(getW, getReq)
+	if getW.Code != http.StatusOK || getW.Body.String() != "tail" {
+		t.Fatalf("GET status/body: %d %q", getW.Code, getW.Body.String())
+	}
+}
+
+func assertEncryptionHeaders(t *testing.T, header http.Header, phase, wantSSE, wantKeyID string) {
+	t.Helper()
+	if got := header.Get("x-amz-server-side-encryption"); got != wantSSE {
+		t.Fatalf("expected %s SSE header %q, got %q", phase, wantSSE, got)
+	}
+	if wantKeyID != "" {
+		if got := header.Get("x-amz-server-side-encryption-aws-kms-key-id"); got != wantKeyID {
+			t.Fatalf("expected %s KMS key id %q, got %q", phase, wantKeyID, got)
+		}
 	}
 }
 

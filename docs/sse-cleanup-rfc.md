@@ -169,6 +169,11 @@ Move production envelope-key operations behind `KeyProvider`. Keep low-level cry
 
 Keep tests that protect public behavior, persisted format compatibility, and ops safety. Remove or simplify tests that duplicate the same assertion at multiple layers without distinct risk coverage.
 
+#### Pass 5 Notes
+
+- Consolidated policy encryption-condition tests into table-driven coverage for `require_sse_s3`, KMS-only rejection, and `require_encryption`.
+- Consolidated repeated encrypted MPU init/upload/complete/readback assertions behind a shared S3 test helper while keeping separate coverage for bucket-default KMS initiation.
+
 ### Pass 6: Documentation Alignment
 
 Update wording so docs describe the current model: S3-facing SSE-S3/SSE-KMS-compatible modes over internal key providers, with local and Vault Transit backends.
