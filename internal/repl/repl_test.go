@@ -268,6 +268,49 @@ func TestReplPullBucketDefaultEncryptionConverges(t *testing.T) {
 	}
 }
 
+func TestReplPullBucketDefaultKMSConverges(t *testing.T) {
+	ctx := context.Background()
+	key := replTestSSEKey("local:v1", 1)
+	provider := replTestProvider(t, key.ID, key)
+	source := newReplTestNode(t, "site-a", provider)
+	target := newReplTestNode(t, "site-b", provider)
+	sourceServer := source.startReplicationServer(t)
+
+	if err := source.store.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("CreateBucket source: %v", err)
+	}
+	if err := source.store.SetBucketEncryptionWithKey(ctx, "bucket", meta.BucketEncryptionModeSSEKMS, meta.BucketEncryptionAlgorithmAWSKMS, key.ID); err != nil {
+		t.Fatalf("SetBucketEncryption source: %v", err)
+	}
+
+	pullFromNode(t, target, sourceServer, "")
+	cfg, err := target.store.GetBucketEncryption(ctx, "bucket")
+	if err != nil {
+		t.Fatalf("GetBucketEncryption target: %v", err)
+	}
+	if cfg.Mode != meta.BucketEncryptionModeSSEKMS || cfg.Algorithm != meta.BucketEncryptionAlgorithmAWSKMS || cfg.KeyID != key.ID {
+		t.Fatalf("unexpected replicated KMS config: %+v", cfg)
+	}
+
+	putResp := serveNodeRequest(t, target, http.MethodPut, "/bucket/defaulted-kms.txt", "replicated kms default")
+	if putResp.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", putResp.Code, putResp.Body.String())
+	}
+	if got := putResp.Header().Get("x-amz-server-side-encryption"); got != ssecrypto.ServerSideHeaderKMS {
+		t.Fatalf("expected SSE-KMS response header, got %q", got)
+	}
+	if got := putResp.Header().Get("x-amz-server-side-encryption-aws-kms-key-id"); got != key.ID {
+		t.Fatalf("expected KMS key id, got %q", got)
+	}
+	obj, err := target.store.GetObjectMeta(ctx, "bucket", "defaulted-kms.txt")
+	if err != nil {
+		t.Fatalf("GetObjectMeta target: %v", err)
+	}
+	if obj.EncryptionMode != ssecrypto.ModeSSEKMS || obj.EncryptionAlgorithm != ssecrypto.AlgorithmAWSKMS || obj.EncryptionKeyIDs != key.ID {
+		t.Fatalf("expected KMS encrypted target object, got %+v", obj)
+	}
+}
+
 func TestReplPullRequireSSES3PolicySatisfiedByReplicatedDefault(t *testing.T) {
 	ctx := context.Background()
 	key := replTestSSEKey("local:v1", 1)

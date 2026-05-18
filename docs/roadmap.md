@@ -29,7 +29,6 @@ Tag legend (order used below):
 - [perf][research] Consider read-path optimizations if virtual manifests increase read latency in real workloads.
 - [perf][research] Reduce barrier pressure by combining meta updates in fewer transactions.
 - [api][research] Evaluate SSE-C (client-provided keys) feasibility and operational risks.
-- [api][research] Evaluate SSE-KMS-compatible request API on top of the existing SSE-S3 provider backends.
 - [storage][research] Evaluate a pending-MPU-DEK design so encrypted MPU-created objects can use one DEK for the final object without data rewrite.
 - [storage][research] Evaluate AAD v2 with stronger object-context binding if MPU/GC paths can re-encrypt or preserve stable object context.
 - [api][research] Evaluate optional opaque ETag mode for encrypted objects.

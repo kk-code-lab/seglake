@@ -68,13 +68,13 @@ const (
 func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket, key, requestID, resource string) {
 	uploadID := newRequestID() + newRequestID()
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
+	encrypt, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, resource)
 		return
 	}
-	if encrypt && !h.Engine.SSES3Enabled() {
-		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, resource)
+	if encrypt.Encrypted() && !h.Engine.SSES3Enabled() {
+		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "server-side encryption is not enabled", requestID, resource)
 		return
 	}
 	if err := h.Engine.CommitMeta(ctx, func(tx *sql.Tx) error {
@@ -84,8 +84,11 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 		if err := h.Meta.CreateMultipartUploadTx(ctx, tx, bucket, key, uploadID, contentType); err != nil {
 			return err
 		}
-		if encrypt {
+		if encrypt.SSES3() {
 			return h.Meta.SetMultipartUploadEncryptionTx(ctx, tx, uploadID, ssecrypto.ModeSSES3, ssecrypto.AlgorithmAES256GCM, "")
+		}
+		if encrypt.SSEKMS() {
+			return h.Meta.SetMultipartUploadEncryptionTx(ctx, tx, uploadID, ssecrypto.ModeSSEKMS, ssecrypto.AlgorithmAWSKMS, encrypt.KeyID)
 		}
 		return nil
 	}); err != nil {
@@ -98,8 +101,11 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 		UploadID: uploadID,
 	}
 	w.Header().Set("Content-Type", "application/xml")
-	if encrypt {
+	if encrypt.SSES3() {
 		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	} else if encrypt.SSEKMS() {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", encrypt.KeyID)
 	}
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(resp)
@@ -194,6 +200,13 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 			}
 			return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
 		})
+	} else if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSEKMS) {
+		_, result, err = h.Engine.PutObjectSSEKMSWithCommit(ctx, "", "", "", reader, upload.EncryptionKeyIDs, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+			if h.Meta == nil {
+				return fmt.Errorf("meta store not configured")
+			}
+			return h.Meta.PutMultipartPartTx(ctx, tx, uploadID, partNumber, result.VersionID, result.ETag, result.Size)
+		})
 	} else {
 		_, result, err = h.Engine.PutObjectWithCommit(ctx, "", "", "", reader, func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
 			if h.Meta == nil {
@@ -212,6 +225,11 @@ func (h *Handler) handleUploadPart(ctx context.Context, w http.ResponseWriter, r
 	w.Header().Set("ETag", `"`+result.ETag+`"`)
 	if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSES3) {
 		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	} else if strings.EqualFold(upload.EncryptionMode, ssecrypto.ModeSSEKMS) {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
+		if upload.EncryptionKeyIDs != "" {
+			w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", upload.EncryptionKeyIDs)
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -385,7 +403,7 @@ func (h *Handler) handleCompleteMultipart(ctx context.Context, w http.ResponseWr
 	}
 	w.Header().Set("ETag", `"`+multiETag+`"`)
 	if finalEnc != nil {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+		setEncryptionResponseHeaders(w.Header(), finalEnc.Mode, firstManifestKeyID(finalEnc))
 	}
 	if result != nil {
 		_ = result
@@ -455,4 +473,16 @@ func multipartETag(parts []meta.MultipartPart) string {
 		h.Write(sum)
 	}
 	return hex.EncodeToString(h.Sum(nil)) + "-" + strconv.Itoa(len(parts))
+}
+
+func firstManifestKeyID(enc *manifest.Encryption) string {
+	if enc == nil {
+		return ""
+	}
+	for _, key := range enc.Keys {
+		if strings.TrimSpace(key.KeyID) != "" {
+			return strings.TrimSpace(key.KeyID)
+		}
+	}
+	return ""
 }

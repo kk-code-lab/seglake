@@ -209,6 +209,57 @@ func TestEngineSSES3PutGetRangeAndTamper(t *testing.T) {
 	_ = badReader.Close()
 }
 
+func TestEngineSSEKMSStoresCompatibleSummaryAndReads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := ssecrypto.Key{ID: "local:v1"}
+	copy(key.Bytes[:], bytes.Repeat([]byte{7}, 32))
+	provider, err := ssecrypto.NewProvider(key.ID, []ssecrypto.Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	engine, err := New(Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "data")),
+		MetaStore: store,
+		SSE:       provider,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := []byte("kms-compatible object")
+	man, result, err := engine.PutObjectSSEKMS(context.Background(), "bucket", "key", "", bytes.NewReader(input), key.ID)
+	if err != nil {
+		t.Fatalf("PutObjectSSEKMS: %v", err)
+	}
+	if man.Encryption == nil || man.Encryption.Mode != ssecrypto.ModeSSEKMS || man.Encryption.Algorithm != ssecrypto.AlgorithmAWSKMS {
+		t.Fatalf("unexpected manifest encryption: %+v", man.Encryption)
+	}
+	obj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if obj.EncryptionMode != ssecrypto.ModeSSEKMS || obj.EncryptionAlgorithm != ssecrypto.AlgorithmAWSKMS || obj.EncryptionKeyIDs != key.ID {
+		t.Fatalf("unexpected encryption summary: %+v", obj)
+	}
+	reader, _, err := engine.Get(context.Background(), result.VersionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("payload mismatch: %q", got)
+	}
+}
+
 func TestEngineSSES3WithVaultTransitProvider(t *testing.T) {
 	var dek [32]byte
 	for i := range dek {

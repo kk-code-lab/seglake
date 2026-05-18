@@ -38,7 +38,9 @@ const (
 	BucketVersioningDisabled  = "disabled"
 
 	BucketEncryptionModeSSES3       = "SSE-S3"
+	BucketEncryptionModeSSEKMS      = "SSE-KMS"
 	BucketEncryptionAlgorithmAES256 = "AES256"
+	BucketEncryptionAlgorithmAWSKMS = "aws:kms"
 )
 
 func normalizeBucketVersioningState(raw string) (string, bool) {
@@ -100,6 +102,7 @@ type BucketEncryptionConfig struct {
 	Bucket    string
 	Mode      string
 	Algorithm string
+	KeyID     string
 	UpdatedAt string
 }
 
@@ -155,6 +158,7 @@ type oplogBucketEncryptionPayload struct {
 	Bucket    string `json:"bucket"`
 	Mode      string `json:"mode"`
 	Algorithm string `json:"algorithm"`
+	KeyID     string `json:"key_id,omitempty"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -613,6 +617,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 22 {
+		if err = applyV22(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(22, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -996,6 +1008,23 @@ func applyV21(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func applyV22(ctx context.Context, tx *sql.Tx) error {
+	exists, err := columnExists(ctx, tx, "bucket_encryption", "key_id")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE bucket_encryption ADD COLUMN key_id TEXT NOT NULL DEFAULT ''"); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return err
 	}
 	return nil
 }
@@ -1686,10 +1715,16 @@ func (s *Store) DeleteBucketPolicy(ctx context.Context, bucket string) (err erro
 
 // SetBucketEncryption sets or replaces a bucket default encryption config.
 func (s *Store) SetBucketEncryption(ctx context.Context, bucket, mode, algorithm string) (err error) {
+	return s.SetBucketEncryptionWithKey(ctx, bucket, mode, algorithm, "")
+}
+
+// SetBucketEncryptionWithKey sets or replaces a bucket default encryption config.
+func (s *Store) SetBucketEncryptionWithKey(ctx context.Context, bucket, mode, algorithm, keyID string) (err error) {
 	if bucket == "" {
 		return fmt.Errorf("meta: bucket required")
 	}
-	if mode != BucketEncryptionModeSSES3 || algorithm != BucketEncryptionAlgorithmAES256 {
+	keyID = strings.TrimSpace(keyID)
+	if !validBucketEncryptionConfig(mode, algorithm, keyID) {
 		return fmt.Errorf("meta: invalid bucket encryption config")
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
@@ -1707,18 +1742,20 @@ func (s *Store) SetBucketEncryption(ctx context.Context, bucket, mode, algorithm
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
-INSERT INTO bucket_encryption(bucket, mode, algorithm, updated_at)
-VALUES(?, ?, ?, ?)
+INSERT INTO bucket_encryption(bucket, mode, algorithm, key_id, updated_at)
+VALUES(?, ?, ?, ?, ?)
 ON CONFLICT(bucket) DO UPDATE SET
 	mode=excluded.mode,
 	algorithm=excluded.algorithm,
-	updated_at=excluded.updated_at`, bucket, mode, algorithm, now); err != nil {
+	key_id=excluded.key_id,
+	updated_at=excluded.updated_at`, bucket, mode, algorithm, keyID, now); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(oplogBucketEncryptionPayload{
 		Bucket:    bucket,
 		Mode:      mode,
 		Algorithm: algorithm,
+		KeyID:     keyID,
 		UpdatedAt: now,
 	})
 	if err != nil {
@@ -1731,17 +1768,28 @@ ON CONFLICT(bucket) DO UPDATE SET
 	return tx.Commit()
 }
 
+func validBucketEncryptionConfig(mode, algorithm, keyID string) bool {
+	switch {
+	case mode == BucketEncryptionModeSSES3 && algorithm == BucketEncryptionAlgorithmAES256:
+		return keyID == ""
+	case mode == BucketEncryptionModeSSEKMS && algorithm == BucketEncryptionAlgorithmAWSKMS:
+		return true
+	default:
+		return false
+	}
+}
+
 // GetBucketEncryption returns a bucket default encryption config.
 func (s *Store) GetBucketEncryption(ctx context.Context, bucket string) (BucketEncryptionConfig, error) {
 	if bucket == "" {
 		return BucketEncryptionConfig{}, errors.New("meta: bucket required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT bucket, mode, algorithm, updated_at
+SELECT bucket, mode, algorithm, COALESCE(key_id,''), updated_at
 FROM bucket_encryption
 WHERE bucket=?`, bucket)
 	var cfg BucketEncryptionConfig
-	if err := row.Scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.UpdatedAt); err != nil {
+	if err := row.Scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.KeyID, &cfg.UpdatedAt); err != nil {
 		return BucketEncryptionConfig{}, err
 	}
 	return cfg, nil
@@ -1750,7 +1798,7 @@ WHERE bucket=?`, bucket)
 // ListBucketEncryption returns default encryption configs by bucket name.
 func (s *Store) ListBucketEncryption(ctx context.Context) (map[string]BucketEncryptionConfig, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT bucket, mode, algorithm, updated_at
+SELECT bucket, mode, algorithm, COALESCE(key_id,''), updated_at
 FROM bucket_encryption
 ORDER BY bucket`)
 	if err != nil {
@@ -1759,7 +1807,7 @@ ORDER BY bucket`)
 	out := make(map[string]BucketEncryptionConfig)
 	if err := scanRows(rows, func(scan func(dest ...any) error) error {
 		var cfg BucketEncryptionConfig
-		if err := scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.UpdatedAt); err != nil {
+		if err := scan(&cfg.Bucket, &cfg.Mode, &cfg.Algorithm, &cfg.KeyID, &cfg.UpdatedAt); err != nil {
 			return err
 		}
 		out[cfg.Bucket] = cfg
@@ -2651,14 +2699,14 @@ ON CONFLICT(bucket) DO UPDATE SET policy=excluded.policy, updated_at=excluded.up
 				if payload.Bucket == "" {
 					payload.Bucket = entry.Bucket
 				}
-				if payload.Mode != BucketEncryptionModeSSES3 || payload.Algorithm != BucketEncryptionAlgorithmAES256 {
+				if !validBucketEncryptionConfig(payload.Mode, payload.Algorithm, payload.KeyID) {
 					return fmt.Errorf("meta: invalid bucket_encryption payload")
 				}
 				_, err := tx.Exec(`
-INSERT INTO bucket_encryption(bucket, mode, algorithm, updated_at)
-VALUES(?, ?, ?, ?)
-ON CONFLICT(bucket) DO UPDATE SET mode=excluded.mode, algorithm=excluded.algorithm, updated_at=excluded.updated_at`,
-					payload.Bucket, payload.Mode, payload.Algorithm, payload.UpdatedAt)
+INSERT INTO bucket_encryption(bucket, mode, algorithm, key_id, updated_at)
+VALUES(?, ?, ?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET mode=excluded.mode, algorithm=excluded.algorithm, key_id=excluded.key_id, updated_at=excluded.updated_at`,
+					payload.Bucket, payload.Mode, payload.Algorithm, payload.KeyID, payload.UpdatedAt)
 				if err != nil {
 					return err
 				}

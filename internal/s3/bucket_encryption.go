@@ -54,14 +54,20 @@ func (h *Handler) handleGetBucketEncryption(ctx context.Context, w http.Response
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	if cfg.Mode != meta.BucketEncryptionModeSSES3 || cfg.Algorithm != meta.BucketEncryptionAlgorithmAES256 {
+	if !supportedBucketEncryptionConfig(cfg.Mode, cfg.Algorithm) {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "unsupported bucket encryption configuration", requestID, r.URL.Path)
 		return
+	}
+	alg := ssecrypto.ServerSideHeaderS3
+	keyID := ""
+	if cfg.Mode == meta.BucketEncryptionModeSSEKMS {
+		alg = ssecrypto.ServerSideHeaderKMS
+		keyID = cfg.KeyID
 	}
 	resp := serverSideEncryptionConfiguration{
 		Xmlns: bucketEncryptionXMLNamespace,
 		Rules: []serverSideEncryptionRule{{
-			ApplyByDefault: serverSideEncryptionByDefault{SSEAlgorithm: ssecrypto.ServerSideHeaderS3},
+			ApplyByDefault: serverSideEncryptionByDefault{SSEAlgorithm: alg, KMSMasterKeyID: keyID},
 		}},
 	}
 	w.Header().Set("Content-Type", "application/xml")
@@ -89,14 +95,23 @@ func (h *Handler) handlePutBucketEncryption(ctx context.Context, w http.Response
 		return
 	}
 	if err := validateBucketEncryptionConfig(req); err != nil {
-		if errors.Is(err, errBucketEncryptionKMSUnsupported) {
-			writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-KMS bucket encryption is not supported", requestID, r.URL.Path)
+		if errors.Is(err, errBucketEncryptionUnsupportedFeature) {
+			writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", err.Error(), requestID, r.URL.Path)
 			return
 		}
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", err.Error(), requestID, r.URL.Path)
 		return
 	}
-	if err := h.Meta.SetBucketEncryption(ctx, bucket, meta.BucketEncryptionModeSSES3, meta.BucketEncryptionAlgorithmAES256); err != nil {
+	rule := req.Rules[0]
+	mode := meta.BucketEncryptionModeSSES3
+	algorithm := meta.BucketEncryptionAlgorithmAES256
+	keyID := ""
+	if strings.EqualFold(strings.TrimSpace(rule.ApplyByDefault.SSEAlgorithm), ssecrypto.ServerSideHeaderKMS) {
+		mode = meta.BucketEncryptionModeSSEKMS
+		algorithm = meta.BucketEncryptionAlgorithmAWSKMS
+		keyID = strings.TrimSpace(rule.ApplyByDefault.KMSMasterKeyID)
+	}
+	if err := h.Meta.SetBucketEncryptionWithKey(ctx, bucket, mode, algorithm, keyID); err != nil {
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}
@@ -124,7 +139,7 @@ func (h *Handler) handleDeleteBucketEncryption(ctx context.Context, w http.Respo
 	w.WriteHeader(http.StatusNoContent)
 }
 
-var errBucketEncryptionKMSUnsupported = errors.New("bucket encryption KMS unsupported")
+var errBucketEncryptionUnsupportedFeature = errors.New("unsupported bucket encryption feature")
 
 func validateBucketEncryptionConfig(cfg serverSideEncryptionConfiguration) error {
 	if len(cfg.Rules) != 1 {
@@ -132,11 +147,17 @@ func validateBucketEncryptionConfig(cfg serverSideEncryptionConfiguration) error
 	}
 	rule := cfg.Rules[0]
 	alg := strings.TrimSpace(rule.ApplyByDefault.SSEAlgorithm)
-	if rule.ApplyByDefault.KMSMasterKeyID != "" || isKMSAlgorithm(alg) {
-		return errBucketEncryptionKMSUnsupported
-	}
 	if rule.BucketKeyEnabled != nil && *rule.BucketKeyEnabled {
-		return errBucketEncryptionKMSUnsupported
+		return fmt.Errorf("%w: bucket keys are not implemented", errBucketEncryptionUnsupportedFeature)
+	}
+	if strings.EqualFold(alg, "aws:kms:dsse") {
+		return fmt.Errorf("%w: DSSE-KMS is not implemented", errBucketEncryptionUnsupportedFeature)
+	}
+	if strings.EqualFold(alg, ssecrypto.ServerSideHeaderKMS) {
+		return nil
+	}
+	if rule.ApplyByDefault.KMSMasterKeyID != "" {
+		return fmt.Errorf("KMSMasterKeyID requires aws:kms")
 	}
 	if alg != ssecrypto.ServerSideHeaderS3 {
 		return fmt.Errorf("unsupported bucket encryption algorithm")
@@ -144,27 +165,126 @@ func validateBucketEncryptionConfig(cfg serverSideEncryptionConfiguration) error
 	return nil
 }
 
-func isKMSAlgorithm(alg string) bool {
-	return strings.EqualFold(alg, "aws:kms") || strings.EqualFold(alg, "aws:kms:dsse")
+type effectiveEncryptionMode int
+
+const (
+	effectiveEncryptionPlaintext effectiveEncryptionMode = iota
+	effectiveEncryptionSSES3
+	effectiveEncryptionSSEKMS
+)
+
+type effectiveEncryption struct {
+	Mode     effectiveEncryptionMode
+	KeyID    string
+	Explicit bool
 }
 
-func (h *Handler) effectiveSSES3ForWrite(ctx context.Context, r *http.Request, bucket string) (bool, *requestError) {
-	requested, reqErr := sseS3Requested(r)
-	if reqErr != nil || requested {
+func (e effectiveEncryption) Encrypted() bool {
+	return e.Mode == effectiveEncryptionSSES3 || e.Mode == effectiveEncryptionSSEKMS
+}
+
+func (e effectiveEncryption) SSES3() bool {
+	return e.Mode == effectiveEncryptionSSES3
+}
+
+func (e effectiveEncryption) SSEKMS() bool {
+	return e.Mode == effectiveEncryptionSSEKMS
+}
+
+func (e effectiveEncryption) HeaderValue() string {
+	switch e.Mode {
+	case effectiveEncryptionSSES3:
+		return ssecrypto.ServerSideHeaderS3
+	case effectiveEncryptionSSEKMS:
+		return ssecrypto.ServerSideHeaderKMS
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) effectiveEncryptionForWrite(ctx context.Context, r *http.Request, bucket string) (effectiveEncryption, *requestError) {
+	requested, reqErr := explicitEncryptionForWrite(r)
+	if reqErr != nil || requested.SSES3() || (requested.SSEKMS() && requested.KeyID != "") {
 		return requested, reqErr
 	}
+	if requested.SSEKMS() {
+		keyID := ""
+		if h != nil && h.Meta != nil && bucket != "" {
+			cfg, err := h.Meta.GetBucketEncryption(ctx, bucket)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return effectiveEncryption{}, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: err.Error()}
+			}
+			if err == nil && cfg.Mode == meta.BucketEncryptionModeSSEKMS && cfg.Algorithm == meta.BucketEncryptionAlgorithmAWSKMS {
+				keyID = strings.TrimSpace(cfg.KeyID)
+			}
+		}
+		if keyID == "" && h != nil && h.Engine != nil {
+			keyID = h.Engine.SSEDefaultKeyID()
+		}
+		if keyID == "" {
+			return effectiveEncryption{}, &requestError{status: http.StatusBadRequest, code: "InvalidRequest", message: "SSE-KMS key id could not be resolved"}
+		}
+		return effectiveEncryption{Mode: effectiveEncryptionSSEKMS, KeyID: keyID, Explicit: true}, nil
+	}
 	if h == nil || h.Meta == nil || bucket == "" {
-		return false, nil
+		return effectiveEncryption{}, nil
 	}
 	cfg, err := h.Meta.GetBucketEncryption(ctx, bucket)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+			return effectiveEncryption{}, nil
 		}
-		return false, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: err.Error()}
+		return effectiveEncryption{}, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: err.Error()}
 	}
 	if cfg.Mode == meta.BucketEncryptionModeSSES3 && cfg.Algorithm == meta.BucketEncryptionAlgorithmAES256 {
-		return true, nil
+		return effectiveEncryption{Mode: effectiveEncryptionSSES3}, nil
 	}
-	return false, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: "unsupported bucket encryption configuration"}
+	if cfg.Mode == meta.BucketEncryptionModeSSEKMS && cfg.Algorithm == meta.BucketEncryptionAlgorithmAWSKMS {
+		keyID := strings.TrimSpace(cfg.KeyID)
+		if keyID == "" && h.Engine != nil {
+			keyID = h.Engine.SSEDefaultKeyID()
+		}
+		if keyID == "" {
+			return effectiveEncryption{}, &requestError{status: http.StatusBadRequest, code: "InvalidRequest", message: "SSE-KMS key id could not be resolved"}
+		}
+		return effectiveEncryption{Mode: effectiveEncryptionSSEKMS, KeyID: keyID}, nil
+	}
+	return effectiveEncryption{}, &requestError{status: http.StatusInternalServerError, code: "InternalError", message: "unsupported bucket encryption configuration"}
+}
+
+func explicitEncryptionForWrite(r *http.Request) (effectiveEncryption, *requestError) {
+	value := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption"))
+	kmsKeyID := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id"))
+	contextHeader := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption-Context"))
+	bucketKeyEnabled := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption-Bucket-Key-Enabled"))
+	if contextHeader != "" {
+		return effectiveEncryption{}, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-KMS encryption context is not implemented"}
+	}
+	if strings.EqualFold(bucketKeyEnabled, "true") {
+		return effectiveEncryption{}, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-KMS bucket keys are not implemented"}
+	}
+	if value == "" {
+		if kmsKeyID != "" || bucketKeyEnabled != "" {
+			return effectiveEncryption{}, &requestError{status: http.StatusBadRequest, code: "InvalidArgument", message: "SSE-KMS parameters require aws:kms encryption"}
+		}
+		return effectiveEncryption{}, nil
+	}
+	switch {
+	case value == ssecrypto.ServerSideHeaderS3:
+		if kmsKeyID != "" || bucketKeyEnabled != "" {
+			return effectiveEncryption{}, &requestError{status: http.StatusBadRequest, code: "InvalidArgument", message: "SSE-KMS parameters require aws:kms encryption"}
+		}
+		return effectiveEncryption{Mode: effectiveEncryptionSSES3, Explicit: true}, nil
+	case strings.EqualFold(value, ssecrypto.ServerSideHeaderKMS):
+		return effectiveEncryption{Mode: effectiveEncryptionSSEKMS, KeyID: kmsKeyID, Explicit: true}, nil
+	case strings.EqualFold(value, "aws:kms:dsse"):
+		return effectiveEncryption{}, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "DSSE-KMS is not implemented"}
+	default:
+		return effectiveEncryption{}, &requestError{status: http.StatusBadRequest, code: "InvalidArgument", message: "unsupported server-side encryption"}
+	}
+}
+
+func supportedBucketEncryptionConfig(mode, algorithm string) bool {
+	return (mode == meta.BucketEncryptionModeSSES3 && algorithm == meta.BucketEncryptionAlgorithmAES256) ||
+		(mode == meta.BucketEncryptionModeSSEKMS && algorithm == meta.BucketEncryptionAlgorithmAWSKMS)
 }

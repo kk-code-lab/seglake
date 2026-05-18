@@ -117,6 +117,31 @@ func TestProviderDataKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProviderGenerateDataKeyWithRequestedKeyID(t *testing.T) {
+	active, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey active: %v", err)
+	}
+	target, err := DecodeKey("local:v2", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey target: %v", err)
+	}
+	provider, err := NewProvider(active.ID, []Key{active, target})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	generated, err := provider.GenerateDataKey(context.Background(), GenerateDataKeyRequest{KeyRef: 3, KeyID: target.ID})
+	if err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
+	}
+	if generated.KeyEntry.KeyID != target.ID || generated.KeyEntry.KeyRef != 3 {
+		t.Fatalf("unexpected requested key entry: %+v", generated.KeyEntry)
+	}
+	if _, err := provider.GenerateDataKey(context.Background(), GenerateDataKeyRequest{KeyID: "local:missing"}); !errors.Is(err, ErrMissingKey) {
+		t.Fatalf("expected missing requested key error, got %v", err)
+	}
+}
+
 func TestProviderRewrapDataKey(t *testing.T) {
 	oldKey, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("o", 32))))
 	if err != nil {

@@ -209,10 +209,68 @@ func TestPolicyRequireSSES3InvalidExplicitHeadersKeepSSEErrors(t *testing.T) {
 	kmsReq := newTestRequest(http.MethodPut, "/demo/kms", bytes.NewReader([]byte("x")))
 	kmsReq.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
 	signRequestTest(kmsReq, "ak", "sk", "us-east-1")
+	kmsReq.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
 	kmsResp := doRequest(t, handler, kmsReq)
 	_ = kmsResp.Body.Close()
-	if kmsResp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("KMS SSE status: %d", kmsResp.StatusCode)
+	if kmsResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("KMS under require_sse_s3 status: %d", kmsResp.StatusCode)
+	}
+}
+
+func TestPolicyRequireEncryptionAllowsSSES3AndKMS(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject","HeadObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_encryption":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+
+	plainReq := newTestRequest(http.MethodPut, "/demo/plain", bytes.NewReader([]byte("plain")))
+	signRequestTest(plainReq, "ak", "sk", "us-east-1")
+	plainResp := doRequest(t, handler, plainReq)
+	_ = plainResp.Body.Close()
+	if plainResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plaintext PUT status: %d", plainResp.StatusCode)
+	}
+
+	s3Req := newTestRequest(http.MethodPut, "/demo/sse-s3", bytes.NewReader([]byte("s3")))
+	s3Req.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	signRequestTest(s3Req, "ak", "sk", "us-east-1")
+	s3Resp := doRequest(t, handler, s3Req)
+	_ = s3Resp.Body.Close()
+	if s3Resp.StatusCode != http.StatusOK {
+		t.Fatalf("SSE-S3 PUT status: %d", s3Resp.StatusCode)
+	}
+
+	kmsReq := newTestRequest(http.MethodPut, "/demo/kms", bytes.NewReader([]byte("kms")))
+	kmsReq.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	kmsReq.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
+	signRequestTest(kmsReq, "ak", "sk", "us-east-1")
+	kmsResp := doRequest(t, handler, kmsReq)
+	_ = kmsResp.Body.Close()
+	if kmsResp.StatusCode != http.StatusOK {
+		t.Fatalf("SSE-KMS PUT status: %d", kmsResp.StatusCode)
+	}
+	if got := kmsResp.Header.Get("x-amz-server-side-encryption"); got != "aws:kms" {
+		t.Fatalf("expected KMS response header, got %q", got)
+	}
+}
+
+func TestPolicyRequireEncryptionSatisfiedByKMSBucketDefault(t *testing.T) {
+	policy := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_encryption":true}}]}`
+	handler := newPolicyHandlerWithSSE(t, policy, testSSEProvider(t))
+	if err := handler.Meta.CreateBucket(context.Background(), "demo"); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := handler.Meta.SetBucketEncryptionWithKey(context.Background(), "demo", meta.BucketEncryptionModeSSEKMS, meta.BucketEncryptionAlgorithmAWSKMS, "local:v1"); err != nil {
+		t.Fatalf("SetBucketEncryptionWithKey: %v", err)
+	}
+
+	req := newTestRequest(http.MethodPut, "/demo/default-kms", bytes.NewReader([]byte("secret")))
+	signRequestTest(req, "ak", "sk", "us-east-1")
+	resp := doRequest(t, handler, req)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("x-amz-server-side-encryption"); got != "aws:kms" {
+		t.Fatalf("expected KMS response header, got %q", got)
 	}
 }
 

@@ -1,8 +1,8 @@
 # RFC: SSE-S3 key provider interface
 
-Status: Accepted / Phase 1 and Vault Transit phase 2 implemented
+Status: Accepted / Phase 1, Vault Transit phase 2, and later SSE-KMS-compatible API implemented
 Scope: SSE-S3 crypto/key abstraction, local KEK provider compatibility, future external key-provider backends.  
-Target: Provider-interface refactor plus Vault Transit backend before any SSE-KMS-compatible API.
+Target: Provider-interface refactor plus Vault Transit backend before the SSE-KMS-compatible API phase.
 
 ---
 

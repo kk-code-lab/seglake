@@ -28,10 +28,14 @@ import (
 
 // PutResult captures metadata for a successful write.
 type PutResult struct {
-	VersionID   string
-	ETag        string
-	Size        int64
-	CommittedAt time.Time
+	VersionID           string
+	ETag                string
+	Size                int64
+	CommittedAt         time.Time
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	EncryptionKeyIDs    string
+	EncryptionKeyID     string
 }
 
 // Options configures the storage engine.
@@ -119,6 +123,13 @@ func (e *Engine) SSES3Enabled() bool {
 	return e != nil && e.sse != nil
 }
 
+func (e *Engine) SSEDefaultKeyID() string {
+	if e == nil || e.sse == nil {
+		return ""
+	}
+	return ssecrypto.DefaultKeyID(e.sse)
+}
+
 // Put stores an object stream and returns manifest metadata.
 func (e *Engine) Put(ctx context.Context, r io.Reader) (*manifest.Manifest, *PutResult, error) {
 	return e.PutObject(ctx, "", "", "", r)
@@ -131,6 +142,10 @@ func (e *Engine) PutObject(ctx context.Context, bucket, key, contentType string,
 
 func (e *Engine) PutObjectSSES3(ctx context.Context, bucket, key, contentType string, r io.Reader) (*manifest.Manifest, *PutResult, error) {
 	return e.PutObjectSSES3WithCommit(ctx, bucket, key, contentType, r, nil)
+}
+
+func (e *Engine) PutObjectSSEKMS(ctx context.Context, bucket, key, contentType string, r io.Reader, keyID string) (*manifest.Manifest, *PutResult, error) {
+	return e.PutObjectSSEKMSWithCommit(ctx, bucket, key, contentType, r, keyID, nil)
 }
 
 // CommitMeta schedules a meta-only commit through the write barrier.
@@ -238,6 +253,14 @@ func (e *Engine) PutObjectWithCommit(ctx context.Context, bucket, key, contentTy
 }
 
 func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, contentType string, r io.Reader, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
+	return e.putObjectEncryptedWithCommit(ctx, bucket, key, contentType, r, ssecrypto.ModeSSES3, ssecrypto.AlgorithmAES256GCM, "", extraCommit)
+}
+
+func (e *Engine) PutObjectSSEKMSWithCommit(ctx context.Context, bucket, key, contentType string, r io.Reader, keyID string, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
+	return e.putObjectEncryptedWithCommit(ctx, bucket, key, contentType, r, ssecrypto.ModeSSEKMS, ssecrypto.AlgorithmAWSKMS, keyID, extraCommit)
+}
+
+func (e *Engine) putObjectEncryptedWithCommit(ctx context.Context, bucket, key, contentType string, r io.Reader, mode, algorithm, keyID string, extraCommit func(tx *sql.Tx, result *PutResult, manifestPath string) error) (*manifest.Manifest, *PutResult, error) {
 	if e.sse == nil {
 		return nil, nil, ssecrypto.ErrDisabled
 	}
@@ -248,7 +271,7 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 	if err != nil {
 		return nil, nil, err
 	}
-	dataKey, err := e.sse.GenerateDataKey(ctx, ssecrypto.GenerateDataKeyRequest{KeyRef: 0})
+	dataKey, err := e.sse.GenerateDataKey(ctx, ssecrypto.GenerateDataKeyRequest{KeyRef: 0, KeyID: keyID})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -259,8 +282,8 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 		Key:       key,
 		VersionID: versionID,
 		Encryption: &manifest.Encryption{
-			Mode:          ssecrypto.ModeSSES3,
-			Algorithm:     ssecrypto.AlgorithmAES256GCM,
+			Mode:          mode,
+			Algorithm:     algorithm,
 			WrapAlgorithm: wrapAlgorithm,
 			AADScheme:     ssecrypto.AADSchemeV1,
 			Keys:          []manifest.KeyEntry{keyEntry},
@@ -306,9 +329,13 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 	}
 	man.Size = size
 	result := &PutResult{
-		VersionID: versionID,
-		ETag:      hex.EncodeToString(hasher.Sum(nil)),
-		Size:      size,
+		VersionID:           versionID,
+		ETag:                hex.EncodeToString(hasher.Sum(nil)),
+		Size:                size,
+		EncryptionMode:      mode,
+		EncryptionAlgorithm: algorithm,
+		EncryptionKeyIDs:    keyEntry.KeyID,
+		EncryptionKeyID:     keyEntry.KeyID,
 	}
 	manifestPath := e.layout.ManifestPath(formatManifestName(bucket, key, versionID))
 	commit := func(tx *sql.Tx) error {

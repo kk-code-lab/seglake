@@ -131,6 +131,34 @@ func TestPolicyConditionRequireSSES3(t *testing.T) {
 	}
 }
 
+func TestPolicyConditionRequireEncryption(t *testing.T) {
+	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_encryption":true}}]}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveEncryption: true}
+	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); !allowed {
+		t.Fatalf("expected allow for effective encryption")
+	}
+	ctx.EffectiveEncryption = false
+	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
+		t.Fatalf("expected deny without effective encryption")
+	}
+}
+
+func TestPolicyConditionRequireSSES3RejectsKMSOnly(t *testing.T) {
+	raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":true}}]}`
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	}
+	ctx := &PolicyContext{Now: time.Now().UTC(), EffectiveEncryption: true, EffectiveSSES3: false}
+	if allowed, _ := pol.DecisionWithContext("PutObject", "demo", "k", ctx); allowed {
+		t.Fatalf("expected require_sse_s3 to reject non-SSE-S3 encryption")
+	}
+}
+
 func TestPolicyConditionRequireSSES3RejectsInvalidValues(t *testing.T) {
 	cases := []string{
 		`false`,
@@ -140,10 +168,16 @@ func TestPolicyConditionRequireSSES3RejectsInvalidValues(t *testing.T) {
 	}
 	for _, value := range cases {
 		value := value
-		t.Run(value, func(t *testing.T) {
+		t.Run("require_sse_s3_"+value, func(t *testing.T) {
 			raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_sse_s3":` + value + `}}]}`
 			if _, err := ParsePolicy(raw); err == nil {
 				t.Fatalf("expected invalid require_sse_s3 value %s to fail", value)
+			}
+		})
+		t.Run("require_encryption_"+value, func(t *testing.T) {
+			raw := `{"version":"v1","statements":[{"effect":"allow","actions":["PutObject"],"resources":[{"bucket":"demo"}],"conditions":{"require_encryption":` + value + `}}]}`
+			if _, err := ParsePolicy(raw); err == nil {
+				t.Fatalf("expected invalid require_encryption value %s to fail", value)
 			}
 		})
 	}

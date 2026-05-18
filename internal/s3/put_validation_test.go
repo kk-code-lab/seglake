@@ -200,12 +200,35 @@ func TestSSES3PutGetHeadAndInvalidHeaders(t *testing.T) {
 		t.Fatalf("expected 400, got %d", badPutW.Code)
 	}
 
-	kmsPut := httptest.NewRequest(http.MethodPut, "/bucket/kms", strings.NewReader("x"))
+	kmsPut := httptest.NewRequest(http.MethodPut, "/bucket/kms", strings.NewReader("kms payload"))
 	kmsPut.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	kmsPut.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
 	kmsPutW := httptest.NewRecorder()
 	h.ServeHTTP(kmsPutW, kmsPut)
-	if kmsPutW.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", kmsPutW.Code)
+	if kmsPutW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", kmsPutW.Code, kmsPutW.Body.String())
+	}
+	if got := kmsPutW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
+		t.Fatalf("expected KMS header, got %q", got)
+	}
+	if got := kmsPutW.Header().Get("x-amz-server-side-encryption-aws-kms-key-id"); got != "local:v1" {
+		t.Fatalf("expected KMS key id, got %q", got)
+	}
+	kmsHead := httptest.NewRequest(http.MethodHead, "/bucket/kms", nil)
+	kmsHeadW := httptest.NewRecorder()
+	h.ServeHTTP(kmsHeadW, kmsHead)
+	if kmsHeadW.Code != http.StatusOK {
+		t.Fatalf("KMS HEAD status: %d", kmsHeadW.Code)
+	}
+	if got := kmsHeadW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
+		t.Fatalf("expected KMS HEAD header, got %q", got)
+	}
+	badKMSGet := httptest.NewRequest(http.MethodGet, "/bucket/kms", nil)
+	badKMSGet.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
+	badKMSGetW := httptest.NewRecorder()
+	h.ServeHTTP(badKMSGetW, badKMSGet)
+	if badKMSGetW.Code != http.StatusBadRequest {
+		t.Fatalf("expected KMS GET request header to fail with 400, got %d", badKMSGetW.Code)
 	}
 }
 
@@ -354,6 +377,22 @@ func TestSSES3CopyModes(t *testing.T) {
 	}
 	if got := copyEncryptedW.Header().Get("x-amz-server-side-encryption"); got != "AES256" {
 		t.Fatalf("expected encrypted copy SSE header, got %q", got)
+	}
+
+	copyKMS := httptest.NewRequest(http.MethodPut, "/bucket/kms-copy", nil)
+	copyKMS.Header.Set("X-Amz-Copy-Source", "/bucket/src")
+	copyKMS.Header.Set("X-Amz-Server-Side-Encryption", "aws:kms")
+	copyKMS.Header.Set("X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id", "local:v1")
+	copyKMSW := httptest.NewRecorder()
+	h.ServeHTTP(copyKMSW, copyKMS)
+	if copyKMSW.Code != http.StatusOK {
+		t.Fatalf("copy KMS status: %d body=%s", copyKMSW.Code, copyKMSW.Body.String())
+	}
+	if got := copyKMSW.Header().Get("x-amz-server-side-encryption"); got != "aws:kms" {
+		t.Fatalf("expected KMS copy SSE header, got %q", got)
+	}
+	if got := copyKMSW.Header().Get("x-amz-server-side-encryption-aws-kms-key-id"); got != "local:v1" {
+		t.Fatalf("expected KMS copy key id, got %q", got)
 	}
 }
 

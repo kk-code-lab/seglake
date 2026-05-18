@@ -502,11 +502,7 @@ func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWrite
 		writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-C is not supported: "+header, requestID, r.URL.Path)
 		return
 	}
-	if header, ok := sseKMSHeader(r); ok {
-		writeErrorWithResource(w, http.StatusNotImplemented, "NotImplemented", "SSE-KMS is not supported: "+header, requestID, r.URL.Path)
-		return
-	}
-	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.Header.Get("X-Amz-Server-Side-Encryption") != "" {
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && encryptionRequestHeaderPresent(r) {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "server-side encryption request headers are not valid for GET/HEAD", requestID, r.URL.Path)
 		return
 	}
@@ -627,31 +623,18 @@ func sseCustomerHeader(r *http.Request) (string, bool) {
 	return "", false
 }
 
-func sseKMSHeader(r *http.Request) (string, bool) {
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption")), "aws:kms") {
-		return "X-Amz-Server-Side-Encryption", true
-	}
+func encryptionRequestHeaderPresent(r *http.Request) bool {
 	for _, header := range []string{
+		"X-Amz-Server-Side-Encryption",
 		"X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id",
 		"X-Amz-Server-Side-Encryption-Context",
 		"X-Amz-Server-Side-Encryption-Bucket-Key-Enabled",
 	} {
 		if r.Header.Get(header) != "" {
-			return http.CanonicalHeaderKey(header), true
+			return true
 		}
 	}
-	return "", false
-}
-
-func sseS3Requested(r *http.Request) (bool, *requestError) {
-	value := strings.TrimSpace(r.Header.Get("X-Amz-Server-Side-Encryption"))
-	if value == "" {
-		return false, nil
-	}
-	if value == ssecrypto.ServerSideHeaderS3 {
-		return true, nil
-	}
-	return false, &requestError{status: http.StatusBadRequest, code: "InvalidArgument", message: "unsupported server-side encryption"}
+	return false
 }
 
 func writeObjectWriteError(w http.ResponseWriter, err error, requestID, resource string) bool {
@@ -689,6 +672,27 @@ func writeSSEProviderError(w http.ResponseWriter, err error, requestID, resource
 		return false
 	}
 	return true
+}
+
+func setEncryptionResponseHeaders(header http.Header, mode, keyID string) {
+	switch {
+	case strings.EqualFold(mode, ssecrypto.ModeSSES3):
+		header.Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	case strings.EqualFold(mode, ssecrypto.ModeSSEKMS):
+		header.Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
+		if keyID != "" {
+			header.Set("x-amz-server-side-encryption-aws-kms-key-id", keyID)
+		}
+	}
+}
+
+func firstCSVValue(raw string) string {
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (h *Handler) prepareRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -1053,14 +1057,12 @@ func (h *Handler) policyContextForAction(ctx context.Context, r *http.Request, a
 	if header, ok := sseCustomerHeader(r); ok {
 		return nil, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-C is not supported: " + header}
 	}
-	if header, ok := sseKMSHeader(r); ok {
-		return nil, &requestError{status: http.StatusNotImplemented, code: "NotImplemented", message: "SSE-KMS is not supported: " + header}
-	}
-	effective, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
+	effective, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		return nil, reqErr
 	}
-	reqCtx.EffectiveSSES3 = effective
+	reqCtx.EffectiveSSES3 = effective.SSES3()
+	reqCtx.EffectiveEncryption = effective.Encrypted()
 	return reqCtx, nil
 }
 
@@ -1156,7 +1158,7 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
+	encrypt, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
@@ -1167,8 +1169,10 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 	var result *engine.PutResult
-	if encrypt {
+	if encrypt.SSES3() {
 		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+	} else if encrypt.SSEKMS() {
+		_, result, err = h.Engine.PutObjectSSEKMS(ctx, bucket, key, contentType, reader, encrypt.KeyID)
 	} else {
 		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	}
@@ -1185,8 +1189,10 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if versionID, ok := versionIDHeaderForPut(versioningState, result.VersionID); ok {
 		w.Header().Set("x-amz-version-id", versionID)
 	}
-	if encrypt {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	setEncryptionResponseHeaders(w.Header(), result.EncryptionMode, result.EncryptionKeyID)
+	if encrypt.SSEKMS() && result.EncryptionKeyID == "" {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", encrypt.KeyID)
 	}
 	w.Header().Set("Last-Modified", formatHTTPTime(result.CommittedAt))
 	w.WriteHeader(http.StatusOK)
@@ -1247,6 +1253,11 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if strings.EqualFold(objMeta.EncryptionMode, ssecrypto.ModeSSES3) {
 		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
+	} else if strings.EqualFold(objMeta.EncryptionMode, ssecrypto.ModeSSEKMS) {
+		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderKMS)
+		if objMeta.EncryptionKeyIDs != "" {
+			w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", firstCSVValue(objMeta.EncryptionKeyIDs))
+		}
 	}
 	if objMeta.LastModified != "" {
 		if t, err := time.Parse(time.RFC3339Nano, objMeta.LastModified); err == nil {
@@ -1389,7 +1400,7 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = reader.Close() }()
 
 	contentType := srcMeta.ContentType
-	encrypt, reqErr := h.effectiveSSES3ForWrite(ctx, r, bucket)
+	encrypt, reqErr := h.effectiveEncryptionForWrite(ctx, r, bucket)
 	if reqErr != nil {
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, r.URL.Path)
 		return
@@ -1400,8 +1411,10 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	var result *engine.PutResult
-	if encrypt {
+	if encrypt.SSES3() {
 		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+	} else if encrypt.SSEKMS() {
+		_, result, err = h.Engine.PutObjectSSEKMS(ctx, bucket, key, contentType, reader, encrypt.KeyID)
 	} else {
 		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
 	}
@@ -1424,9 +1437,7 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 			w.Header().Set("x-amz-version-id", versionID)
 		}
 	}
-	if encrypt {
-		w.Header().Set("x-amz-server-side-encryption", ssecrypto.ServerSideHeaderS3)
-	}
+	setEncryptionResponseHeaders(w.Header(), result.EncryptionMode, result.EncryptionKeyID)
 	resp := copyObjectResult{
 		ETag:         `"` + result.ETag + `"`,
 		LastModified: result.CommittedAt.UTC().Format(time.RFC3339),

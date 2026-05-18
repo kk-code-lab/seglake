@@ -16,7 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
-- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs or Vault Transit behind an internal key-provider interface and envelope encryption.
+- **SSE-S3 / SSE-KMS-compatible API**: explicit `AES256` or `aws:kms` object writes plus bucket default encryption with local KEKs or Vault Transit behind an internal key-provider interface and envelope encryption. The `aws:kms` mode is an S3-compatible API surface over configured provider key IDs, not AWS KMS network integration.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
@@ -73,7 +73,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
-- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for the S3 XML `AES256` subset; when configured, PUT/CopyObject destination/Initiate MPU without an explicit destination SSE header are encrypted. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. The key-provider backend can be local KEKs or Vault Transit; the S3 API remains `AES256` in both cases. SSE-C and SSE-KMS remain unsupported.
+- Server-side encryption: explicit `x-amz-server-side-encryption: AES256` stores SSE-S3 objects, and explicit `x-amz-server-side-encryption: aws:kms` stores SSE-KMS-labeled objects using the same envelope encryption path. `x-amz-server-side-encryption-aws-kms-key-id` maps directly to a configured provider key ID; if omitted, writes resolve the bucket default KMS key ID and then the active provider key. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for `AES256` and `aws:kms` with optional `KMSMasterKeyID`. Explicit request headers override bucket defaults. GET/HEAD return `AES256` or `aws:kms` plus the resolved KMS key ID according to object metadata. SSE-C, DSSE-KMS, KMS encryption context, S3 Bucket Keys, and AWS KMS network/policy/grant semantics are unsupported.
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
@@ -109,7 +109,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.4 Object manifest
 - Manifest contains: bucket, key, versionID, size, list of chunks (hash, segment_id, offset, len).
-- Manifest v1/v2 objects are plaintext. Manifest v3 is used for SSE-S3 and includes encryption metadata: mode, payload algorithm, AAD/nonce/wrap schemes, wrapped DEKs, per-key nonce prefixes, per-chunk plaintext length, and per-chunk key refs. `WrapAlgorithm=AES-256-GCM` identifies local KEK-wrapped DEKs; `WrapAlgorithm=vault-transit-v1` identifies Vault Transit ciphertext EDEKs stored in the same manifest v3 key-entry fields.
+- Manifest v1/v2 objects are plaintext. Manifest v3 is used for SSE-S3 and SSE-KMS-compatible objects and includes encryption metadata: mode, API algorithm summary, AAD/nonce/wrap schemes, wrapped DEKs, per-key nonce prefixes, per-chunk plaintext length, and per-chunk key refs. `WrapAlgorithm=AES-256-GCM` identifies local KEK-wrapped DEKs; `WrapAlgorithm=vault-transit-v1` identifies Vault Transit ciphertext EDEKs stored in the same manifest v3 key-entry fields.
 - For encrypted chunks, `len` is the stored ciphertext length and chunk hash is over ciphertext. Range reads use the explicit plaintext length.
 - Storage:
   - manifest file on disk (binary codec),
@@ -131,7 +131,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.7 Read path
 - GET/HEAD: resolve `objects_current` → manifest → stream from segments.
-- Encrypted GET asks the configured SSE-S3 key provider to decrypt the manifest EDEK before streaming bytes, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Key-provider failure fails closed before object bytes are streamed; authentication failure fails the read and must not return partial plaintext.
+- Encrypted GET asks the configured key provider to decrypt the manifest EDEK before streaming bytes, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Key-provider failure fails closed before object bytes are streamed; authentication failure fails the read and must not return partial plaintext.
 - Range GET: single range or `multipart/byteranges` for multiple ranges. Encrypted ranges map by plaintext length, read full ciphertext chunks, decrypt, then slice plaintext.
 
 ### 3.8 Recovery
@@ -190,8 +190,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
-- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, ListBucketVersions, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketVersioning, PutBucketVersioning, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport, require_sse_s3). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
-- Native `require_sse_s3: true` policy conditions require effective SSE-S3 on PutObject, CopyObject destination, and CreateMultipartUpload. Effective SSE-S3 is satisfied by an explicit `x-amz-server-side-encryption: AES256` request or by bucket default encryption; plaintext writes fail authorization with `AccessDenied`.
+- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, ListBucketVersions, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketVersioning, PutBucketVersioning, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport, require_sse_s3, require_encryption). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
+- Native `require_sse_s3: true` policy conditions require effective SSE-S3 on PutObject, CopyObject destination, and CreateMultipartUpload. Native `require_encryption: true` accepts either effective SSE-S3 or SSE-KMS. Effective encryption is satisfied by an explicit request header or bucket default encryption; plaintext writes fail authorization with `AccessDenied`.
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).
 - `X-Forwarded-For` is used only for trusted proxies (`-trusted-proxies`).
 - Auth failure rate limiting per IP and per access key.

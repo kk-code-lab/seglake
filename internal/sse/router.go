@@ -44,6 +44,13 @@ func (p *RoutingProvider) GenerateDataKey(ctx context.Context, req GenerateDataK
 	return p.active.GenerateDataKey(ctx, req)
 }
 
+func (p *RoutingProvider) DefaultKeyID() string {
+	if p == nil || p.active == nil {
+		return ""
+	}
+	return DefaultKeyID(p.active)
+}
+
 func (p *RoutingProvider) DecryptDataKey(ctx context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error) {
 	provider, err := p.providerFor(req.KeyEntry.WrapAlgorithm)
 	if err != nil {
@@ -98,4 +105,15 @@ func providerWrapAlgorithm(provider KeyProvider) string {
 		return NormalizeWrapAlgorithm(provider.WrapAlgorithm())
 	}
 	return WrapAES256GCM
+}
+
+type defaultKeyIDProvider interface {
+	DefaultKeyID() string
+}
+
+func DefaultKeyID(provider KeyProvider) string {
+	if provider, ok := provider.(defaultKeyIDProvider); ok {
+		return provider.DefaultKeyID()
+	}
+	return ""
 }

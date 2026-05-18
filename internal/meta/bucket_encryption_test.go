@@ -38,11 +38,24 @@ func TestBucketEncryptionCRUD(t *testing.T) {
 	if cfg.Bucket != "demo" || cfg.Mode != BucketEncryptionModeSSES3 || cfg.Algorithm != BucketEncryptionAlgorithmAES256 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	if cfg.KeyID != "" {
+		t.Fatalf("expected SSE-S3 key id to be empty, got %q", cfg.KeyID)
+	}
+	if err := store.SetBucketEncryptionWithKey(ctx, "demo", BucketEncryptionModeSSEKMS, BucketEncryptionAlgorithmAWSKMS, "vault-key"); err != nil {
+		t.Fatalf("SetBucketEncryptionWithKey: %v", err)
+	}
+	cfg, err = store.GetBucketEncryption(ctx, "demo")
+	if err != nil {
+		t.Fatalf("GetBucketEncryption KMS: %v", err)
+	}
+	if cfg.Mode != BucketEncryptionModeSSEKMS || cfg.Algorithm != BucketEncryptionAlgorithmAWSKMS || cfg.KeyID != "vault-key" {
+		t.Fatalf("unexpected KMS config: %+v", cfg)
+	}
 	listed, err := store.ListBucketEncryption(ctx)
 	if err != nil {
 		t.Fatalf("ListBucketEncryption: %v", err)
 	}
-	if listed["demo"].Algorithm != BucketEncryptionAlgorithmAES256 {
+	if listed["demo"].Algorithm != BucketEncryptionAlgorithmAWSKMS || listed["demo"].KeyID != "vault-key" {
 		t.Fatalf("expected listed config, got %+v", listed)
 	}
 	if err := store.DeleteBucketEncryption(ctx, "demo"); err != nil {
@@ -64,8 +77,9 @@ func TestApplyOplogBucketEncryption(t *testing.T) {
 
 	payload, err := json.Marshal(oplogBucketEncryptionPayload{
 		Bucket:    "demo",
-		Mode:      BucketEncryptionModeSSES3,
-		Algorithm: BucketEncryptionAlgorithmAES256,
+		Mode:      BucketEncryptionModeSSEKMS,
+		Algorithm: BucketEncryptionAlgorithmAWSKMS,
+		KeyID:     "vault-key",
 		UpdatedAt: "2026-05-17T12:00:00Z",
 	})
 	if err != nil {
@@ -95,7 +109,7 @@ func TestApplyOplogBucketEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBucketEncryption: %v", err)
 	}
-	if cfg.Mode != BucketEncryptionModeSSES3 || cfg.Algorithm != BucketEncryptionAlgorithmAES256 {
+	if cfg.Mode != BucketEncryptionModeSSEKMS || cfg.Algorithm != BucketEncryptionAlgorithmAWSKMS || cfg.KeyID != "vault-key" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if _, err := store.ApplyOplogEntries(context.Background(), entries[1:]); err != nil {

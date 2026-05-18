@@ -27,25 +27,27 @@ type Resource struct {
 }
 
 type Conditions struct {
-	SourceIP        []string          `json:"source_ip,omitempty"`
-	Before          string            `json:"before,omitempty"`
-	After           string            `json:"after,omitempty"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	Prefix          string            `json:"prefix,omitempty"`
-	PrefixLike      bool              `json:"prefix_like,omitempty"`
-	Delimiter       string            `json:"delimiter,omitempty"`
-	SecureTransport *bool             `json:"secure_transport,omitempty"`
-	RequireSSES3    *bool             `json:"require_sse_s3,omitempty"`
+	SourceIP          []string          `json:"source_ip,omitempty"`
+	Before            string            `json:"before,omitempty"`
+	After             string            `json:"after,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	Prefix            string            `json:"prefix,omitempty"`
+	PrefixLike        bool              `json:"prefix_like,omitempty"`
+	Delimiter         string            `json:"delimiter,omitempty"`
+	SecureTransport   *bool             `json:"secure_transport,omitempty"`
+	RequireSSES3      *bool             `json:"require_sse_s3,omitempty"`
+	RequireEncryption *bool             `json:"require_encryption,omitempty"`
 }
 
 type PolicyContext struct {
-	Now             time.Time
-	SourceIP        string
-	Headers         map[string]string
-	Prefix          string
-	Delimiter       string
-	SecureTransport bool
-	EffectiveSSES3  bool
+	Now                 time.Time
+	SourceIP            string
+	Headers             map[string]string
+	Prefix              string
+	Delimiter           string
+	SecureTransport     bool
+	EffectiveSSES3      bool
+	EffectiveEncryption bool
 }
 
 const (
@@ -242,6 +244,16 @@ func (c *Conditions) UnmarshalJSON(data []byte) error {
 		}
 		alias.RequireSSES3 = &required
 	}
+	if value, ok := raw["require_encryption"]; ok {
+		var required bool
+		if err := json.Unmarshal(value, &required); err != nil {
+			return fmt.Errorf("policy condition require_encryption must be true")
+		}
+		if !required {
+			return fmt.Errorf("policy condition require_encryption must be true")
+		}
+		alias.RequireEncryption = &required
+	}
 	*c = Conditions(alias)
 	return nil
 }
@@ -417,6 +429,9 @@ func (c *Conditions) validate() error {
 	if c.RequireSSES3 != nil && !*c.RequireSSES3 {
 		return fmt.Errorf("policy condition require_sse_s3 must be true")
 	}
+	if c.RequireEncryption != nil && !*c.RequireEncryption {
+		return fmt.Errorf("policy condition require_encryption must be true")
+	}
 	return nil
 }
 
@@ -425,7 +440,7 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 		return true
 	}
 	if ctx == nil {
-		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0 && c.Prefix == "" && c.Delimiter == "" && c.SecureTransport == nil && c.RequireSSES3 == nil
+		return len(c.SourceIP) == 0 && c.Before == "" && c.After == "" && len(c.Headers) == 0 && c.Prefix == "" && c.Delimiter == "" && c.SecureTransport == nil && c.RequireSSES3 == nil && c.RequireEncryption == nil
 	}
 	if len(c.SourceIP) > 0 {
 		ip := net.ParseIP(ctx.SourceIP)
@@ -486,6 +501,9 @@ func (c *Conditions) match(ctx *PolicyContext) bool {
 		return false
 	}
 	if c.RequireSSES3 != nil && *c.RequireSSES3 && !ctx.EffectiveSSES3 {
+		return false
+	}
+	if c.RequireEncryption != nil && *c.RequireEncryption && !ctx.EffectiveEncryption {
 		return false
 	}
 	return true

@@ -179,7 +179,7 @@ SEGLAKE_SSE_S3_KEKS=local:v2=env:SEGLAKE_SSE_S3_KEK_V2_B64,local:v1=file:/etc/se
 
 Do not place raw KEK values in logs or command histories. Prefer `file:` sources with restrictive permissions or env vars loaded from a secret manager.
 
-The supported key-provider backends are `local` and `vault-transit`. The provider choice is transparent to S3 clients: encrypted writes, bucket defaults, HEAD/GET response headers, rewrap, scrub, and replication still use the SSE-S3 `AES256` surface. Vault-backed writes use Vault Transit data keys and store Vault ciphertext EDEKs in manifest v3; payload chunks are still encrypted locally with AES-256-GCM.
+The supported key-provider backends are `local` and `vault-transit`. Clients can use the SSE-S3 `AES256` surface or the SSE-KMS-compatible `aws:kms` surface. In this phase, `aws:kms` maps `x-amz-server-side-encryption-aws-kms-key-id` and bucket `KMSMasterKeyID` directly to configured provider key IDs; Seglake does not call AWS KMS or implement AWS KMS policy/grant semantics. Vault-backed writes use Vault Transit data keys and store Vault ciphertext EDEKs in manifest v3; payload chunks are still encrypted locally with AES-256-GCM.
 
 Example Vault Transit-backed server:
 ```
@@ -314,7 +314,23 @@ AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-ea
   --endpoint-url http://localhost:9000
 ```
 
-Inspect or clear bucket default SSE-S3:
+PUT object with SSE-KMS-compatible headers over the configured provider:
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3 cp ./file.bin s3://demo/file-kms.bin \
+  --endpoint-url http://localhost:9000 \
+  --sse aws:kms \
+  --sse-kms-key-id local:v1
+```
+
+Enable bucket default SSE-KMS-compatible encryption for future writes:
+```
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api put-bucket-encryption \
+  --bucket demo \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms","KMSMasterKeyID":"local:v1"}}]}' \
+  --endpoint-url http://localhost:9000
+```
+
+Inspect or clear bucket default encryption:
 ```
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api get-bucket-encryption --bucket demo --endpoint-url http://localhost:9000
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api delete-bucket-encryption --bucket demo --endpoint-url http://localhost:9000
@@ -653,9 +669,29 @@ Conditions (optional) in statements:
 - `source_ip`: list of CIDR blocks (e.g. `"10.0.0.0/8"`).
 - `before` / `after`: RFC3339 time window.
 - `headers`: exact match on request headers (lowercased keys).
-- `require_sse_s3`: `true` requires effective SSE-S3 for PutObject, CopyObject destinations, and CreateMultipartUpload. Explicit `--sse AES256` and bucket default encryption both satisfy the requirement.
+- `require_sse_s3`: `true` requires effective SSE-S3 for PutObject, CopyObject destinations, and CreateMultipartUpload. Explicit `--sse AES256` and bucket default AES256 encryption satisfy the requirement; SSE-KMS does not.
+- `require_encryption`: `true` requires any effective server-side encryption for PutObject, CopyObject destinations, and CreateMultipartUpload. Explicit `--sse AES256`, explicit `--sse aws:kms`, and bucket defaults for either algorithm satisfy the requirement.
 
 Example requiring SSE-S3 for future writes under a prefix:
+```
+
+Example requiring either SSE-S3 or SSE-KMS-compatible encryption:
+```
+{
+  "version": "v1",
+  "statements": [
+    {
+      "effect": "allow",
+      "actions": ["PutObject", "CopyObject", "CreateMultipartUpload"],
+      "resources": [
+        { "bucket": "demo", "prefix": "secure/" }
+      ],
+      "conditions": {
+        "require_encryption": true
+      }
+    }
+  ]
+}
 ```
 {
   "version": "v1",

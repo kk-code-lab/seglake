@@ -83,7 +83,11 @@ func (p *VaultTransitProvider) GenerateDataKey(ctx context.Context, req Generate
 	if p == nil {
 		return GenerateDataKeyResult{}, ErrProviderUnavailable
 	}
-	if p.activeKey == "" {
+	keyID := strings.TrimSpace(req.KeyID)
+	if keyID == "" {
+		keyID = p.activeKey
+	}
+	if keyID == "" {
 		return GenerateDataKeyResult{}, fmt.Errorf("%w: active vault key required", ErrMissingKey)
 	}
 	var resp struct {
@@ -92,7 +96,7 @@ func (p *VaultTransitProvider) GenerateDataKey(ctx context.Context, req Generate
 			Ciphertext string `json:"ciphertext"`
 		} `json:"data"`
 	}
-	if err := p.post(ctx, "datakey/plaintext/"+url.PathEscape(p.activeKey), map[string]int{"bits": 256}, &resp); err != nil {
+	if err := p.post(ctx, "datakey/plaintext/"+url.PathEscape(keyID), map[string]int{"bits": 256}, &resp); err != nil {
 		return GenerateDataKeyResult{}, err
 	}
 	dek, err := decodeVaultDEK(resp.Data.Plaintext)
@@ -113,13 +117,20 @@ func (p *VaultTransitProvider) GenerateDataKey(ctx context.Context, req Generate
 		KeyEntry: KeyEntry{
 			WrapAlgorithm:   WrapVaultTransitV1,
 			KeyRef:          req.KeyRef,
-			KeyID:           p.activeKey,
+			KeyID:           keyID,
 			EncryptedDEK:    edek,
 			NoncePrefix:     noncePrefix,
 			NonceScheme:     NonceSchemeV1,
 			EDEKFingerprint: sum[:KeyFingerprintBytes],
 		},
 	}, nil
+}
+
+func (p *VaultTransitProvider) DefaultKeyID() string {
+	if p == nil {
+		return ""
+	}
+	return p.activeKey
 }
 
 func (p *VaultTransitProvider) DecryptDataKey(ctx context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error) {

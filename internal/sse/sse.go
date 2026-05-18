@@ -14,12 +14,15 @@ import (
 
 const (
 	ModeSSES3            = "SSE-S3"
+	ModeSSEKMS           = "SSE-KMS"
 	AlgorithmAES256GCM   = "AES-256-GCM"
+	AlgorithmAWSKMS      = "aws:kms"
 	WrapAES256GCM        = "AES-256-GCM"
 	WrapVaultTransitV1   = "vault-transit-v1"
 	NonceSchemeV1        = "random64-counter32-v1"
 	AADSchemeV1          = "seglake-sse-s3-aad-v1"
 	ServerSideHeaderS3   = "AES256"
+	ServerSideHeaderKMS  = "aws:kms"
 	KeyFingerprintBytes  = 8
 	ProviderLocal        = "local"
 	ProviderVaultTransit = "vault-transit"
@@ -51,6 +54,7 @@ type KeyProvider interface {
 
 type GenerateDataKeyRequest struct {
 	KeyRef uint32
+	KeyID  string
 }
 
 type GenerateDataKeyResult struct {
@@ -158,6 +162,13 @@ func (p *Provider) ActiveKey() (Key, error) {
 	return key, nil
 }
 
+func (p *Provider) DefaultKeyID() string {
+	if p == nil {
+		return ""
+	}
+	return p.active
+}
+
 func (p *Provider) LookupKey(id string) (Key, error) {
 	if p == nil {
 		return Key{}, ErrDisabled
@@ -170,7 +181,16 @@ func (p *Provider) LookupKey(id string) (Key, error) {
 }
 
 func (p *Provider) GenerateDataKey(_ context.Context, req GenerateDataKeyRequest) (GenerateDataKeyResult, error) {
-	activeKey, err := p.ActiveKey()
+	keyID := strings.TrimSpace(req.KeyID)
+	var (
+		activeKey Key
+		err       error
+	)
+	if keyID != "" {
+		activeKey, err = p.LookupKey(keyID)
+	} else {
+		activeKey, err = p.ActiveKey()
+	}
 	if err != nil {
 		return GenerateDataKeyResult{}, err
 	}

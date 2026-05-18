@@ -148,6 +148,49 @@ func TestSSERewrapPlanAndRun(t *testing.T) {
 	}
 }
 
+func TestSSERewrapPreservesKMSVisibleMetadata(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	layout := fs.NewLayout(filepath.Join(dir, "objects"))
+	oldKey := testSSEKey("local:v1", 1)
+	newKey := testSSEKey("local:v2", 2)
+	oldProvider, err := ssecrypto.NewProvider(oldKey.ID, []ssecrypto.Key{oldKey})
+	if err != nil {
+		t.Fatalf("NewProvider old: %v", err)
+	}
+	bothProvider, err := ssecrypto.NewProvider(newKey.ID, []ssecrypto.Key{oldKey, newKey})
+	if err != nil {
+		t.Fatalf("NewProvider both: %v", err)
+	}
+	eng, err := engine.New(engine.Options{Layout: layout, MetaStore: store, SSE: oldProvider})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	_, result, err := eng.PutObjectSSEKMS(context.Background(), "bucket", "key", "", strings.NewReader("kms-labeled"), oldKey.ID)
+	if err != nil {
+		t.Fatalf("PutObjectSSEKMS: %v", err)
+	}
+	plan, _, err := BuildSSERewrapPlan(layout, metaPath, bothProvider, newKey.ID, nil)
+	if err != nil {
+		t.Fatalf("BuildSSERewrapPlan: %v", err)
+	}
+	if _, err := RunSSERewrapPlan(layout, metaPath, bothProvider, plan); err != nil {
+		t.Fatalf("RunSSERewrapPlan: %v", err)
+	}
+	obj, err := store.GetObjectMeta(context.Background(), "bucket", "key")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if obj.VersionID != result.VersionID || obj.EncryptionMode != ssecrypto.ModeSSEKMS || obj.EncryptionAlgorithm != ssecrypto.AlgorithmAWSKMS || obj.EncryptionKeyIDs != newKey.ID {
+		t.Fatalf("unexpected metadata after KMS rewrap: %+v", obj)
+	}
+}
+
 func TestSSERewrapPlanSkipsPlaintextAndTarget(t *testing.T) {
 	dir := t.TempDir()
 	metaPath := filepath.Join(dir, "meta.db")
