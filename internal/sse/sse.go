@@ -47,7 +47,6 @@ type Key struct {
 type KeyProvider interface {
 	GenerateDataKey(ctx context.Context, req GenerateDataKeyRequest) (GenerateDataKeyResult, error)
 	DecryptDataKey(ctx context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error)
-	WrapDataKey(ctx context.Context, req WrapDataKeyRequest) (WrapDataKeyResult, error)
 	RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error)
 	DescribeKey(ctx context.Context, keyID string) (KeyDescription, error)
 }

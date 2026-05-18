@@ -9,6 +9,10 @@ type wrapAlgorithmProvider interface {
 	WrapAlgorithm() string
 }
 
+type dataKeyWrapper interface {
+	WrapDataKey(ctx context.Context, req WrapDataKeyRequest) (WrapDataKeyResult, error)
+}
+
 // RoutingProvider dispatches reads by manifest wrap algorithm while sending new
 // writes and target rewraps to the configured active provider.
 type RoutingProvider struct {
@@ -63,7 +67,11 @@ func (p *RoutingProvider) WrapDataKey(ctx context.Context, req WrapDataKeyReques
 	if p == nil || p.active == nil {
 		return WrapDataKeyResult{}, ErrProviderUnavailable
 	}
-	return p.active.WrapDataKey(ctx, req)
+	wrapper, ok := p.active.(dataKeyWrapper)
+	if !ok {
+		return WrapDataKeyResult{}, fmt.Errorf("%w: active provider cannot wrap data keys", ErrProviderUnavailable)
+	}
+	return wrapper.WrapDataKey(ctx, req)
 }
 
 func (p *RoutingProvider) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error) {

@@ -306,10 +306,6 @@ func (p failingSSEProvider) DecryptDataKey(context.Context, ssecrypto.DecryptDat
 	return ssecrypto.DecryptDataKeyResult{}, errors.New("unexpected decrypt")
 }
 
-func (p failingSSEProvider) WrapDataKey(context.Context, ssecrypto.WrapDataKeyRequest) (ssecrypto.WrapDataKeyResult, error) {
-	return ssecrypto.WrapDataKeyResult{}, errors.New("unexpected wrap")
-}
-
 func (p failingSSEProvider) RewrapDataKey(context.Context, ssecrypto.RewrapDataKeyRequest) (ssecrypto.RewrapDataKeyResult, error) {
 	return ssecrypto.RewrapDataKeyResult{}, errors.New("unexpected rewrap")
 }
@@ -332,10 +328,6 @@ func (p *toggleDecryptProvider) DecryptDataKey(ctx context.Context, req ssecrypt
 		return ssecrypto.DecryptDataKeyResult{}, p.decryptErr
 	}
 	return p.backend.DecryptDataKey(ctx, req)
-}
-
-func (p *toggleDecryptProvider) WrapDataKey(ctx context.Context, req ssecrypto.WrapDataKeyRequest) (ssecrypto.WrapDataKeyResult, error) {
-	return p.backend.WrapDataKey(ctx, req)
 }
 
 func (p *toggleDecryptProvider) RewrapDataKey(ctx context.Context, req ssecrypto.RewrapDataKeyRequest) (ssecrypto.RewrapDataKeyResult, error) {

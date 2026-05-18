@@ -126,6 +126,7 @@ This audit was performed against the current SSE-S3, Vault Transit, and SSE-KMS-
 - `manifest.ChunkRef.PlainLength()` falls back from `PlainLen` to stored `Len`. This is required for plaintext v1/v2 manifests and may also protect older or manually constructed manifests. Do not narrow this until encrypted v3 validation has explicit tests for missing `PlainLen`.
 - Payload encryption still calls `sse.NewGCM`, `sse.ChunkNonce`, and `sse.ChunkAAD` from storage and ops code. This is expected: the provider owns envelope key operations, while Seglake still performs local AES-GCM payload encryption.
 - `KeyProvider.DescribeKey` is used by rewrap planning/running and provider readiness. It should stay as a redacted diagnostics/readiness boundary.
+- `KeyProvider` should expose only production envelope operations: generate, decrypt, rewrap, and describe. `WrapDataKey` remains a narrower provider capability for routing-provider cross-provider rewrap, not part of the base interface.
 - Routing by manifest wrap algorithm is required for mixed local/Vault deployments and for local-to-Vault migration or rewrap flows.
 - Existing unsupported SSE behavior must stay fail-closed: SSE-C returns `NotImplemented`, DSSE-KMS returns `NotImplemented`, KMS encryption context returns `NotImplemented`, and S3 Bucket Keys return `NotImplemented`.
 
@@ -139,7 +140,6 @@ This audit was performed against the current SSE-S3, Vault Transit, and SSE-KMS-
 
 ##### Needs Decision Before Change
 
-- `KeyProvider` includes `WrapDataKey` in addition to `GenerateDataKey`, `DecryptDataKey`, `RewrapDataKey`, and `DescribeKey`. This was useful for routing-provider cross-provider rewrap because it decrypts through the source provider and wraps through the active provider. Decide whether this should remain part of the public provider interface or become an internal optional interface used only by routing/cross-provider rewrap.
 - `effectiveEncryptionForWrite` is the right central helper shape, but authorization computes it before request body consumption and handlers compute it again before writing. This duplicates metadata lookups and allows a narrow bucket-default race between authz and write if the bucket encryption config changes concurrently. Decide whether to attach the computed effective encryption result to request context during authorization and reuse it in PUT, CopyObject, and CreateMultipartUpload.
 - `Engine.SSES3Enabled()` is used as the generic “encrypted writes are enabled” check for both SSE-S3 and SSE-KMS-compatible writes. The behavior is fine, but the name is now misleading. Rename to `EncryptionEnabled`/`SSEEnabled` only if the churn is acceptable.
 - Deep scrub reports still use `SSE-S3` wording even for Vault-backed and SSE-KMS-labeled objects because the payload/envelope mechanism is shared. Decide whether to rename operational messages to “SSE encrypted” without changing JSON field names.
