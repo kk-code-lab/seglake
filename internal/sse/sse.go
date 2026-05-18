@@ -29,7 +29,7 @@ var (
 	ErrDisabled            = errors.New("sse: disabled")
 	ErrNoSuchKey           = errors.New("sse: key not configured")
 	ErrBadKeySpec          = errors.New("sse: invalid key spec")
-	ErrProviderUnavailable = ErrDisabled
+	ErrProviderUnavailable = errors.New("sse: provider unavailable")
 	ErrMissingKey          = ErrNoSuchKey
 	ErrDecryptFailed       = errors.New("sse: decrypt failed")
 	ErrInvalidEnvelope     = errors.New("sse: invalid key envelope")

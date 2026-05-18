@@ -195,6 +195,39 @@ export VAULT_TOKEN=dev-root
 
 Do not pass Vault tokens as command-line values. Use `SEGLAKE_SSE_S3_VAULT_TOKEN`, `VAULT_TOKEN`, or `-sse-s3-vault-token-file`.
 
+Minimal Vault policy for normal encrypted writes and reads against one Transit key:
+```
+path "transit/datakey/plaintext/seglake-test" {
+  capabilities = ["update"]
+}
+
+path "transit/decrypt/seglake-test" {
+  capabilities = ["update"]
+}
+```
+
+Add these paths for rewrap/migration workflows:
+```
+path "transit/rewrap/seglake-test" {
+  capabilities = ["update"]
+}
+
+path "transit/encrypt/seglake-test-v2" {
+  capabilities = ["update"]
+}
+
+path "transit/decrypt/seglake-test" {
+  capabilities = ["update"]
+}
+```
+
+Operational readiness notes for Vault-backed SSE-S3:
+- Treat Vault availability as part of the write/read path for encrypted objects. If Vault is unavailable, encrypted writes fail with `ServiceUnavailable` and encrypted reads fail before object bytes are streamed.
+- Keep Vault close enough to Seglake to keep key-provider latency predictable; set `-sse-s3-vault-timeout` deliberately.
+- Use separate Vault tokens for steady-state read/write and maintenance rewrap when possible.
+- Replication peers need access to the referenced Transit keys before they can read replicated encrypted objects.
+- Support bundles and normal scrub do not require Vault access; `scrub -scrub-deep-encrypted` does.
+
 Local Vault dev smoke setup:
 ```
 vault server -dev -dev-root-token-id=dev-root

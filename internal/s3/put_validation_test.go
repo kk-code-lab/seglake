@@ -1,14 +1,18 @@
 package s3
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 )
 
 func TestPutValidatesContentMD5(t *testing.T) {
@@ -226,6 +230,97 @@ func TestSSES3RequestFailsWhenDisabled(t *testing.T) {
 	if initW.Code != http.StatusBadRequest {
 		t.Fatalf("expected initiate 400, got %d body=%s", initW.Code, initW.Body.String())
 	}
+}
+
+func TestSSES3ProviderUnavailableIsServiceUnavailable(t *testing.T) {
+	h := newTestHandlerWithSSE(t, failingSSEProvider{generateErr: ssecrypto.ErrProviderUnavailable})
+	put := httptest.NewRequest(http.MethodPut, "/bucket/encrypted", strings.NewReader("secret"))
+	put.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, put)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ServiceUnavailable") || !strings.Contains(w.Body.String(), "SSE-S3 key provider unavailable") {
+		t.Fatalf("unexpected body: %s", w.Body.String())
+	}
+}
+
+func TestSSES3ReadProviderErrorsAreRedacted(t *testing.T) {
+	provider := &toggleDecryptProvider{backend: testSSEProvider(t)}
+	h := newTestHandlerWithSSE(t, provider)
+	put := httptest.NewRequest(http.MethodPut, "/bucket/encrypted", strings.NewReader("secret"))
+	put.Header.Set("X-Amz-Server-Side-Encryption", "AES256")
+	putW := httptest.NewRecorder()
+	h.ServeHTTP(putW, put)
+	if putW.Code != http.StatusOK {
+		t.Fatalf("PUT status: %d body=%s", putW.Code, putW.Body.String())
+	}
+	provider.decryptErr = ssecrypto.ErrPermissionDenied
+	get := httptest.NewRequest(http.MethodGet, "/bucket/encrypted", nil)
+	getW := httptest.NewRecorder()
+	h.ServeHTTP(getW, get)
+	if getW.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", getW.Code, getW.Body.String())
+	}
+	if !strings.Contains(getW.Body.String(), "SSE-S3 key provider denied access") {
+		t.Fatalf("unexpected body: %s", getW.Body.String())
+	}
+	if strings.Contains(getW.Body.String(), ssecrypto.ErrPermissionDenied.Error()) {
+		t.Fatalf("provider error leaked: %s", getW.Body.String())
+	}
+}
+
+type failingSSEProvider struct {
+	generateErr error
+}
+
+func (p failingSSEProvider) GenerateDataKey(context.Context, ssecrypto.GenerateDataKeyRequest) (ssecrypto.GenerateDataKeyResult, error) {
+	return ssecrypto.GenerateDataKeyResult{}, p.generateErr
+}
+
+func (p failingSSEProvider) DecryptDataKey(context.Context, ssecrypto.DecryptDataKeyRequest) (ssecrypto.DecryptDataKeyResult, error) {
+	return ssecrypto.DecryptDataKeyResult{}, errors.New("unexpected decrypt")
+}
+
+func (p failingSSEProvider) WrapDataKey(context.Context, ssecrypto.WrapDataKeyRequest) (ssecrypto.WrapDataKeyResult, error) {
+	return ssecrypto.WrapDataKeyResult{}, errors.New("unexpected wrap")
+}
+
+func (p failingSSEProvider) RewrapDataKey(context.Context, ssecrypto.RewrapDataKeyRequest) (ssecrypto.RewrapDataKeyResult, error) {
+	return ssecrypto.RewrapDataKeyResult{}, errors.New("unexpected rewrap")
+}
+
+func (p failingSSEProvider) DescribeKey(context.Context, string) (ssecrypto.KeyDescription, error) {
+	return ssecrypto.KeyDescription{}, nil
+}
+
+type toggleDecryptProvider struct {
+	backend    ssecrypto.KeyProvider
+	decryptErr error
+}
+
+func (p *toggleDecryptProvider) GenerateDataKey(ctx context.Context, req ssecrypto.GenerateDataKeyRequest) (ssecrypto.GenerateDataKeyResult, error) {
+	return p.backend.GenerateDataKey(ctx, req)
+}
+
+func (p *toggleDecryptProvider) DecryptDataKey(ctx context.Context, req ssecrypto.DecryptDataKeyRequest) (ssecrypto.DecryptDataKeyResult, error) {
+	if p.decryptErr != nil {
+		return ssecrypto.DecryptDataKeyResult{}, p.decryptErr
+	}
+	return p.backend.DecryptDataKey(ctx, req)
+}
+
+func (p *toggleDecryptProvider) WrapDataKey(ctx context.Context, req ssecrypto.WrapDataKeyRequest) (ssecrypto.WrapDataKeyResult, error) {
+	return p.backend.WrapDataKey(ctx, req)
+}
+
+func (p *toggleDecryptProvider) RewrapDataKey(ctx context.Context, req ssecrypto.RewrapDataKeyRequest) (ssecrypto.RewrapDataKeyResult, error) {
+	return p.backend.RewrapDataKey(ctx, req)
+}
+
+func (p *toggleDecryptProvider) DescribeKey(ctx context.Context, keyID string) (ssecrypto.KeyDescription, error) {
+	return p.backend.DescribeKey(ctx, keyID)
 }
 
 func TestSSES3CopyModes(t *testing.T) {

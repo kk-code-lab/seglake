@@ -666,8 +666,25 @@ func writeObjectWriteError(w http.ResponseWriter, err error, requestID, resource
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidArgument", "invalid content length", requestID, resource)
 	case errors.Is(err, errEntityTooLarge):
 		writeErrorWithResource(w, http.StatusRequestEntityTooLarge, "EntityTooLarge", "entity too large", requestID, resource)
+	case writeSSEProviderError(w, err, requestID, resource):
+	default:
+		return false
+	}
+	return true
+}
+
+func writeSSEProviderError(w http.ResponseWriter, err error, requestID, resource string) bool {
+	switch {
 	case errors.Is(err, ssecrypto.ErrDisabled):
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, resource)
+	case errors.Is(err, ssecrypto.ErrProviderUnavailable):
+		writeErrorWithResource(w, http.StatusServiceUnavailable, "ServiceUnavailable", "SSE-S3 key provider unavailable", requestID, resource)
+	case errors.Is(err, ssecrypto.ErrMissingKey):
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "SSE-S3 key not available", requestID, resource)
+	case errors.Is(err, ssecrypto.ErrPermissionDenied):
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "SSE-S3 key provider denied access", requestID, resource)
+	case errors.Is(err, ssecrypto.ErrDecryptFailed), errors.Is(err, ssecrypto.ErrInvalidEnvelope):
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "SSE-S3 key envelope unreadable", requestID, resource)
 	default:
 		return false
 	}
@@ -1257,6 +1274,9 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 			}
 			reader, _, err := h.Engine.GetRange(ctx, objMeta.VersionID, start, length)
 			if err != nil {
+				if writeSSEProviderError(w, err, requestID, r.URL.Path) {
+					return
+				}
 				writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 				return
 			}
@@ -1298,8 +1318,7 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	reader, _, err := h.Engine.Get(ctx, objMeta.VersionID)
 	if err != nil {
-		if errors.Is(err, ssecrypto.ErrDisabled) {
-			writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "SSE-S3 is not enabled", requestID, r.URL.Path)
+		if writeSSEProviderError(w, err, requestID, r.URL.Path) {
 			return
 		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
@@ -1361,6 +1380,9 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 	}
 	reader, _, err := h.Engine.Get(ctx, srcMeta.VersionID)
 	if err != nil {
+		if writeSSEProviderError(w, err, requestID, r.URL.Path) {
+			return
+		}
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, r.URL.Path)
 		return
 	}

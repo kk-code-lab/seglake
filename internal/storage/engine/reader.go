@@ -174,6 +174,26 @@ func (s *encryptedState) close() error {
 	return nil
 }
 
+func (s *encryptedState) prepareKeys() error {
+	if s.provider == nil {
+		return ssecrypto.ErrDisabled
+	}
+	if s.manifest == nil || s.manifest.Encryption == nil {
+		return nil
+	}
+	for _, entry := range s.manifest.Encryption.Keys {
+		if _, ok := s.keys[entry.KeyRef]; ok {
+			continue
+		}
+		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(s.manifest.Encryption.WrapAlgorithm, entry)})
+		if err != nil {
+			return err
+		}
+		s.keys[entry.KeyRef] = result.PlaintextDEK
+	}
+	return nil
+}
+
 func (s *encryptedState) openSegment(segmentID string) error {
 	if s.segFile != nil && s.segID == segmentID {
 		return nil

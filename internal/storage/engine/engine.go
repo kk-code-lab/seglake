@@ -446,7 +446,15 @@ func (e *Engine) Get(ctx context.Context, versionID string) (io.ReadCloser, *man
 	defer func() { _ = file.Close() }()
 	var reader io.ReadCloser
 	if man.Encrypted() {
-		reader = newEncryptedManifestReader(e.layout, man, e.sse)
+		encrypted := newEncryptedManifestReader(e.layout, man, e.sse)
+		if ctx != nil {
+			encrypted.ctx = ctx
+			encrypted.state.ctx = ctx
+		}
+		if err := encrypted.state.prepareKeys(); err != nil {
+			return nil, nil, err
+		}
+		reader = encrypted
 	} else {
 		reader = newManifestReader(e.layout, man)
 	}
@@ -472,6 +480,14 @@ func (e *Engine) GetRange(ctx context.Context, versionID string, start, length i
 	var reader io.ReadCloser
 	if man.Encrypted() {
 		reader, err = newEncryptedRangeReader(e.layout, man, e.sse, start, length)
+		if err == nil {
+			encrypted := reader.(*encryptedRangeReader)
+			if ctx != nil {
+				encrypted.ctx = ctx
+				encrypted.state.ctx = ctx
+			}
+			err = encrypted.state.prepareKeys()
+		}
 	} else {
 		reader, err = newRangeReader(e.layout, man, start, length)
 	}

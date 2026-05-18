@@ -131,7 +131,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.7 Read path
 - GET/HEAD: resolve `objects_current` → manifest → stream from segments.
-- Encrypted GET asks the configured SSE-S3 key provider to decrypt the manifest EDEK, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Authentication failure fails the read and must not return partial plaintext.
+- Encrypted GET asks the configured SSE-S3 key provider to decrypt the manifest EDEK before streaming bytes, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Key-provider failure fails closed before object bytes are streamed; authentication failure fails the read and must not return partial plaintext.
 - Range GET: single range or `multipart/byteranges` for multiple ranges. Encrypted ranges map by plaintext length, read full ciphertext chunks, decrypt, then slice plaintext.
 
 ### 3.8 Recovery

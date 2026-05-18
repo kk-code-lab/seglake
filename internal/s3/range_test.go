@@ -76,7 +76,7 @@ func newTestHandlerWithoutSSE(t *testing.T) *Handler {
 	return newTestHandlerWithSSE(t, nil)
 }
 
-func newTestHandlerWithSSE(t *testing.T, provider *ssecrypto.Provider) *Handler {
+func newTestHandlerWithSSE(t *testing.T, provider ssecrypto.KeyProvider) *Handler {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

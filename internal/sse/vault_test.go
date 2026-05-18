@@ -100,6 +100,17 @@ func TestVaultTransitProviderErrors(t *testing.T) {
 	}
 }
 
+func TestVaultTransitProviderNetworkFailure(t *testing.T) {
+	server := newFakeVaultTransit(t)
+	address := server.URL
+	server.Close()
+	provider := newTestVaultProvider(t, address, "v1")
+	_, err := provider.GenerateDataKey(t.Context(), GenerateDataKeyRequest{})
+	if !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("expected provider unavailable, got %v", err)
+	}
+}
+
 func TestRoutingProviderReadsLegacyLocalAndWritesVault(t *testing.T) {
 	localKey, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("l", 32))))
 	if err != nil {
