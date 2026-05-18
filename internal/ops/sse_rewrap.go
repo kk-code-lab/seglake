@@ -19,6 +19,7 @@ import (
 	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/ssemanifest"
 )
 
 const sseRewrapPlanSchemaVersion = 1
@@ -96,7 +97,7 @@ func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.Ke
 			if !selectRewrapKey(keyEntry.KeyID, targetKeyID, sourceFilter) {
 				continue
 			}
-			if _, err := provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(man.Encryption.WrapAlgorithm, keyEntry)}); err != nil {
+			if _, err := provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: ssemanifest.ToSSE(man.Encryption.WrapAlgorithm, keyEntry)}); err != nil {
 				return nil, nil, fmt.Errorf("sse rewrap: unwrap key_ref %d for version %s: %w", keyEntry.KeyRef, rec.VersionID, err)
 			}
 			selected = append(selected, SSERewrapKeyPlanEntry{
@@ -183,7 +184,7 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyP
 				return nil, fmt.Errorf("sse rewrap: stale plan for version %s key_ref %d: EDEK fingerprint changed", entry.VersionID, plannedKey.KeyRef)
 			}
 			rewrapped, err := provider.RewrapDataKey(context.Background(), ssecrypto.RewrapDataKeyRequest{
-				KeyEntry:    sseKeyEntryFromManifestWithWrap(man.Encryption.WrapAlgorithm, *keyEntry),
+				KeyEntry:    ssemanifest.ToSSE(man.Encryption.WrapAlgorithm, *keyEntry),
 				TargetKeyID: plan.TargetKeyID,
 			})
 			if err != nil {
@@ -199,7 +200,7 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyP
 			if ssecrypto.NormalizeWrapAlgorithm(man.Encryption.WrapAlgorithm) != rewrappedAlgorithm {
 				changedWrapAlgorithm = true
 			}
-			*keyEntry = manifestKeyEntryFromSSE(rewrapped.KeyEntry)
+			*keyEntry = ssemanifest.FromSSE(rewrapped.KeyEntry)
 		}
 		if changedWrapAlgorithm && len(entry.Keys) != len(man.Encryption.Keys) {
 			return nil, fmt.Errorf("sse rewrap: partial cross-provider rewrap is not supported for version %s", entry.VersionID)

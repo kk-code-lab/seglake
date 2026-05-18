@@ -15,6 +15,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
+	"github.com/kk-code-lab/seglake/internal/storage/ssemanifest"
 )
 
 // Report summarizes an ops run.
@@ -419,7 +420,7 @@ func (s *deepScrubState) verifyChunk(ref manifest.ChunkRef, ciphertext []byte, a
 			addError(fmt.Errorf("missing SSE-S3 KEK version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
 			return
 		}
-		result, err := s.provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(s.manifest.Encryption.WrapAlgorithm, entry)})
+		result, err := s.provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: ssemanifest.ToSSE(s.manifest.Encryption.WrapAlgorithm, entry)})
 		if err != nil {
 			if errors.Is(err, ssecrypto.ErrMissingKey) || errors.Is(err, ssecrypto.ErrProviderUnavailable) {
 				s.report.MissingKEKs++

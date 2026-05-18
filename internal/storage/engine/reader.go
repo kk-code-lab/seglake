@@ -10,6 +10,7 @@ import (
 	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/ssemanifest"
 )
 
 func setReaderContext(r io.ReadCloser, ctx context.Context) {
@@ -185,7 +186,7 @@ func (s *encryptedState) prepareKeys() error {
 		if _, ok := s.keys[entry.KeyRef]; ok {
 			continue
 		}
-		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(s.manifest.Encryption.WrapAlgorithm, entry)})
+		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: ssemanifest.ToSSE(s.manifest.Encryption.WrapAlgorithm, entry)})
 		if err != nil {
 			return err
 		}
@@ -221,7 +222,7 @@ func (s *encryptedState) decryptChunk(ref manifest.ChunkRef) ([]byte, error) {
 	}
 	dek, ok := s.keys[ref.KeyRef]
 	if !ok {
-		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(s.manifest.Encryption.WrapAlgorithm, keyEntry)})
+		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: ssemanifest.ToSSE(s.manifest.Encryption.WrapAlgorithm, keyEntry)})
 		if err != nil {
 			return nil, err
 		}

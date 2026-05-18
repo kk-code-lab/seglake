@@ -1,11 +1,11 @@
-package engine
+package ssemanifest
 
 import (
 	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 )
 
-func manifestKeyEntryFromSSE(entry ssecrypto.KeyEntry) manifest.KeyEntry {
+func FromSSE(entry ssecrypto.KeyEntry) manifest.KeyEntry {
 	return manifest.KeyEntry{
 		KeyRef:          entry.KeyRef,
 		KeyID:           entry.KeyID,
@@ -17,7 +17,7 @@ func manifestKeyEntryFromSSE(entry ssecrypto.KeyEntry) manifest.KeyEntry {
 	}
 }
 
-func sseKeyEntryFromManifestWithWrap(wrapAlgorithm string, entry manifest.KeyEntry) ssecrypto.KeyEntry {
+func ToSSE(wrapAlgorithm string, entry manifest.KeyEntry) ssecrypto.KeyEntry {
 	return ssecrypto.KeyEntry{
 		WrapAlgorithm:   ssecrypto.NormalizeWrapAlgorithm(wrapAlgorithm),
 		KeyRef:          entry.KeyRef,

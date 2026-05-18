@@ -24,6 +24,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 	"github.com/kk-code-lab/seglake/internal/storage/manifest"
 	"github.com/kk-code-lab/seglake/internal/storage/segment"
+	"github.com/kk-code-lab/seglake/internal/storage/ssemanifest"
 )
 
 // PutResult captures metadata for a successful write.
@@ -275,7 +276,7 @@ func (e *Engine) putObjectEncryptedWithCommit(ctx context.Context, bucket, key, 
 	if err != nil {
 		return nil, nil, err
 	}
-	keyEntry := manifestKeyEntryFromSSE(dataKey.KeyEntry)
+	keyEntry := ssemanifest.FromSSE(dataKey.KeyEntry)
 	wrapAlgorithm := ssecrypto.NormalizeWrapAlgorithm(dataKey.KeyEntry.WrapAlgorithm)
 	man := &manifest.Manifest{
 		Bucket:    bucket,
