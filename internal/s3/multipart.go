@@ -73,7 +73,7 @@ func (h *Handler) handleInitiateMultipart(ctx context.Context, w http.ResponseWr
 		writeErrorWithResource(w, reqErr.status, reqErr.code, reqErr.message, requestID, resource)
 		return
 	}
-	if encrypt.Encrypted() && !h.Engine.SSES3Enabled() {
+	if encrypt.Encrypted() && !h.Engine.EncryptionEnabled() {
 		writeErrorWithResource(w, http.StatusBadRequest, "InvalidRequest", "server-side encryption is not enabled", requestID, resource)
 		return
 	}

@@ -120,7 +120,7 @@ func New(opts Options) (*Engine, error) {
 	return engine, nil
 }
 
-func (e *Engine) SSES3Enabled() bool {
+func (e *Engine) EncryptionEnabled() bool {
 	return e != nil && e.sse != nil
 }
 
