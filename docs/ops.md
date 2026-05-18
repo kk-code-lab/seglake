@@ -171,6 +171,8 @@ SEGLAKE_SSE_S3_KEKS=local:v2=env:SEGLAKE_SSE_S3_KEK_V2_B64,local:v1=file:/etc/se
 
 Do not place raw KEK values in logs or command histories. Prefer `file:` sources with restrictive permissions or env vars loaded from a secret manager.
 
+The current supported key-provider backend is `local`, built from the KEK flags/env above. The internal provider interface is transparent to S3 clients: encrypted writes, bucket defaults, HEAD/GET response headers, rewrap, scrub, and replication still use the SSE-S3 `AES256` surface.
+
 SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a redacted plan first, then run it with the target and selected source KEKs configured:
 ```
 ./build/seglake -mode sse-rewrap-plan -data-dir ./data \

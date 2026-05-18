@@ -1,7 +1,9 @@
 package sse
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -84,5 +86,108 @@ func TestLookupProviderDoesNotRequireActiveKey(t *testing.T) {
 	}
 	if _, err := provider.ActiveKey(); err == nil {
 		t.Fatalf("expected ActiveKey to fail without active writer key")
+	}
+}
+
+func TestProviderDataKeyRoundTrip(t *testing.T) {
+	key, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey: %v", err)
+	}
+	provider, err := NewProvider(key.ID, []Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	generated, err := provider.GenerateDataKey(context.Background(), GenerateDataKeyRequest{KeyRef: 7})
+	if err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
+	}
+	if generated.KeyEntry.KeyRef != 7 || generated.KeyEntry.KeyID != key.ID {
+		t.Fatalf("unexpected key entry: %+v", generated.KeyEntry)
+	}
+	if len(generated.KeyEntry.EncryptedDEK) == 0 || len(generated.KeyEntry.WrapNonce) == 0 || len(generated.KeyEntry.EDEKFingerprint) != KeyFingerprintBytes {
+		t.Fatalf("incomplete key entry: %+v", generated.KeyEntry)
+	}
+	decrypted, err := provider.DecryptDataKey(context.Background(), DecryptDataKeyRequest{KeyEntry: generated.KeyEntry})
+	if err != nil {
+		t.Fatalf("DecryptDataKey: %v", err)
+	}
+	if decrypted.PlaintextDEK != generated.PlaintextDEK {
+		t.Fatalf("DEK mismatch")
+	}
+}
+
+func TestProviderRewrapDataKey(t *testing.T) {
+	oldKey, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("o", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey old: %v", err)
+	}
+	newKey, err := DecodeKey("local:v2", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("n", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey new: %v", err)
+	}
+	oldProvider, err := NewProvider(oldKey.ID, []Key{oldKey})
+	if err != nil {
+		t.Fatalf("NewProvider old: %v", err)
+	}
+	bothProvider, err := NewProvider(newKey.ID, []Key{oldKey, newKey})
+	if err != nil {
+		t.Fatalf("NewProvider both: %v", err)
+	}
+	generated, err := oldProvider.GenerateDataKey(context.Background(), GenerateDataKeyRequest{KeyRef: 1})
+	if err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
+	}
+	rewrapped, err := bothProvider.RewrapDataKey(context.Background(), RewrapDataKeyRequest{
+		KeyEntry:    generated.KeyEntry,
+		TargetKeyID: newKey.ID,
+	})
+	if err != nil {
+		t.Fatalf("RewrapDataKey: %v", err)
+	}
+	if rewrapped.KeyEntry.KeyID != newKey.ID || rewrapped.KeyEntry.KeyRef != generated.KeyEntry.KeyRef {
+		t.Fatalf("unexpected rewrapped key entry: %+v", rewrapped.KeyEntry)
+	}
+	if string(rewrapped.KeyEntry.EncryptedDEK) == string(generated.KeyEntry.EncryptedDEK) {
+		t.Fatalf("expected EDEK to change")
+	}
+	decrypted, err := bothProvider.DecryptDataKey(context.Background(), DecryptDataKeyRequest(rewrapped))
+	if err != nil {
+		t.Fatalf("DecryptDataKey rewrapped: %v", err)
+	}
+	if decrypted.PlaintextDEK != generated.PlaintextDEK {
+		t.Fatalf("DEK mismatch after rewrap")
+	}
+	if _, err := oldProvider.DecryptDataKey(context.Background(), DecryptDataKeyRequest(rewrapped)); !errors.Is(err, ErrMissingKey) {
+		t.Fatalf("expected old provider missing-key error, got %v", err)
+	}
+}
+
+func TestProviderDataKeyErrors(t *testing.T) {
+	key, err := DecodeKey("local:v1", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32))))
+	if err != nil {
+		t.Fatalf("DecodeKey: %v", err)
+	}
+	lookup, err := NewLookupProvider([]Key{key})
+	if err != nil {
+		t.Fatalf("NewLookupProvider: %v", err)
+	}
+	if _, err := lookup.GenerateDataKey(context.Background(), GenerateDataKeyRequest{}); !errors.Is(err, ErrMissingKey) {
+		t.Fatalf("expected read-only provider write failure as missing key, got %v", err)
+	}
+	if _, err := lookup.DecryptDataKey(context.Background(), DecryptDataKeyRequest{KeyEntry: KeyEntry{KeyID: key.ID}}); !errors.Is(err, ErrInvalidEnvelope) {
+		t.Fatalf("expected invalid envelope, got %v", err)
+	}
+	provider, err := NewProvider(key.ID, []Key{key})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	generated, err := provider.GenerateDataKey(context.Background(), GenerateDataKeyRequest{})
+	if err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
+	}
+	generated.KeyEntry.EncryptedDEK[0] ^= 0xff
+	if _, err := provider.DecryptDataKey(context.Background(), DecryptDataKeyRequest{KeyEntry: generated.KeyEntry}); !errors.Is(err, ErrDecryptFailed) {
+		t.Fatalf("expected decrypt failure, got %v", err)
 	}
 }

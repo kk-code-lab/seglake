@@ -1,9 +1,11 @@
 package sse
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -21,14 +23,70 @@ const (
 )
 
 var (
-	ErrDisabled   = errors.New("sse: disabled")
-	ErrNoSuchKey  = errors.New("sse: key not configured")
-	ErrBadKeySpec = errors.New("sse: invalid key spec")
+	ErrDisabled            = errors.New("sse: disabled")
+	ErrNoSuchKey           = errors.New("sse: key not configured")
+	ErrBadKeySpec          = errors.New("sse: invalid key spec")
+	ErrProviderUnavailable = ErrDisabled
+	ErrMissingKey          = ErrNoSuchKey
+	ErrDecryptFailed       = errors.New("sse: decrypt failed")
+	ErrInvalidEnvelope     = errors.New("sse: invalid key envelope")
+	ErrPermissionDenied    = errors.New("sse: permission denied")
 )
 
 type Key struct {
 	ID    string
 	Bytes [32]byte
+}
+
+type KeyProvider interface {
+	GenerateDataKey(ctx context.Context, req GenerateDataKeyRequest) (GenerateDataKeyResult, error)
+	DecryptDataKey(ctx context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error)
+	RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error)
+	DescribeKey(ctx context.Context, keyID string) (KeyDescription, error)
+}
+
+type GenerateDataKeyRequest struct {
+	KeyRef uint32
+}
+
+type GenerateDataKeyResult struct {
+	PlaintextDEK [32]byte
+	KeyEntry     KeyEntry
+}
+
+type DecryptDataKeyRequest struct {
+	KeyEntry KeyEntry
+}
+
+type DecryptDataKeyResult struct {
+	PlaintextDEK [32]byte
+}
+
+type RewrapDataKeyRequest struct {
+	KeyEntry    KeyEntry
+	TargetKeyID string
+}
+
+type RewrapDataKeyResult struct {
+	KeyEntry KeyEntry
+}
+
+type KeyDescription struct {
+	ProviderType string
+	KeyID        string
+	CanEncrypt   bool
+	CanDecrypt   bool
+	CanRewrap    bool
+}
+
+type KeyEntry struct {
+	KeyRef          uint32
+	KeyID           string
+	EncryptedDEK    []byte
+	WrapNonce       []byte
+	NoncePrefix     []byte
+	NonceScheme     string
+	EDEKFingerprint []byte
 }
 
 type Provider struct {
@@ -94,6 +152,93 @@ func (p *Provider) LookupKey(id string) (Key, error) {
 		return Key{}, ErrNoSuchKey
 	}
 	return key, nil
+}
+
+func (p *Provider) GenerateDataKey(_ context.Context, req GenerateDataKeyRequest) (GenerateDataKeyResult, error) {
+	activeKey, err := p.ActiveKey()
+	if err != nil {
+		return GenerateDataKeyResult{}, err
+	}
+	dek, err := GenerateDEK()
+	if err != nil {
+		return GenerateDataKeyResult{}, err
+	}
+	wrapNonce, edek, err := WrapDEK(activeKey, dek, WrapAAD(activeKey.ID))
+	if err != nil {
+		return GenerateDataKeyResult{}, err
+	}
+	noncePrefix, err := RandomBytes(8)
+	if err != nil {
+		return GenerateDataKeyResult{}, err
+	}
+	sum := sha256.Sum256(edek)
+	return GenerateDataKeyResult{
+		PlaintextDEK: dek,
+		KeyEntry: KeyEntry{
+			KeyRef:          req.KeyRef,
+			KeyID:           activeKey.ID,
+			EncryptedDEK:    edek,
+			WrapNonce:       wrapNonce,
+			NoncePrefix:     noncePrefix,
+			NonceScheme:     NonceSchemeV1,
+			EDEKFingerprint: sum[:KeyFingerprintBytes],
+		},
+	}, nil
+}
+
+func (p *Provider) DecryptDataKey(_ context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error) {
+	if req.KeyEntry.KeyID == "" || len(req.KeyEntry.EncryptedDEK) == 0 || len(req.KeyEntry.WrapNonce) == 0 {
+		return DecryptDataKeyResult{}, ErrInvalidEnvelope
+	}
+	kek, err := p.LookupKey(req.KeyEntry.KeyID)
+	if err != nil {
+		return DecryptDataKeyResult{}, err
+	}
+	dek, err := UnwrapDEK(kek, req.KeyEntry.WrapNonce, req.KeyEntry.EncryptedDEK, WrapAAD(req.KeyEntry.KeyID))
+	if err != nil {
+		return DecryptDataKeyResult{}, fmt.Errorf("%w: %v", ErrDecryptFailed, err)
+	}
+	return DecryptDataKeyResult{PlaintextDEK: dek}, nil
+}
+
+func (p *Provider) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error) {
+	targetKeyID := strings.TrimSpace(req.TargetKeyID)
+	if targetKeyID == "" {
+		return RewrapDataKeyResult{}, fmt.Errorf("%w: target key required", ErrInvalidEnvelope)
+	}
+	decrypted, err := p.DecryptDataKey(ctx, DecryptDataKeyRequest{KeyEntry: req.KeyEntry})
+	if err != nil {
+		return RewrapDataKeyResult{}, err
+	}
+	targetKey, err := p.LookupKey(targetKeyID)
+	if err != nil {
+		return RewrapDataKeyResult{}, err
+	}
+	wrapNonce, edek, err := WrapDEK(targetKey, decrypted.PlaintextDEK, WrapAAD(targetKey.ID))
+	if err != nil {
+		return RewrapDataKeyResult{}, err
+	}
+	sum := sha256.Sum256(edek)
+	entry := req.KeyEntry
+	entry.KeyID = targetKey.ID
+	entry.WrapNonce = wrapNonce
+	entry.EncryptedDEK = edek
+	entry.EDEKFingerprint = sum[:KeyFingerprintBytes]
+	return RewrapDataKeyResult{KeyEntry: entry}, nil
+}
+
+func (p *Provider) DescribeKey(_ context.Context, keyID string) (KeyDescription, error) {
+	keyID = strings.TrimSpace(keyID)
+	if _, err := p.LookupKey(keyID); err != nil {
+		return KeyDescription{}, err
+	}
+	return KeyDescription{
+		ProviderType: "local",
+		KeyID:        keyID,
+		CanEncrypt:   p != nil && p.active == keyID,
+		CanDecrypt:   true,
+		CanRewrap:    true,
+	}, nil
 }
 
 func ValidateKeyID(id string) error {

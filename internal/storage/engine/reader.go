@@ -20,8 +20,10 @@ func setReaderContext(r io.ReadCloser, ctx context.Context) {
 		v.ctx = ctx
 	case *encryptedManifestReader:
 		v.ctx = ctx
+		v.state.ctx = ctx
 	case *encryptedRangeReader:
 		v.ctx = ctx
+		v.state.ctx = ctx
 	}
 }
 
@@ -154,14 +156,15 @@ type rangeReader struct {
 type encryptedState struct {
 	layout   fs.Layout
 	manifest *manifest.Manifest
-	provider *ssecrypto.Provider
+	provider ssecrypto.KeyProvider
 	keys     map[uint32][32]byte
 	segID    string
 	segFile  *os.File
+	ctx      context.Context
 }
 
-func newEncryptedState(layout fs.Layout, man *manifest.Manifest, provider *ssecrypto.Provider) *encryptedState {
-	return &encryptedState{layout: layout, manifest: man, provider: provider, keys: make(map[uint32][32]byte)}
+func newEncryptedState(layout fs.Layout, man *manifest.Manifest, provider ssecrypto.KeyProvider) *encryptedState {
+	return &encryptedState{layout: layout, manifest: man, provider: provider, keys: make(map[uint32][32]byte), ctx: context.Background()}
 }
 
 func (s *encryptedState) close() error {
@@ -198,14 +201,11 @@ func (s *encryptedState) decryptChunk(ref manifest.ChunkRef) ([]byte, error) {
 	}
 	dek, ok := s.keys[ref.KeyRef]
 	if !ok {
-		kek, err := s.provider.LookupKey(keyEntry.KeyID)
+		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifest(keyEntry)})
 		if err != nil {
 			return nil, err
 		}
-		dek, err = ssecrypto.UnwrapDEK(kek, keyEntry.WrapNonce, keyEntry.EncryptedDEK, ssecrypto.WrapAAD(keyEntry.KeyID))
-		if err != nil {
-			return nil, err
-		}
+		dek = result.PlaintextDEK
 		s.keys[ref.KeyRef] = dek
 	}
 	if err := s.openSegment(ref.SegmentID); err != nil {
@@ -251,7 +251,7 @@ type encryptedManifestReader struct {
 	ctx    context.Context
 }
 
-func newEncryptedManifestReader(layout fs.Layout, man *manifest.Manifest, provider *ssecrypto.Provider) *encryptedManifestReader {
+func newEncryptedManifestReader(layout fs.Layout, man *manifest.Manifest, provider ssecrypto.KeyProvider) *encryptedManifestReader {
 	return &encryptedManifestReader{state: newEncryptedState(layout, man, provider), ctx: context.Background()}
 }
 
@@ -334,7 +334,7 @@ type encryptedRangeReader struct {
 	ctx    context.Context
 }
 
-func newEncryptedRangeReader(layout fs.Layout, man *manifest.Manifest, provider *ssecrypto.Provider, start, length int64) (*encryptedRangeReader, error) {
+func newEncryptedRangeReader(layout fs.Layout, man *manifest.Manifest, provider ssecrypto.KeyProvider, start, length int64) (*encryptedRangeReader, error) {
 	if start < 0 || length <= 0 {
 		return nil, errors.New("engine: invalid range")
 	}

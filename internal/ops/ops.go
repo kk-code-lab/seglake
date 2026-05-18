@@ -97,7 +97,7 @@ type MPUGCGuardrails struct {
 type ScrubOptions struct {
 	LiveOnly      bool
 	DeepEncrypted bool
-	SSEProvider   *ssecrypto.Provider
+	SSEProvider   ssecrypto.KeyProvider
 }
 
 func (r *Report) addWarning(msg string) {
@@ -382,13 +382,13 @@ func ScrubWithOptions(layout fs.Layout, metaPath string, opts ScrubOptions) (*Re
 type deepScrubState struct {
 	layout   fs.Layout
 	manifest *manifest.Manifest
-	provider *ssecrypto.Provider
+	provider ssecrypto.KeyProvider
 	report   *Report
 	store    *meta.Store
 	keys     map[uint32][32]byte
 }
 
-func newDeepScrubState(layout fs.Layout, man *manifest.Manifest, provider *ssecrypto.Provider, report *Report, store *meta.Store) *deepScrubState {
+func newDeepScrubState(layout fs.Layout, man *manifest.Manifest, provider ssecrypto.KeyProvider, report *Report, store *meta.Store) *deepScrubState {
 	return &deepScrubState{
 		layout:   layout,
 		manifest: man,
@@ -419,26 +419,20 @@ func (s *deepScrubState) verifyChunk(ref manifest.ChunkRef, ciphertext []byte, a
 			addError(fmt.Errorf("missing SSE-S3 KEK version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
 			return
 		}
-		kek, err := s.provider.LookupKey(entry.KeyID)
+		result, err := s.provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifest(entry)})
 		if err != nil {
-			if errors.Is(err, ssecrypto.ErrNoSuchKey) || errors.Is(err, ssecrypto.ErrDisabled) {
+			if errors.Is(err, ssecrypto.ErrMissingKey) || errors.Is(err, ssecrypto.ErrProviderUnavailable) {
 				s.report.MissingKEKs++
 				s.markDamaged()
 				addError(fmt.Errorf("missing SSE-S3 KEK version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
 				return
 			}
-			s.report.EncryptedMetadataErrors++
-			s.markDamaged()
-			addError(fmt.Errorf("SSE-S3 KEK lookup failed version=%s key_id=%s", s.manifest.VersionID, entry.KeyID))
-			return
-		}
-		dek, err = ssecrypto.UnwrapDEK(kek, entry.WrapNonce, entry.EncryptedDEK, ssecrypto.WrapAAD(entry.KeyID))
-		if err != nil {
 			s.report.EDEKUnwrapFailures++
 			s.markDamaged()
 			addError(fmt.Errorf("SSE-S3 EDEK unwrap failed version=%s key_id=%s key_ref=%d", s.manifest.VersionID, entry.KeyID, ref.KeyRef))
 			return
 		}
+		dek = result.PlaintextDEK
 		s.keys[ref.KeyRef] = dek
 	}
 	aead, err := ssecrypto.NewGCM(dek)

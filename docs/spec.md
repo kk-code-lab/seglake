@@ -16,7 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
-- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs and envelope encryption.
+- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs behind an internal key-provider interface and envelope encryption.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
@@ -131,7 +131,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.7 Read path
 - GET/HEAD: resolve `objects_current` → manifest → stream from segments.
-- Encrypted GET unwraps the manifest DEK with the configured KEK, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Authentication failure fails the read and must not return partial plaintext.
+- Encrypted GET asks the configured SSE-S3 key provider to decrypt the manifest EDEK, decrypts full ciphertext chunks with AES-256-GCM, and returns plaintext. Authentication failure fails the read and must not return partial plaintext.
 - Range GET: single range or `multipart/byteranges` for multiple ranges. Encrypted ranges map by plaintext length, read full ciphertext chunks, decrypt, then slice plaintext.
 
 ### 3.8 Recovery

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -47,7 +46,7 @@ type Options struct {
 	SegmentMaxAge   time.Duration
 	BarrierInterval time.Duration
 	BarrierMaxBytes int64
-	SSE             *ssecrypto.Provider
+	SSE             ssecrypto.KeyProvider
 }
 
 // Engine owns the storage read/write path.
@@ -60,7 +59,7 @@ type Engine struct {
 	clock          clock.Clock
 	segments       *segmentManager
 	barrier        *writeBarrier
-	sse            *ssecrypto.Provider
+	sse            ssecrypto.KeyProvider
 }
 
 // Layout returns the engine storage layout.
@@ -92,6 +91,10 @@ func New(opts Options) (*Engine, error) {
 	if opts.Clock == nil {
 		opts.Clock = clock.RealClock{}
 	}
+	sseProvider := opts.SSE
+	if provider, ok := sseProvider.(*ssecrypto.Provider); ok && provider == nil {
+		sseProvider = nil
+	}
 	engine := &Engine{
 		layout:         opts.Layout,
 		segmentVersion: opts.SegmentVersion,
@@ -100,7 +103,7 @@ func New(opts Options) (*Engine, error) {
 		metaStore:      opts.MetaStore,
 		clock:          opts.Clock,
 		segments:       newSegmentManager(opts.Layout, opts.SegmentVersion, opts.MetaStore, opts.SegmentMaxBytes, opts.SegmentMaxAge, opts.Clock),
-		sse:            opts.SSE,
+		sse:            sseProvider,
 	}
 	engine.barrier = newWriteBarrier(engine, opts.BarrierInterval, opts.BarrierMaxBytes)
 	if err := engine.ensureDirs(); err != nil {
@@ -245,23 +248,11 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 	if err != nil {
 		return nil, nil, err
 	}
-	activeKey, err := e.sse.ActiveKey()
+	dataKey, err := e.sse.GenerateDataKey(ctx, ssecrypto.GenerateDataKeyRequest{KeyRef: 0})
 	if err != nil {
 		return nil, nil, err
 	}
-	dek, err := ssecrypto.GenerateDEK()
-	if err != nil {
-		return nil, nil, err
-	}
-	wrapNonce, edek, err := ssecrypto.WrapDEK(activeKey, dek, ssecrypto.WrapAAD(activeKey.ID))
-	if err != nil {
-		return nil, nil, err
-	}
-	noncePrefix, err := ssecrypto.RandomBytes(8)
-	if err != nil {
-		return nil, nil, err
-	}
-	edekSum := sha256.Sum256(edek)
+	keyEntry := manifestKeyEntryFromSSE(dataKey.KeyEntry)
 	man := &manifest.Manifest{
 		Bucket:    bucket,
 		Key:       key,
@@ -271,18 +262,10 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 			Algorithm:     ssecrypto.AlgorithmAES256GCM,
 			WrapAlgorithm: ssecrypto.WrapAES256GCM,
 			AADScheme:     ssecrypto.AADSchemeV1,
-			Keys: []manifest.KeyEntry{{
-				KeyRef:          0,
-				KeyID:           activeKey.ID,
-				EncryptedDEK:    edek,
-				WrapNonce:       wrapNonce,
-				NoncePrefix:     noncePrefix,
-				NonceScheme:     ssecrypto.NonceSchemeV1,
-				EDEKFingerprint: edekSum[:ssecrypto.KeyFingerprintBytes],
-			}},
+			Keys:          []manifest.KeyEntry{keyEntry},
 		},
 	}
-	aead, err := ssecrypto.NewGCM(dek)
+	aead, err := ssecrypto.NewGCM(dataKey.PlaintextDEK)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -294,7 +277,7 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 			return ctx.Err()
 		default:
 		}
-		nonce, err := ssecrypto.ChunkNonce(noncePrefix, uint32(ch.Index))
+		nonce, err := ssecrypto.ChunkNonce(keyEntry.NoncePrefix, uint32(ch.Index))
 		if err != nil {
 			return err
 		}

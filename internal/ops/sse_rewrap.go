@@ -49,12 +49,12 @@ type SSERewrapKeyPlanEntry struct {
 	EDEKFingerprint string `json:"edek_fingerprint"`
 }
 
-func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.Provider, targetKeyID string, sourceKeyIDs []string) (*SSERewrapPlan, *Report, error) {
+func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyProvider, targetKeyID string, sourceKeyIDs []string) (*SSERewrapPlan, *Report, error) {
 	targetKeyID = strings.TrimSpace(targetKeyID)
 	if provider == nil {
 		return nil, nil, fmt.Errorf("sse rewrap: SSE-S3 provider required")
 	}
-	if _, err := provider.LookupKey(targetKeyID); err != nil {
+	if _, err := provider.DescribeKey(context.Background(), targetKeyID); err != nil {
 		return nil, nil, fmt.Errorf("sse rewrap: target key %q not configured: %w", targetKeyID, err)
 	}
 	report := newReport("sse-rewrap-plan")
@@ -96,11 +96,7 @@ func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.P
 			if !selectRewrapKey(keyEntry.KeyID, targetKeyID, sourceFilter) {
 				continue
 			}
-			sourceKey, err := provider.LookupKey(keyEntry.KeyID)
-			if err != nil {
-				return nil, nil, fmt.Errorf("sse rewrap: source key %q for version %s not configured: %w", keyEntry.KeyID, rec.VersionID, err)
-			}
-			if _, err := ssecrypto.UnwrapDEK(sourceKey, keyEntry.WrapNonce, keyEntry.EncryptedDEK, ssecrypto.WrapAAD(keyEntry.KeyID)); err != nil {
+			if _, err := provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifest(keyEntry)}); err != nil {
 				return nil, nil, fmt.Errorf("sse rewrap: unwrap key_ref %d for version %s: %w", keyEntry.KeyRef, rec.VersionID, err)
 			}
 			selected = append(selected, SSERewrapKeyPlanEntry{
@@ -130,7 +126,7 @@ func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.P
 	return plan, report, nil
 }
 
-func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.Provider, plan *SSERewrapPlan) (*Report, error) {
+func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyProvider, plan *SSERewrapPlan) (*Report, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("sse rewrap: plan required")
 	}
@@ -140,8 +136,7 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.Pro
 	if plan.SchemaVersion != sseRewrapPlanSchemaVersion {
 		return nil, fmt.Errorf("sse rewrap: unsupported plan schema %d", plan.SchemaVersion)
 	}
-	targetKey, err := provider.LookupKey(plan.TargetKeyID)
-	if err != nil {
+	if _, err := provider.DescribeKey(context.Background(), plan.TargetKeyID); err != nil {
 		return nil, fmt.Errorf("sse rewrap: target key %q not configured: %w", plan.TargetKeyID, err)
 	}
 	report := newReport("sse-rewrap-run")
@@ -185,23 +180,14 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider *ssecrypto.Pro
 			if edekFingerprintHex(*keyEntry) != plannedKey.EDEKFingerprint {
 				return nil, fmt.Errorf("sse rewrap: stale plan for version %s key_ref %d: EDEK fingerprint changed", entry.VersionID, plannedKey.KeyRef)
 			}
-			sourceKey, err := provider.LookupKey(keyEntry.KeyID)
+			rewrapped, err := provider.RewrapDataKey(context.Background(), ssecrypto.RewrapDataKeyRequest{
+				KeyEntry:    sseKeyEntryFromManifest(*keyEntry),
+				TargetKeyID: plan.TargetKeyID,
+			})
 			if err != nil {
-				return nil, fmt.Errorf("sse rewrap: source key %q for version %s not configured: %w", keyEntry.KeyID, entry.VersionID, err)
+				return nil, fmt.Errorf("sse rewrap: rewrap key_ref %d for version %s: %w", keyEntry.KeyRef, entry.VersionID, err)
 			}
-			dek, err := ssecrypto.UnwrapDEK(sourceKey, keyEntry.WrapNonce, keyEntry.EncryptedDEK, ssecrypto.WrapAAD(keyEntry.KeyID))
-			if err != nil {
-				return nil, fmt.Errorf("sse rewrap: unwrap key_ref %d for version %s: %w", keyEntry.KeyRef, entry.VersionID, err)
-			}
-			wrapNonce, edek, err := ssecrypto.WrapDEK(targetKey, dek, ssecrypto.WrapAAD(targetKey.ID))
-			if err != nil {
-				return nil, fmt.Errorf("sse rewrap: wrap key_ref %d for version %s: %w", keyEntry.KeyRef, entry.VersionID, err)
-			}
-			sum := sha256.Sum256(edek)
-			keyEntry.KeyID = targetKey.ID
-			keyEntry.WrapNonce = wrapNonce
-			keyEntry.EncryptedDEK = edek
-			keyEntry.EDEKFingerprint = append(keyEntry.EDEKFingerprint[:0], sum[:ssecrypto.KeyFingerprintBytes]...)
+			*keyEntry = manifestKeyEntryFromSSE(rewrapped.KeyEntry)
 		}
 		newPath, err := writeRewrappedManifest(layout, codec, man)
 		if err != nil {
