@@ -83,6 +83,22 @@ func envBoolOrDefault(key string, fallback bool) bool {
 	return parsed
 }
 
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		if secretValue, ok := secretEnv[key]; ok {
+			value = secretValue
+		} else {
+			return fallback
+		}
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
 type globalArgs struct {
 	mode        string
 	modeHelp    bool
@@ -93,45 +109,51 @@ type globalArgs struct {
 }
 
 type serverOptions struct {
-	addr              string
-	dataDir           string
-	accessKey         string
-	secretKey         string
-	region            string
-	publicBuckets     string
-	virtualHosted     bool
-	logRequests       bool
-	allowUnsigned     bool
-	tlsEnable         bool
-	tlsCert           string
-	tlsKey            string
-	trustedProxies    string
-	siteID            string
-	syncInterval      time.Duration
-	syncBytes         int64
-	maxObjectSize     int64
-	corsOrigins       string
-	corsMethods       string
-	corsHeaders       string
-	corsMaxAge        int
-	replayTTL         time.Duration
-	replayBlock       bool
-	replayMaxEntries  int
-	requireIfMatch    string
-	requireMD5        bool
-	mpuCompleteLimit  int
-	maxHeaderBytes    int
-	maxURLLength      int
-	readHeaderTimeout time.Duration
-	readTimeout       time.Duration
-	writeTimeout      time.Duration
-	idleTimeout       time.Duration
-	shutdownTimeout   time.Duration
-	sseS3Enabled      bool
-	sseS3ActiveKey    string
-	sseS3KEKs         multiString
-	sseS3KEKsEnv      string
-	sseS3SingleKeyB64 string
+	addr                string
+	dataDir             string
+	accessKey           string
+	secretKey           string
+	region              string
+	publicBuckets       string
+	virtualHosted       bool
+	logRequests         bool
+	allowUnsigned       bool
+	tlsEnable           bool
+	tlsCert             string
+	tlsKey              string
+	trustedProxies      string
+	siteID              string
+	syncInterval        time.Duration
+	syncBytes           int64
+	maxObjectSize       int64
+	corsOrigins         string
+	corsMethods         string
+	corsHeaders         string
+	corsMaxAge          int
+	replayTTL           time.Duration
+	replayBlock         bool
+	replayMaxEntries    int
+	requireIfMatch      string
+	requireMD5          bool
+	mpuCompleteLimit    int
+	maxHeaderBytes      int
+	maxURLLength        int
+	readHeaderTimeout   time.Duration
+	readTimeout         time.Duration
+	writeTimeout        time.Duration
+	idleTimeout         time.Duration
+	shutdownTimeout     time.Duration
+	sseS3Enabled        bool
+	sseS3Provider       string
+	sseS3ActiveKey      string
+	sseS3KEKs           multiString
+	sseS3KEKsEnv        string
+	sseS3SingleKeyB64   string
+	sseS3VaultAddr      string
+	sseS3VaultMount     string
+	sseS3VaultTokenFile string
+	sseS3VaultNamespace string
+	sseS3VaultTimeout   time.Duration
 }
 
 type multiString []string
@@ -153,44 +175,50 @@ func (m *multiString) Set(value string) error {
 }
 
 type opsOptions struct {
-	dataDir            string
-	snapshotDir        string
-	rebuildMeta        string
-	replCompareDir     string
-	fsckAllManifests   bool
-	scrubAllManifests  bool
-	scrubDeepEncrypted bool
-	gcMinAge           time.Duration
-	gcForce            bool
-	gcWarnSegments     int
-	gcWarnReclaim      int64
-	gcMaxSegments      int
-	gcMaxReclaim       int64
-	gcLiveThreshold    float64
-	gcRewritePlanFile  string
-	gcRewriteFromPlan  string
-	gcRewriteBps       int64
-	gcPauseFile        string
-	manifestGCTTL      time.Duration
-	manifestGCPlan     string
-	manifestGCFromPlan string
-	manifestGCForce    bool
-	mpuTTL             time.Duration
-	mpuForce           bool
-	mpuWarnUploads     int
-	mpuWarnReclaim     int64
-	mpuMaxUploads      int
-	mpuMaxReclaim      int64
-	dbReindexTable     string
-	sseS3ActiveKey     string
-	sseS3KEKs          multiString
-	sseS3KEKsEnv       string
-	sseS3SingleKeyB64  string
-	sseRewrapTarget    string
-	sseRewrapSources   multiString
-	sseRewrapPlan      string
-	sseRewrapFromPlan  string
-	jsonOut            bool
+	dataDir             string
+	snapshotDir         string
+	rebuildMeta         string
+	replCompareDir      string
+	fsckAllManifests    bool
+	scrubAllManifests   bool
+	scrubDeepEncrypted  bool
+	gcMinAge            time.Duration
+	gcForce             bool
+	gcWarnSegments      int
+	gcWarnReclaim       int64
+	gcMaxSegments       int
+	gcMaxReclaim        int64
+	gcLiveThreshold     float64
+	gcRewritePlanFile   string
+	gcRewriteFromPlan   string
+	gcRewriteBps        int64
+	gcPauseFile         string
+	manifestGCTTL       time.Duration
+	manifestGCPlan      string
+	manifestGCFromPlan  string
+	manifestGCForce     bool
+	mpuTTL              time.Duration
+	mpuForce            bool
+	mpuWarnUploads      int
+	mpuWarnReclaim      int64
+	mpuMaxUploads       int
+	mpuMaxReclaim       int64
+	dbReindexTable      string
+	sseS3ActiveKey      string
+	sseS3Provider       string
+	sseS3KEKs           multiString
+	sseS3KEKsEnv        string
+	sseS3SingleKeyB64   string
+	sseS3VaultAddr      string
+	sseS3VaultMount     string
+	sseS3VaultTokenFile string
+	sseS3VaultNamespace string
+	sseS3VaultTimeout   time.Duration
+	sseRewrapTarget     string
+	sseRewrapSources    multiString
+	sseRewrapPlan       string
+	sseRewrapFromPlan   string
+	jsonOut             bool
 }
 
 type keysOptions struct {
@@ -693,10 +721,16 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.DurationVar(&opts.idleTimeout, "idle-timeout", defaultIdleTimeout, "HTTP idle timeout")
 	fs.DurationVar(&opts.shutdownTimeout, "shutdown-timeout", 10*time.Second, "Graceful shutdown timeout")
 	fs.BoolVar(&opts.sseS3Enabled, "sse-s3-enabled", envBoolOrDefault("SEGLAKE_SSE_S3_ENABLED", false), "Enable explicit SSE-S3 object encryption")
+	fs.StringVar(&opts.sseS3Provider, "sse-s3-provider", envOrDefault("SEGLAKE_SSE_S3_PROVIDER", ssecrypto.ProviderLocal), "SSE-S3 key provider: local|vault-transit")
 	fs.StringVar(&opts.sseS3ActiveKey, "sse-s3-active-key", envOrDefault("SEGLAKE_SSE_S3_ACTIVE_KEY", ""), "Active SSE-S3 key id for new encrypted writes")
 	fs.Var(&opts.sseS3KEKs, "sse-s3-kek", "SSE-S3 KEK spec key-id=file:/path or key-id=env:NAME (repeatable)")
 	opts.sseS3KEKsEnv = envOrDefault("SEGLAKE_SSE_S3_KEKS", "")
 	opts.sseS3SingleKeyB64 = envOrDefault("SEGLAKE_SSE_S3_KEK_B64", "")
+	fs.StringVar(&opts.sseS3VaultAddr, "sse-s3-vault-addr", envOrDefault("SEGLAKE_SSE_S3_VAULT_ADDR", envOrDefault("VAULT_ADDR", "")), "Vault address for SSE-S3 vault-transit provider")
+	fs.StringVar(&opts.sseS3VaultMount, "sse-s3-vault-mount", envOrDefault("SEGLAKE_SSE_S3_VAULT_MOUNT", "transit"), "Vault Transit mount path for SSE-S3")
+	fs.StringVar(&opts.sseS3VaultTokenFile, "sse-s3-vault-token-file", envOrDefault("SEGLAKE_SSE_S3_VAULT_TOKEN_FILE", ""), "File containing Vault token for SSE-S3")
+	fs.StringVar(&opts.sseS3VaultNamespace, "sse-s3-vault-namespace", envOrDefault("SEGLAKE_SSE_S3_VAULT_NAMESPACE", ""), "Vault namespace for SSE-S3")
+	fs.DurationVar(&opts.sseS3VaultTimeout, "sse-s3-vault-timeout", envDurationOrDefault("SEGLAKE_SSE_S3_VAULT_TIMEOUT", 5*time.Second), "Vault HTTP timeout for SSE-S3")
 	return fs, opts
 }
 
@@ -732,10 +766,18 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.IntVar(&opts.mpuMaxUploads, "mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
 	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
+	opts.sseS3Provider = envOrDefault("SEGLAKE_SSE_S3_PROVIDER", ssecrypto.ProviderLocal)
+	fs.StringVar(&opts.sseS3Provider, "sse-s3-provider", opts.sseS3Provider, "SSE-S3 key provider: local|vault-transit")
 	opts.sseS3ActiveKey = envOrDefault("SEGLAKE_SSE_S3_ACTIVE_KEY", "")
+	fs.StringVar(&opts.sseS3ActiveKey, "sse-s3-active-key", opts.sseS3ActiveKey, "Active SSE-S3 key id for ops")
 	fs.Var(&opts.sseS3KEKs, "sse-s3-kek", "SSE-S3 KEK spec key-id=file:/path or key-id=env:NAME (repeatable)")
 	opts.sseS3KEKsEnv = envOrDefault("SEGLAKE_SSE_S3_KEKS", "")
 	opts.sseS3SingleKeyB64 = envOrDefault("SEGLAKE_SSE_S3_KEK_B64", "")
+	fs.StringVar(&opts.sseS3VaultAddr, "sse-s3-vault-addr", envOrDefault("SEGLAKE_SSE_S3_VAULT_ADDR", envOrDefault("VAULT_ADDR", "")), "Vault address for SSE-S3 vault-transit provider")
+	fs.StringVar(&opts.sseS3VaultMount, "sse-s3-vault-mount", envOrDefault("SEGLAKE_SSE_S3_VAULT_MOUNT", "transit"), "Vault Transit mount path for SSE-S3")
+	fs.StringVar(&opts.sseS3VaultTokenFile, "sse-s3-vault-token-file", envOrDefault("SEGLAKE_SSE_S3_VAULT_TOKEN_FILE", ""), "File containing Vault token for SSE-S3")
+	fs.StringVar(&opts.sseS3VaultNamespace, "sse-s3-vault-namespace", envOrDefault("SEGLAKE_SSE_S3_VAULT_NAMESPACE", ""), "Vault namespace for SSE-S3")
+	fs.DurationVar(&opts.sseS3VaultTimeout, "sse-s3-vault-timeout", envDurationOrDefault("SEGLAKE_SSE_S3_VAULT_TIMEOUT", 5*time.Second), "Vault HTTP timeout for SSE-S3")
 	fs.StringVar(&opts.sseRewrapTarget, "sse-s3-rewrap-target-key", envOrDefault("SEGLAKE_SSE_S3_REWRAP_TARGET_KEY", ""), "Target SSE-S3 KEK id for rewrap")
 	fs.Var(&opts.sseRewrapSources, "sse-s3-rewrap-source-key", "Source SSE-S3 KEK id to rewrap (repeatable; default all non-target keys)")
 	fs.StringVar(&opts.sseRewrapPlan, "sse-s3-rewrap-plan", "", "SSE-S3 rewrap plan output file")
@@ -1003,14 +1045,72 @@ func runServer(opts *serverOptions) error {
 	}
 }
 
-func buildSSEProvider(opts *serverOptions) (*ssecrypto.Provider, error) {
+func buildSSEProvider(opts *serverOptions) (ssecrypto.KeyProvider, error) {
 	if opts == nil || !opts.sseS3Enabled {
 		return nil, nil
 	}
-	return buildSSEProviderFrom(opts.sseS3ActiveKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+	return buildSSEProviderFrom(sseProviderBuildOptions{
+		Provider:       opts.sseS3Provider,
+		ActiveKey:      opts.sseS3ActiveKey,
+		KEKSpecs:       opts.sseS3KEKs,
+		KEKEnv:         opts.sseS3KEKsEnv,
+		SingleKeyB64:   opts.sseS3SingleKeyB64,
+		VaultAddr:      opts.sseS3VaultAddr,
+		VaultMount:     opts.sseS3VaultMount,
+		VaultTokenFile: opts.sseS3VaultTokenFile,
+		VaultNamespace: opts.sseS3VaultNamespace,
+		VaultTimeout:   opts.sseS3VaultTimeout,
+	})
 }
 
-func buildSSEProviderFrom(activeKey string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
+type sseProviderBuildOptions struct {
+	Provider       string
+	ActiveKey      string
+	KEKSpecs       []string
+	KEKEnv         string
+	SingleKeyB64   string
+	VaultAddr      string
+	VaultMount     string
+	VaultTokenFile string
+	VaultNamespace string
+	VaultTimeout   time.Duration
+}
+
+func buildSSEProviderFrom(opts sseProviderBuildOptions) (ssecrypto.KeyProvider, error) {
+	provider := strings.TrimSpace(opts.Provider)
+	if provider == "" {
+		provider = ssecrypto.ProviderLocal
+	}
+	switch provider {
+	case ssecrypto.ProviderLocal:
+		local, err := buildLocalSSEProvider(opts.ActiveKey, opts.KEKSpecs, opts.KEKEnv, opts.SingleKeyB64)
+		if err != nil {
+			return nil, err
+		}
+		return local, nil
+	case ssecrypto.ProviderVaultTransit:
+		vault, err := buildVaultSSEProvider(opts)
+		if err != nil {
+			return nil, err
+		}
+		var readers []ssecrypto.KeyProvider
+		if hasSSEKeyConfig(opts.KEKSpecs, opts.KEKEnv, opts.SingleKeyB64) {
+			localLookup, err := buildSSELookupProviderFrom(opts.ActiveKey, opts.KEKSpecs, opts.KEKEnv, opts.SingleKeyB64)
+			if err != nil {
+				return nil, err
+			}
+			readers = append(readers, localLookup)
+		}
+		if len(readers) == 0 {
+			return vault, nil
+		}
+		return ssecrypto.NewRoutingProvider(vault, readers...)
+	default:
+		return nil, fmt.Errorf("sse-s3: unsupported provider %q", provider)
+	}
+}
+
+func buildLocalSSEProvider(activeKey string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
 	activeKey = strings.TrimSpace(activeKey)
 	keys, err := loadSSEKeys(activeKey, kekSpecs, kekEnv, singleKeyB64)
 	if err != nil {
@@ -1019,12 +1119,49 @@ func buildSSEProviderFrom(activeKey string, kekSpecs []string, kekEnv, singleKey
 	return ssecrypto.NewProvider(activeKey, keys)
 }
 
-func buildSSELookupProviderFrom(singleKeyID string, kekSpecs []string, kekEnv, singleKeyB64 string) (*ssecrypto.Provider, error) {
+func buildSSELookupProviderFrom(singleKeyID string, kekSpecs []string, kekEnv, singleKeyB64 string) (ssecrypto.KeyProvider, error) {
 	keys, err := loadSSEKeys(singleKeyID, kekSpecs, kekEnv, singleKeyB64)
 	if err != nil {
 		return nil, err
 	}
 	return ssecrypto.NewLookupProvider(keys)
+}
+
+func buildVaultSSEProvider(opts sseProviderBuildOptions) (*ssecrypto.VaultTransitProvider, error) {
+	token, err := loadVaultToken(opts.VaultTokenFile)
+	if err != nil {
+		return nil, err
+	}
+	return ssecrypto.NewVaultTransitProvider(ssecrypto.VaultTransitConfig{
+		Address:   opts.VaultAddr,
+		Mount:     opts.VaultMount,
+		Token:     token,
+		Namespace: opts.VaultNamespace,
+		ActiveKey: opts.ActiveKey,
+		Timeout:   opts.VaultTimeout,
+	})
+}
+
+func loadVaultToken(tokenFile string) (string, error) {
+	tokenFile = strings.TrimSpace(tokenFile)
+	if tokenFile != "" {
+		data, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("sse-s3: read vault token file: %w", err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return "", fmt.Errorf("sse-s3: vault token file is empty")
+		}
+		return token, nil
+	}
+	if token := strings.TrimSpace(envOrDefault("SEGLAKE_SSE_S3_VAULT_TOKEN", "")); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(envOrDefault("VAULT_TOKEN", "")); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("sse-s3: vault token required via SEGLAKE_SSE_S3_VAULT_TOKEN, VAULT_TOKEN, or -sse-s3-vault-token-file")
 }
 
 func loadSSEKeys(singleKeyID string, kekSpecs []string, kekEnv, singleKeyB64 string) ([]ssecrypto.Key, error) {
@@ -1201,7 +1338,7 @@ func openStore(dataDir, siteID string) (*meta.Store, error) {
 	return store, nil
 }
 
-func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, syncBytes int64, sseProvider *ssecrypto.Provider) (*engine.Engine, error) {
+func openEngine(dataDir string, store *meta.Store, syncInterval time.Duration, syncBytes int64, sseProvider ssecrypto.KeyProvider) (*engine.Engine, error) {
 	return engine.New(engine.Options{
 		Layout:          fs.NewLayout(filepath.Join(dataDir, "objects")),
 		MetaStore:       store,

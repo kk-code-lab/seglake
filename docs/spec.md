@@ -16,7 +16,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - repl-validate (consistency comparison between nodes),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
-- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs behind an internal key-provider interface and envelope encryption.
+- **SSE-S3**: explicit `x-amz-server-side-encryption: AES256` object writes plus bucket default encryption with local KEKs or Vault Transit behind an internal key-provider interface and envelope encryption.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
 
 ### 1.1 Key decisions
@@ -73,7 +73,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
-- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for the S3 XML `AES256` subset; when configured, PUT/CopyObject destination/Initiate MPU without an explicit destination SSE header are encrypted. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. SSE-C and SSE-KMS remain unsupported.
+- SSE-S3: explicit `x-amz-server-side-encryption: AES256` on PUT, CopyObject, and Initiate Multipart Upload stores payload chunks encrypted at rest. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for the S3 XML `AES256` subset; when configured, PUT/CopyObject destination/Initiate MPU without an explicit destination SSE header are encrypted. GET/HEAD return `x-amz-server-side-encryption: AES256` for encrypted object versions. The key-provider backend can be local KEKs or Vault Transit; the S3 API remains `AES256` in both cases. SSE-C and SSE-KMS remain unsupported.
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
@@ -109,7 +109,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 3.4 Object manifest
 - Manifest contains: bucket, key, versionID, size, list of chunks (hash, segment_id, offset, len).
-- Manifest v1/v2 objects are plaintext. Manifest v3 is used for SSE-S3 and includes encryption metadata: mode, algorithm, AAD/nonce/wrap schemes, wrapped DEKs, per-key nonce prefixes, per-chunk plaintext length, and per-chunk key refs.
+- Manifest v1/v2 objects are plaintext. Manifest v3 is used for SSE-S3 and includes encryption metadata: mode, payload algorithm, AAD/nonce/wrap schemes, wrapped DEKs, per-key nonce prefixes, per-chunk plaintext length, and per-chunk key refs. `WrapAlgorithm=AES-256-GCM` identifies local KEK-wrapped DEKs; `WrapAlgorithm=vault-transit-v1` identifies Vault Transit ciphertext EDEKs stored in the same manifest v3 key-entry fields.
 - For encrypted chunks, `len` is the stored ciphertext length and chunk hash is over ciphertext. Range reads use the explicit plaintext length.
 - Storage:
   - manifest file on disk (binary codec),
@@ -261,7 +261,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 5.1 Modes
 - `status` — count of manifests and segments.
 - `fsck` — consistency of manifests and segment boundaries.
-- `scrub` — verify stored chunk hashes; damaged → `DAMAGED`. With `-scrub-deep-encrypted`, encrypted SSE-S3 chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced KEKs.
+- `scrub` — verify stored chunk hashes; damaged → `DAMAGED`. With `-scrub-deep-encrypted`, encrypted SSE-S3 chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced local KEKs or Vault provider access.
 - `rebuild-index` — rebuild meta from manifests.
 - `snapshot` — copy meta.db(+wal/shm) + report.
 - `support-bundle` — snapshot + fsck + scrub.
@@ -275,7 +275,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `manifest-gc-plan`/`manifest-gc-run` — plan + delete orphan manifest files only. Candidates are manifest files not referenced by current versions or active MPU parts and older than `-manifest-gc-ttl` (default 7 days). Run requires `-manifest-gc-force` and a saved plan.
 - `mpu-gc-plan`/`mpu-gc-run` — cleanup stale multipart uploads (TTL; run requires `-mpu-force`).
   - Segment GC treats multipart parts as live.
-- `sse-rewrap-plan`/`sse-rewrap-run` — rotate local SSE-S3 KEKs by rewriting only manifest EDEKs and SQLite encryption summaries. The run writes new manifest paths, preserves object versions, ETags, sizes, Last-Modified values, chunk refs, and segment ciphertext, and records `sse_rewrap` oplog entries so peers fetch the new manifest bytes.
+- `sse-rewrap-plan`/`sse-rewrap-run` — rotate SSE-S3 EDEKs by rewriting only manifest EDEKs and SQLite encryption summaries. Local→local, Vault→Vault, and whole-manifest local→Vault rewrap are supported. The run writes new manifest paths, preserves object versions, ETags, sizes, Last-Modified values, chunk refs, and segment ciphertext, and records `sse_rewrap` oplog entries so peers fetch the new manifest bytes.
 
 ### 5.2 Stats API
 `GET /v1/meta/stats` (JSON):

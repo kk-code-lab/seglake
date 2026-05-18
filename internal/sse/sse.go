@@ -13,13 +13,16 @@ import (
 )
 
 const (
-	ModeSSES3           = "SSE-S3"
-	AlgorithmAES256GCM  = "AES-256-GCM"
-	WrapAES256GCM       = "AES-256-GCM"
-	NonceSchemeV1       = "random64-counter32-v1"
-	AADSchemeV1         = "seglake-sse-s3-aad-v1"
-	ServerSideHeaderS3  = "AES256"
-	KeyFingerprintBytes = 8
+	ModeSSES3            = "SSE-S3"
+	AlgorithmAES256GCM   = "AES-256-GCM"
+	WrapAES256GCM        = "AES-256-GCM"
+	WrapVaultTransitV1   = "vault-transit-v1"
+	NonceSchemeV1        = "random64-counter32-v1"
+	AADSchemeV1          = "seglake-sse-s3-aad-v1"
+	ServerSideHeaderS3   = "AES256"
+	KeyFingerprintBytes  = 8
+	ProviderLocal        = "local"
+	ProviderVaultTransit = "vault-transit"
 )
 
 var (
@@ -41,6 +44,7 @@ type Key struct {
 type KeyProvider interface {
 	GenerateDataKey(ctx context.Context, req GenerateDataKeyRequest) (GenerateDataKeyResult, error)
 	DecryptDataKey(ctx context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error)
+	WrapDataKey(ctx context.Context, req WrapDataKeyRequest) (WrapDataKeyResult, error)
 	RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error)
 	DescribeKey(ctx context.Context, keyID string) (KeyDescription, error)
 }
@@ -62,6 +66,16 @@ type DecryptDataKeyResult struct {
 	PlaintextDEK [32]byte
 }
 
+type WrapDataKeyRequest struct {
+	PlaintextDEK [32]byte
+	KeyEntry     KeyEntry
+	TargetKeyID  string
+}
+
+type WrapDataKeyResult struct {
+	KeyEntry KeyEntry
+}
+
 type RewrapDataKeyRequest struct {
 	KeyEntry    KeyEntry
 	TargetKeyID string
@@ -80,6 +94,7 @@ type KeyDescription struct {
 }
 
 type KeyEntry struct {
+	WrapAlgorithm   string
 	KeyRef          uint32
 	KeyID           string
 	EncryptedDEK    []byte
@@ -175,6 +190,7 @@ func (p *Provider) GenerateDataKey(_ context.Context, req GenerateDataKeyRequest
 	return GenerateDataKeyResult{
 		PlaintextDEK: dek,
 		KeyEntry: KeyEntry{
+			WrapAlgorithm:   WrapAES256GCM,
 			KeyRef:          req.KeyRef,
 			KeyID:           activeKey.ID,
 			EncryptedDEK:    edek,
@@ -187,6 +203,9 @@ func (p *Provider) GenerateDataKey(_ context.Context, req GenerateDataKeyRequest
 }
 
 func (p *Provider) DecryptDataKey(_ context.Context, req DecryptDataKeyRequest) (DecryptDataKeyResult, error) {
+	if !isLocalWrapAlgorithm(req.KeyEntry.WrapAlgorithm) {
+		return DecryptDataKeyResult{}, fmt.Errorf("%w: unsupported wrap algorithm %q", ErrInvalidEnvelope, req.KeyEntry.WrapAlgorithm)
+	}
 	if req.KeyEntry.KeyID == "" || len(req.KeyEntry.EncryptedDEK) == 0 || len(req.KeyEntry.WrapNonce) == 0 {
 		return DecryptDataKeyResult{}, ErrInvalidEnvelope
 	}
@@ -201,6 +220,42 @@ func (p *Provider) DecryptDataKey(_ context.Context, req DecryptDataKeyRequest) 
 	return DecryptDataKeyResult{PlaintextDEK: dek}, nil
 }
 
+func (p *Provider) WrapDataKey(_ context.Context, req WrapDataKeyRequest) (WrapDataKeyResult, error) {
+	targetKeyID := strings.TrimSpace(req.TargetKeyID)
+	if targetKeyID == "" {
+		return WrapDataKeyResult{}, fmt.Errorf("%w: target key required", ErrInvalidEnvelope)
+	}
+	targetKey, err := p.LookupKey(targetKeyID)
+	if err != nil {
+		return WrapDataKeyResult{}, err
+	}
+	wrapNonce, edek, err := WrapDEK(targetKey, req.PlaintextDEK, WrapAAD(targetKey.ID))
+	if err != nil {
+		return WrapDataKeyResult{}, err
+	}
+	noncePrefix := req.KeyEntry.NoncePrefix
+	if len(noncePrefix) == 0 {
+		noncePrefix, err = RandomBytes(8)
+		if err != nil {
+			return WrapDataKeyResult{}, err
+		}
+	}
+	nonceScheme := req.KeyEntry.NonceScheme
+	if nonceScheme == "" {
+		nonceScheme = NonceSchemeV1
+	}
+	sum := sha256.Sum256(edek)
+	entry := req.KeyEntry
+	entry.WrapAlgorithm = WrapAES256GCM
+	entry.KeyID = targetKey.ID
+	entry.WrapNonce = wrapNonce
+	entry.EncryptedDEK = edek
+	entry.NoncePrefix = noncePrefix
+	entry.NonceScheme = nonceScheme
+	entry.EDEKFingerprint = sum[:KeyFingerprintBytes]
+	return WrapDataKeyResult{KeyEntry: entry}, nil
+}
+
 func (p *Provider) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrapDataKeyResult, error) {
 	targetKeyID := strings.TrimSpace(req.TargetKeyID)
 	if targetKeyID == "" {
@@ -210,21 +265,15 @@ func (p *Provider) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) 
 	if err != nil {
 		return RewrapDataKeyResult{}, err
 	}
-	targetKey, err := p.LookupKey(targetKeyID)
+	wrapped, err := p.WrapDataKey(ctx, WrapDataKeyRequest{
+		PlaintextDEK: decrypted.PlaintextDEK,
+		KeyEntry:     req.KeyEntry,
+		TargetKeyID:  targetKeyID,
+	})
 	if err != nil {
 		return RewrapDataKeyResult{}, err
 	}
-	wrapNonce, edek, err := WrapDEK(targetKey, decrypted.PlaintextDEK, WrapAAD(targetKey.ID))
-	if err != nil {
-		return RewrapDataKeyResult{}, err
-	}
-	sum := sha256.Sum256(edek)
-	entry := req.KeyEntry
-	entry.KeyID = targetKey.ID
-	entry.WrapNonce = wrapNonce
-	entry.EncryptedDEK = edek
-	entry.EDEKFingerprint = sum[:KeyFingerprintBytes]
-	return RewrapDataKeyResult{KeyEntry: entry}, nil
+	return RewrapDataKeyResult(wrapped), nil
 }
 
 func (p *Provider) DescribeKey(_ context.Context, keyID string) (KeyDescription, error) {
@@ -233,12 +282,28 @@ func (p *Provider) DescribeKey(_ context.Context, keyID string) (KeyDescription,
 		return KeyDescription{}, err
 	}
 	return KeyDescription{
-		ProviderType: "local",
+		ProviderType: ProviderLocal,
 		KeyID:        keyID,
 		CanEncrypt:   p != nil && p.active == keyID,
 		CanDecrypt:   true,
 		CanRewrap:    true,
 	}, nil
+}
+
+func (p *Provider) WrapAlgorithm() string {
+	return WrapAES256GCM
+}
+
+func NormalizeWrapAlgorithm(algorithm string) string {
+	algorithm = strings.TrimSpace(algorithm)
+	if algorithm == "" {
+		return WrapAES256GCM
+	}
+	return algorithm
+}
+
+func isLocalWrapAlgorithm(algorithm string) bool {
+	return NormalizeWrapAlgorithm(algorithm) == WrapAES256GCM
 }
 
 func ValidateKeyID(id string) error {

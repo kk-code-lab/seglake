@@ -96,7 +96,7 @@ func BuildSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.Ke
 			if !selectRewrapKey(keyEntry.KeyID, targetKeyID, sourceFilter) {
 				continue
 			}
-			if _, err := provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifest(keyEntry)}); err != nil {
+			if _, err := provider.DecryptDataKey(context.Background(), ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(man.Encryption.WrapAlgorithm, keyEntry)}); err != nil {
 				return nil, nil, fmt.Errorf("sse rewrap: unwrap key_ref %d for version %s: %w", keyEntry.KeyRef, rec.VersionID, err)
 			}
 			selected = append(selected, SSERewrapKeyPlanEntry{
@@ -168,6 +168,8 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyP
 		if !man.Encrypted() {
 			return nil, fmt.Errorf("sse rewrap: version %s is no longer encrypted", entry.VersionID)
 		}
+		newWrapAlgorithm := man.Encryption.WrapAlgorithm
+		changedWrapAlgorithm := false
 		for _, plannedKey := range entry.Keys {
 			keyIndex := findManifestKey(man, plannedKey.KeyRef)
 			if keyIndex < 0 {
@@ -181,13 +183,29 @@ func RunSSERewrapPlan(layout fs.Layout, metaPath string, provider ssecrypto.KeyP
 				return nil, fmt.Errorf("sse rewrap: stale plan for version %s key_ref %d: EDEK fingerprint changed", entry.VersionID, plannedKey.KeyRef)
 			}
 			rewrapped, err := provider.RewrapDataKey(context.Background(), ssecrypto.RewrapDataKeyRequest{
-				KeyEntry:    sseKeyEntryFromManifest(*keyEntry),
+				KeyEntry:    sseKeyEntryFromManifestWithWrap(man.Encryption.WrapAlgorithm, *keyEntry),
 				TargetKeyID: plan.TargetKeyID,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("sse rewrap: rewrap key_ref %d for version %s: %w", keyEntry.KeyRef, entry.VersionID, err)
 			}
+			rewrappedAlgorithm := ssecrypto.NormalizeWrapAlgorithm(rewrapped.KeyEntry.WrapAlgorithm)
+			if newWrapAlgorithm == "" {
+				newWrapAlgorithm = rewrappedAlgorithm
+			}
+			if ssecrypto.NormalizeWrapAlgorithm(newWrapAlgorithm) != rewrappedAlgorithm {
+				return nil, fmt.Errorf("sse rewrap: mixed wrap algorithms are not supported for version %s", entry.VersionID)
+			}
+			if ssecrypto.NormalizeWrapAlgorithm(man.Encryption.WrapAlgorithm) != rewrappedAlgorithm {
+				changedWrapAlgorithm = true
+			}
 			*keyEntry = manifestKeyEntryFromSSE(rewrapped.KeyEntry)
+		}
+		if changedWrapAlgorithm && len(entry.Keys) != len(man.Encryption.Keys) {
+			return nil, fmt.Errorf("sse rewrap: partial cross-provider rewrap is not supported for version %s", entry.VersionID)
+		}
+		if changedWrapAlgorithm {
+			man.Encryption.WrapAlgorithm = ssecrypto.NormalizeWrapAlgorithm(newWrapAlgorithm)
 		}
 		newPath, err := writeRewrappedManifest(layout, codec, man)
 		if err != nil {

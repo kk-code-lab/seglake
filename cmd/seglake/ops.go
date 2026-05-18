@@ -101,10 +101,25 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 		report, err = ops.Fsck(layout, metaPath, !fsckAllManifests)
 	case "scrub":
 		if scrubDeepEncrypted {
-			var provider *ssecrypto.Provider
+			var provider ssecrypto.KeyProvider
 			if opts.hasSSEKeyConfig() {
 				var providerErr error
-				provider, providerErr = buildSSELookupProviderFrom(opts.sseS3ActiveKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+				if strings.TrimSpace(opts.sseS3Provider) == ssecrypto.ProviderVaultTransit {
+					provider, providerErr = buildSSEProviderFrom(sseProviderBuildOptions{
+						Provider:       opts.sseS3Provider,
+						ActiveKey:      opts.sseS3ActiveKey,
+						KEKSpecs:       opts.sseS3KEKs,
+						KEKEnv:         opts.sseS3KEKsEnv,
+						SingleKeyB64:   opts.sseS3SingleKeyB64,
+						VaultAddr:      opts.sseS3VaultAddr,
+						VaultMount:     opts.sseS3VaultMount,
+						VaultTokenFile: opts.sseS3VaultTokenFile,
+						VaultNamespace: opts.sseS3VaultNamespace,
+						VaultTimeout:   opts.sseS3VaultTimeout,
+					})
+				} else {
+					provider, providerErr = buildSSELookupProviderFrom(opts.sseS3ActiveKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+				}
 				if providerErr != nil {
 					return providerErr
 				}
@@ -230,7 +245,18 @@ func runSSERewrapMode(mode string, opts *opsOptions) error {
 	if targetKey == "" {
 		return fmt.Errorf("%s requires -sse-s3-rewrap-target-key", mode)
 	}
-	provider, err := buildSSEProviderFrom(targetKey, opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64)
+	provider, err := buildSSEProviderFrom(sseProviderBuildOptions{
+		Provider:       opts.sseS3Provider,
+		ActiveKey:      targetKey,
+		KEKSpecs:       opts.sseS3KEKs,
+		KEKEnv:         opts.sseS3KEKsEnv,
+		SingleKeyB64:   opts.sseS3SingleKeyB64,
+		VaultAddr:      opts.sseS3VaultAddr,
+		VaultMount:     opts.sseS3VaultMount,
+		VaultTokenFile: opts.sseS3VaultTokenFile,
+		VaultNamespace: opts.sseS3VaultNamespace,
+		VaultTimeout:   opts.sseS3VaultTimeout,
+	})
 	if err != nil {
 		return err
 	}
@@ -282,7 +308,12 @@ func (opts *opsOptions) hasSSEKeyConfig() bool {
 	if opts == nil {
 		return false
 	}
-	return len(opts.sseS3KEKs) > 0 || strings.TrimSpace(opts.sseS3KEKsEnv) != "" || strings.TrimSpace(opts.sseS3SingleKeyB64) != ""
+	return hasSSEKeyConfig(opts.sseS3KEKs, opts.sseS3KEKsEnv, opts.sseS3SingleKeyB64) ||
+		strings.TrimSpace(opts.sseS3Provider) == ssecrypto.ProviderVaultTransit
+}
+
+func hasSSEKeyConfig(kekSpecs []string, kekEnv, singleKeyB64 string) bool {
+	return len(kekSpecs) > 0 || strings.TrimSpace(kekEnv) != "" || strings.TrimSpace(singleKeyB64) != ""
 }
 
 func fmtTime() string {

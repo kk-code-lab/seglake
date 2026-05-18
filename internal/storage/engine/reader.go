@@ -201,7 +201,7 @@ func (s *encryptedState) decryptChunk(ref manifest.ChunkRef) ([]byte, error) {
 	}
 	dek, ok := s.keys[ref.KeyRef]
 	if !ok {
-		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifest(keyEntry)})
+		result, err := s.provider.DecryptDataKey(s.ctx, ssecrypto.DecryptDataKeyRequest{KeyEntry: sseKeyEntryFromManifestWithWrap(s.manifest.Encryption.WrapAlgorithm, keyEntry)})
 		if err != nil {
 			return nil, err
 		}

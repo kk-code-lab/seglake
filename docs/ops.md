@@ -29,7 +29,8 @@ Secrets handling (ops runbook expectations):
 - Store API keys and secrets in a dedicated secret manager (or encrypted env file on disk).
 - Rotate secrets on a fixed schedule (e.g., every 90 days) and on incident.
 - Audit access to secrets and remove unused keys.
-- For SSE-S3, back up KEKs separately from object data and metadata. Losing a KEK makes all object versions wrapped by that key unreadable; leaking a KEK compromises all DEKs wrapped by it.
+- For SSE-S3 with the local provider, back up KEKs separately from object data and metadata. Losing a KEK makes all object versions wrapped by that key unreadable; leaking a KEK compromises all DEKs wrapped by it.
+- For SSE-S3 with Vault Transit, back up and operate Vault independently. Seglake stores Vault ciphertext EDEKs in manifests, not Vault tokens or plaintext DEKs.
 
 ## Online backups (recommended flow)
 
@@ -158,9 +159,16 @@ Server flags:
 - `SEGLAKE_TLS_CERT` → `-tls-cert`
 - `SEGLAKE_TLS_KEY` → `-tls-key`
 - `SEGLAKE_SSE_S3_ENABLED` → `-sse-s3-enabled`
+- `SEGLAKE_SSE_S3_PROVIDER` → `-sse-s3-provider` (`local`, default, or `vault-transit`)
 - `SEGLAKE_SSE_S3_ACTIVE_KEY` → `-sse-s3-active-key`
 - `SEGLAKE_SSE_S3_KEKS` → comma-separated KEK specs: `key-id=env:ENV_NAME` or `key-id=file:/path/to/key`
 - `SEGLAKE_SSE_S3_KEK_B64` → single-key convenience secret for the active key
+- `SEGLAKE_SSE_S3_VAULT_ADDR` / `VAULT_ADDR` → `-sse-s3-vault-addr`
+- `SEGLAKE_SSE_S3_VAULT_MOUNT` → `-sse-s3-vault-mount` (default `transit`)
+- `SEGLAKE_SSE_S3_VAULT_TOKEN_FILE` → `-sse-s3-vault-token-file`
+- `SEGLAKE_SSE_S3_VAULT_TOKEN` / `VAULT_TOKEN` → Vault token source
+- `SEGLAKE_SSE_S3_VAULT_NAMESPACE` → `-sse-s3-vault-namespace`
+- `SEGLAKE_SSE_S3_VAULT_TIMEOUT` → `-sse-s3-vault-timeout` (default `5s`)
 
 SSE-S3 KEKs are base64-encoded 32-byte keys. CLI flags and env config support multiple KEKs so an old key can remain readable while a new active key handles writes:
 ```
@@ -171,7 +179,33 @@ SEGLAKE_SSE_S3_KEKS=local:v2=env:SEGLAKE_SSE_S3_KEK_V2_B64,local:v1=file:/etc/se
 
 Do not place raw KEK values in logs or command histories. Prefer `file:` sources with restrictive permissions or env vars loaded from a secret manager.
 
-The current supported key-provider backend is `local`, built from the KEK flags/env above. The internal provider interface is transparent to S3 clients: encrypted writes, bucket defaults, HEAD/GET response headers, rewrap, scrub, and replication still use the SSE-S3 `AES256` surface.
+The supported key-provider backends are `local` and `vault-transit`. The provider choice is transparent to S3 clients: encrypted writes, bucket defaults, HEAD/GET response headers, rewrap, scrub, and replication still use the SSE-S3 `AES256` surface. Vault-backed writes use Vault Transit data keys and store Vault ciphertext EDEKs in manifest v3; payload chunks are still encrypted locally with AES-256-GCM.
+
+Example Vault Transit-backed server:
+```
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=dev-root
+
+./build/seglake -data-dir ./data \
+  -sse-s3-enabled \
+  -sse-s3-provider vault-transit \
+  -sse-s3-active-key seglake-test \
+  -sse-s3-vault-mount transit
+```
+
+Do not pass Vault tokens as command-line values. Use `SEGLAKE_SSE_S3_VAULT_TOKEN`, `VAULT_TOKEN`, or `-sse-s3-vault-token-file`.
+
+Local Vault dev smoke setup:
+```
+vault server -dev -dev-root-token-id=dev-root
+
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=dev-root
+vault secrets enable transit
+vault write -f transit/keys/seglake-test
+```
+
+Use this only for local smoke tests. Dev mode is not a production Vault configuration.
 
 SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a redacted plan first, then run it with the target and selected source KEKs configured:
 ```
@@ -188,9 +222,9 @@ SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a re
   -sse-s3-rewrap-from-plan ./rewrap-v2.json
 ```
 
-The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so KEK material is not sent to the running server process. Peers must have the target KEK before they can read rewrapped encrypted objects after replication.
+The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, Vault tokens, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so provider credentials are not sent to the running server process. Peers must have the target local KEK or Vault provider access before they can read rewrapped encrypted objects after replication.
 
-Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs. Deep scrub is local-only when KEKs are supplied and uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
+Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs or Vault access. Deep scrub is local-only when key-provider config is supplied. With the local provider it uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
 ```
 ./build/seglake -mode scrub -data-dir ./data \
   -scrub-deep-encrypted \
@@ -198,7 +232,7 @@ Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap the
   -sse-s3-kek local:v1=file:/etc/seglake/sse/local-v1.key
 ```
 
-Missing KEKs, EDEK unwrap failures, malformed encryption metadata, short encrypted reads, and AEAD tag failures are reported as scrub errors. Affected encrypted versions are marked `DAMAGED`. The report includes only redacted diagnostics such as key IDs and counters; it never includes KEKs, DEKs, or raw EDEKs.
+For Vault-backed objects, pass `-sse-s3-provider vault-transit` plus the Vault address/token/mount flags or env vars. Missing KEKs, missing Vault provider access, EDEK unwrap failures, malformed encryption metadata, short encrypted reads, and AEAD tag failures are reported as scrub errors. Affected encrypted versions are marked `DAMAGED`. The report includes only redacted diagnostics such as key IDs and counters; it never includes KEKs, DEKs, Vault tokens, or raw EDEKs.
 
 Manifest GC removes orphan manifest files left by operations such as SSE-S3 KEK rewrap. It never removes segments, SQLite rows, object versions, or MPU metadata. Build a plan first, then run it explicitly:
 ```

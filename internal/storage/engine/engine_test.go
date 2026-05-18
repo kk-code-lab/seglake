@@ -3,7 +3,11 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,6 +207,69 @@ func TestEngineSSES3PutGetRangeAndTamper(t *testing.T) {
 		t.Fatalf("expected authentication failure")
 	}
 	_ = badReader.Close()
+}
+
+func TestEngineSSES3WithVaultTransitProvider(t *testing.T) {
+	var dek [32]byte
+	for i := range dek {
+		dek[i] = byte(i + 1)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/transit/datakey/plaintext/seglake-test"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{
+				"plaintext":  base64.StdEncoding.EncodeToString(dek[:]),
+				"ciphertext": "vault:v1:seglake-test:test",
+			}})
+		case strings.HasPrefix(r.URL.Path, "/v1/transit/decrypt/seglake-test"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{
+				"plaintext": base64.StdEncoding.EncodeToString(dek[:]),
+			}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	provider, err := ssecrypto.NewVaultTransitProvider(ssecrypto.VaultTransitConfig{
+		Address:   server.URL,
+		Mount:     "transit",
+		Token:     "test-token",
+		ActiveKey: "seglake-test",
+	})
+	if err != nil {
+		t.Fatalf("NewVaultTransitProvider: %v", err)
+	}
+	engine, err := New(Options{
+		Layout: fs.NewLayout(filepath.Join(t.TempDir(), "data")),
+		SSE:    provider,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := []byte("vault backed object")
+	man, result, err := engine.PutObjectSSES3(context.Background(), "bucket", "key", "", bytes.NewReader(input))
+	if err != nil {
+		t.Fatalf("PutObjectSSES3: %v", err)
+	}
+	if man.Encryption == nil || man.Encryption.WrapAlgorithm != ssecrypto.WrapVaultTransitV1 {
+		t.Fatalf("wrap algorithm = %+v", man.Encryption)
+	}
+	if len(man.Encryption.Keys) != 1 || len(man.Encryption.Keys[0].WrapNonce) != 0 {
+		t.Fatalf("unexpected vault key entry: %+v", man.Encryption.Keys)
+	}
+	reader, _, err := engine.Get(context.Background(), result.VersionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("plaintext mismatch")
+	}
 }
 
 func TestEngineGetManifestFallbackToWalk(t *testing.T) {

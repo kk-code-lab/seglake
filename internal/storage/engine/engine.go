@@ -253,6 +253,7 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 		return nil, nil, err
 	}
 	keyEntry := manifestKeyEntryFromSSE(dataKey.KeyEntry)
+	wrapAlgorithm := ssecrypto.NormalizeWrapAlgorithm(dataKey.KeyEntry.WrapAlgorithm)
 	man := &manifest.Manifest{
 		Bucket:    bucket,
 		Key:       key,
@@ -260,7 +261,7 @@ func (e *Engine) PutObjectSSES3WithCommit(ctx context.Context, bucket, key, cont
 		Encryption: &manifest.Encryption{
 			Mode:          ssecrypto.ModeSSES3,
 			Algorithm:     ssecrypto.AlgorithmAES256GCM,
-			WrapAlgorithm: ssecrypto.WrapAES256GCM,
+			WrapAlgorithm: wrapAlgorithm,
 			AADScheme:     ssecrypto.AADSchemeV1,
 			Keys:          []manifest.KeyEntry{keyEntry},
 		},

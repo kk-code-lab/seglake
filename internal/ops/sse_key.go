@@ -17,8 +17,9 @@ func manifestKeyEntryFromSSE(entry ssecrypto.KeyEntry) manifest.KeyEntry {
 	}
 }
 
-func sseKeyEntryFromManifest(entry manifest.KeyEntry) ssecrypto.KeyEntry {
+func sseKeyEntryFromManifestWithWrap(wrapAlgorithm string, entry manifest.KeyEntry) ssecrypto.KeyEntry {
 	return ssecrypto.KeyEntry{
+		WrapAlgorithm:   ssecrypto.NormalizeWrapAlgorithm(wrapAlgorithm),
 		KeyRef:          entry.KeyRef,
 		KeyID:           entry.KeyID,
 		EncryptedDEK:    entry.EncryptedDEK,

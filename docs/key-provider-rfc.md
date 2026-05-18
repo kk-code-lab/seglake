@@ -1,18 +1,18 @@
 # RFC: SSE-S3 key provider interface
 
-Status: Accepted / Phase 1 implemented  
+Status: Accepted / Phase 1 and Vault Transit phase 2 implemented
 Scope: SSE-S3 crypto/key abstraction, local KEK provider compatibility, future external key-provider backends.  
-Target: Phase 1 provider-interface refactor before implementing Vault Transit or any SSE-KMS-compatible API.
+Target: Provider-interface refactor plus Vault Transit backend before any SSE-KMS-compatible API.
 
 ---
 
 ## 1) Summary
 
-Seglake already supports SSE-S3 with local KEKs, envelope encryption, KEK rewrap, bucket defaults, require-encryption policy controls, deep encrypted scrub, and replication-aware manifest rewrap. The next step is to introduce a stable internal key-provider interface so the current local KEK implementation becomes one backend rather than the only crypto integration point.
+Seglake already supports SSE-S3 with local KEKs, envelope encryption, KEK rewrap, bucket defaults, require-encryption policy controls, deep encrypted scrub, and replication-aware manifest rewrap. The provider interface makes the local KEK implementation one backend rather than the only crypto integration point.
 
 Phase 1 should not add Vault, AWS KMS, SSE-KMS request headers, or any new externally visible S3 API. Existing `x-amz-server-side-encryption: AES256`, bucket default encryption, rewrap, scrub, replication, and manifest v3 behavior should remain compatible. The implementation goal is to move local KEK wrapping/unwrapping behind a provider interface that can later support external backends.
 
-Phase 2 can add a Vault Transit backend using the same provider interface. Vault Transit is a good fit because it supports encryption-as-a-service, data-key generation for envelope encryption, decrypt, rewrap, key rotation, and ACLs that can separate key administration from application encrypt/decrypt access.
+Phase 2 adds a Vault Transit backend using the same provider interface. Vault Transit is a good fit because it supports encryption-as-a-service, data-key generation for envelope encryption, decrypt, rewrap, key rotation, and ACLs that can separate key administration from application encrypt/decrypt access.
 
 Sources:
 - [Vault Transit secrets engine](https://developer.hashicorp.com/vault/docs/secrets/transit)
@@ -129,24 +129,26 @@ No public API change in phase 1. SSE-S3 remains exposed as `AES256`. SSE-KMS hea
 
 ---
 
-## 8) Phase 2: Vault Transit Direction
+## 8) Phase 2: Vault Transit Backend
 
-Vault Transit should be added as a backend after the provider interface lands. The preferred initial design is still SSE-S3-compatible from the S3 client perspective: clients request `AES256`, while Seglake uses Vault as the key-provider backend. SSE-KMS-compatible API can be considered later as a separate feature.
+Vault Transit is available as a backend after the provider interface. The design is still SSE-S3-compatible from the S3 client perspective: clients request `AES256`, while Seglake uses Vault as the key-provider backend. SSE-KMS-compatible API can be considered later as a separate feature.
 
-Expected Vault config surface:
-- Vault address;
-- mount path, default `transit`;
-- key name or key ID mapping;
-- token source from env/file;
-- timeout and retry settings;
-- optional namespace for Vault Enterprise-compatible deployments.
+Vault config surface:
+- `-sse-s3-provider vault-transit` / `SEGLAKE_SSE_S3_PROVIDER=vault-transit`;
+- Vault address from `-sse-s3-vault-addr`, `SEGLAKE_SSE_S3_VAULT_ADDR`, or `VAULT_ADDR`;
+- mount path from `-sse-s3-vault-mount`, default `transit`;
+- active Transit key name from `-sse-s3-active-key`;
+- token source from `-sse-s3-vault-token-file`, `SEGLAKE_SSE_S3_VAULT_TOKEN`, or `VAULT_TOKEN`;
+- timeout from `-sse-s3-vault-timeout`, default `5s`;
+- optional namespace from `-sse-s3-vault-namespace`.
 
-Important design points for the future Vault RFC/update:
-- choose whether to use Vault data-key endpoints or Vault encrypt/decrypt of locally generated DEKs;
-- define exact manifest provider metadata for Vault ciphertext and key versions;
-- define startup validation and runtime behavior when Vault is unavailable;
-- decide whether rewrap should use Vault native rewrap to avoid exposing plaintext DEKs during rotation;
-- document ACL requirements for write, read, rewrap, and key management separately.
+Implemented design points:
+- encrypted writes use Vault Transit `datakey/plaintext` with 256-bit DEKs;
+- Vault ciphertext EDEKs are stored in manifest v3 `EncryptedDEK`, with `WrapAlgorithm=vault-transit-v1` and no local wrap nonce;
+- encrypted reads use Vault Transit `decrypt`;
+- same-key Vault rewrap uses Transit `rewrap`; cross-key Vault rewrap decrypts and encrypts the same DEK under the target key;
+- provider routing can keep legacy local objects readable when local KEKs are configured alongside an active Vault provider;
+- startup validates configuration shape but does not require Vault key metadata read permissions; runtime Vault failures fail reads/writes closed.
 
 ---
 

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 )
 
 func TestBuildSSEProviderFromSingleEnv(t *testing.T) {
@@ -17,8 +19,8 @@ func TestBuildSSEProviderFromSingleEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSSEProvider: %v", err)
 	}
-	if _, err := provider.ActiveKey(); err != nil {
-		t.Fatalf("ActiveKey: %v", err)
+	if _, err := provider.GenerateDataKey(t.Context(), ssecrypto.GenerateDataKeyRequest{}); err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
 	}
 }
 
@@ -31,6 +33,44 @@ func TestBuildSSEProviderRejectsDuplicateKeys(t *testing.T) {
 	}
 	if _, err := buildSSEProvider(opts); err == nil {
 		t.Fatalf("expected duplicate key error")
+	}
+}
+
+func TestBuildSSEProviderVaultTransitFromEnv(t *testing.T) {
+	t.Setenv("SEGLAKE_SSE_S3_VAULT_TOKEN", "test-token")
+	opts := &serverOptions{
+		sseS3Enabled:      true,
+		sseS3Provider:     ssecrypto.ProviderVaultTransit,
+		sseS3ActiveKey:    "vault-test",
+		sseS3VaultAddr:    "http://127.0.0.1:8200",
+		sseS3VaultMount:   "transit",
+		sseS3VaultTimeout: 5,
+	}
+	provider, err := buildSSEProvider(opts)
+	if err != nil {
+		t.Fatalf("buildSSEProvider vault: %v", err)
+	}
+	desc, err := provider.DescribeKey(t.Context(), "vault-test")
+	if err != nil {
+		t.Fatalf("DescribeKey: %v", err)
+	}
+	if desc.ProviderType != ssecrypto.ProviderVaultTransit {
+		t.Fatalf("provider type = %q", desc.ProviderType)
+	}
+}
+
+func TestBuildSSEProviderVaultTransitRequiresToken(t *testing.T) {
+	t.Setenv("SEGLAKE_SSE_S3_VAULT_TOKEN", "")
+	t.Setenv("VAULT_TOKEN", "")
+	opts := &serverOptions{
+		sseS3Enabled:    true,
+		sseS3Provider:   ssecrypto.ProviderVaultTransit,
+		sseS3ActiveKey:  "vault-test",
+		sseS3VaultAddr:  "http://127.0.0.1:8200",
+		sseS3VaultMount: "transit",
+	}
+	if _, err := buildSSEProvider(opts); err == nil {
+		t.Fatalf("expected missing token error")
 	}
 }
 
