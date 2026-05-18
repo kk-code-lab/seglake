@@ -1,8 +1,10 @@
 # RFC: SSE-S3 support
 
-Status: Accepted / MVP implemented
+Status: Accepted / MVP implemented / historical RFC
 Scope: Seglake S3 API, storage format, metadata, ops, and security model.  
 Target: SSE-S3 MVP before considering SSE-C or external KMS integrations.
+
+Current status: this document records the original SSE-S3 MVP design. Seglake now also supports Vault Transit providers, an SSE-KMS-compatible `aws:kms` API surface over configured provider key IDs, bucket defaults for `AES256` and `aws:kms`, require-encryption policy controls, deep encrypted scrub, manifest GC, replication hardening, and redacted SSE diagnostics. Use `docs/spec.md` and `docs/ops.md` for current behavior; keep this RFC as historical design context.
 
 ---
 
@@ -10,7 +12,7 @@ Target: SSE-S3 MVP before considering SSE-C or external KMS integrations.
 
 This RFC describes server-side encryption with Seglake-managed keys, exposed through the S3-compatible `x-amz-server-side-encryption: AES256` API surface. The implementation uses envelope encryption: each single PUT or CopyObject write gets a fresh data encryption key (DEK), object bytes are encrypted with that DEK, and the DEK is stored only as an encrypted data encryption key (EDEK) wrapped by a configured key encryption key (KEK). Multipart-created objects may contain one DEK per uploaded part in the MVP because CompleteMultipartUpload preserves encrypted part chunks without decrypting and rewriting them.
 
-The MVP should preserve Seglake's current durability model, range GET support, manifests, append-only segments, versioning, crash recovery, and ops workflows. It should not implement SSE-C or SSE-KMS yet.
+The MVP preserved Seglake's durability model, range GET support, manifests, append-only segments, versioning, crash recovery, and ops workflows. SSE-C remains unsupported. SSE-KMS-compatible `aws:kms` support was implemented later as a provider-key-ID compatibility surface, not as AWS KMS network integration.
 
 ---
 
@@ -22,7 +24,7 @@ For API compatibility, S3 accepts `x-amz-server-side-encryption: AES256` when cr
 
 AWS KMS documentation describes the general envelope encryption pattern: data is encrypted with a data key, then the data key is encrypted under another key. KMS returns plaintext data keys for immediate use and encrypted copies that callers can store with encrypted data; KMS does not store or track those data keys for the caller.
 
-Seglake should borrow the envelope encryption model, but start with a local KEK provider rather than an external KMS dependency.
+Seglake borrowed the envelope encryption model and started with a local KEK provider. The current implementation also supports Vault Transit through the same internal provider model.
 
 Sources:
 - [AWS S3: Using server-side encryption with Amazon S3 managed keys](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingServerSideEncryption.html)
@@ -576,5 +578,5 @@ Ops tests:
 ## 16) Open questions
 
 - No open MVP-blocking questions remain.
-- Post-MVP scope is tracked in `docs/roadmap.md`.
+- Current post-MVP scope is tracked in `docs/roadmap.md`; current implemented behavior is summarized in `docs/spec.md` and `docs/ops.md`.
 - Future optimization: add contiguous key runs if per-chunk `key_ref` makes MPU manifests too large in practice.

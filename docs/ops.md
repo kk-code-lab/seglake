@@ -259,7 +259,7 @@ The plan contains version IDs, bucket/key names, manifest paths, key refs, key I
 
 Support bundles include `sse-diagnostics.json`, a shallow metadata-only SSE summary with plaintext/encrypted active version counts, damaged encrypted version counts, mode and algorithm counts, key ID counts, and short EDEK fingerprint prefix counts. This file is safe to generate without local KEKs or Vault access: it does not decrypt manifests and does not include KEKs, DEKs, raw EDEKs, Vault tokens, wrap nonces, nonce prefixes, or provider secret material.
 
-Deep encrypted scrub verifies that SSE-S3 encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs or Vault access. Deep scrub is local-only when key-provider config is supplied. With the local provider it uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
+Deep encrypted scrub verifies that SSE encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs or Vault access. Deep scrub is local-only when key-provider config is supplied. With the local provider it uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
 ```
 ./build/seglake -mode scrub -data-dir ./data \
   -scrub-deep-encrypted \
@@ -469,7 +469,7 @@ Unsafe (prompt required, maintenance quiesced):
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
 - Use `-fsck-all-manifests` / `-scrub-all-manifests` to scan every manifest file on disk (including orphans).
-- Use `-scrub-deep-encrypted` to verify SSE-S3 DEK unwrap and AEAD tags for encrypted manifests selected by the same scrub scope.
+- Use `-scrub-deep-encrypted` to verify SSE encrypted DEK unwrap and AEAD tags for encrypted manifests selected by the same scrub scope.
 
 Status:
 - `status` reports `live_manifests` (from `meta.db` + MPU parts) when available; falls back to disk-only counts if meta can't be opened.

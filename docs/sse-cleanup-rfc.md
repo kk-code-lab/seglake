@@ -135,23 +135,18 @@ This audit was performed against the current SSE-S3, Vault Transit, and SSE-KMS-
 - `internal/storage/engine/sse_key.go` and `internal/ops/sse_key.go` duplicate the same manifest-to-SSE and SSE-to-manifest key-entry adapters. This should be centralized in one internal helper package or moved closer to `manifest`/`sse` to avoid drift.
 - Low-level local wrapping helpers `GenerateDEK`, `WrapDEK`, and `UnwrapDEK` are exported from `internal/sse`. Production callers mostly use `KeyProvider`; remaining non-provider uses appear to be tests or test helpers. These helpers can likely become unexported or be isolated as explicit test utilities after external test helpers stop depending on them.
 - Server and ops CLI flag registration duplicate the SSE provider/local/Vault flag set. This is not behaviorally wrong, but it is easy for help text, env defaults, or future flags to diverge. A shared registration/build option helper would reduce maintenance risk.
-- Handler response header setting for SSE modes is partly centralized through `setEncryptionResponseHeaders`, but MPU initiation/upload/complete and a KMS fallback in PUT/COPY still set headers manually. This can be narrowed with a single helper that accepts mode and key ID.
-- Several tests cover near-identical S3 SSE write combinations at handler level. Keep behavior coverage, but consider table-driven consolidation for bucket default + explicit SSE-S3/SSE-KMS PUT/COPY/MPU cases.
 
 ##### Needs Decision Before Change
 
-- `effectiveEncryptionForWrite` is the right central helper shape, but authorization computes it before request body consumption and handlers compute it again before writing. This duplicates metadata lookups and allows a narrow bucket-default race between authz and write if the bucket encryption config changes concurrently. Decide whether to attach the computed effective encryption result to request context during authorization and reuse it in PUT, CopyObject, and CreateMultipartUpload.
-- `Engine.SSES3Enabled()` is used as the generic “encrypted writes are enabled” check for both SSE-S3 and SSE-KMS-compatible writes. The behavior is fine, but the name is now misleading. Rename to `EncryptionEnabled`/`SSEEnabled` only if the churn is acceptable.
 - Deep scrub reports still use `SSE-S3` wording even for Vault-backed and SSE-KMS-labeled objects because the payload/envelope mechanism is shared. Decide whether to rename operational messages to “SSE encrypted” without changing JSON field names.
-- Historical RFC `docs/sse-s3-rfc.md` still describes earlier MVP non-goals such as SSE-KMS being out of scope. Decide whether to keep it as a historical RFC or add a short status note pointing readers to current `docs/spec.md` / `docs/ops.md`.
 
 ##### First Recommended Cleanup Commits
 
-1. Centralize the duplicated manifest/SSE key-entry adapter helpers used by `internal/storage/engine` and `internal/ops`.
-2. Reuse the effective encryption result computed for policy evaluation in object write handlers, or explicitly document why recomputation is acceptable.
-3. Rename misleading internal helpers such as `SSES3Enabled` if the change remains small and test-only churn is low.
-4. Consolidate SSE response header setting across PUT, COPY, MPU initiation, UploadPart, and CompleteMultipartUpload.
-5. Audit exported low-level local crypto helpers and either make them unexported or move remaining external test usage to provider-based helpers.
+1. Centralize the duplicated manifest/SSE key-entry adapter helpers used by `internal/storage/engine` and `internal/ops`. Done.
+2. Reuse the effective encryption result computed for policy evaluation in object write handlers, or explicitly document why recomputation is acceptable. Done.
+3. Rename misleading internal helpers such as `SSES3Enabled` if the change remains small and test-only churn is low. Done.
+4. Consolidate SSE response header setting across PUT, COPY, MPU initiation, UploadPart, and CompleteMultipartUpload. Done.
+5. Audit exported low-level local crypto helpers and either make them unexported or move remaining external test usage to provider-based helpers. Partially done: production boundary is narrowed; low-level payload crypto helpers remain intentionally available to storage/ops.
 
 ### Pass 2: Remove Dead Helpers And Transitional Paths
 
@@ -177,6 +172,12 @@ Keep tests that protect public behavior, persisted format compatibility, and ops
 ### Pass 6: Documentation Alignment
 
 Update wording so docs describe the current model: S3-facing SSE-S3/SSE-KMS-compatible modes over internal key providers, with local and Vault Transit backends.
+
+#### Pass 6 Notes
+
+- Marked the SSE-S3 RFC as historical and pointed readers to current spec/ops docs for SSE-KMS-compatible, Vault Transit, policy, scrub, GC, replication, and diagnostics behavior.
+- Updated the key-provider RFC status to reflect implemented Vault Transit and SSE-KMS-compatible phases.
+- Normalized current docs to use “SSE encrypted” where the operation covers SSE-S3, SSE-KMS-compatible, local-provider, and Vault-backed objects.
 
 ## Verification
 

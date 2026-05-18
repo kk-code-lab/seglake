@@ -1,14 +1,16 @@
 # RFC: SSE-S3 key provider interface
 
-Status: Accepted / Phase 1, Vault Transit phase 2, and later SSE-KMS-compatible API implemented
-Scope: SSE-S3 crypto/key abstraction, local KEK provider compatibility, future external key-provider backends.  
+Status: Accepted / provider interface, Vault Transit, and SSE-KMS-compatible API implemented
+Scope: SSE crypto/key abstraction, local KEK compatibility, Vault Transit backend, and provider-backed SSE-KMS-compatible API behavior.
 Target: Provider-interface refactor plus Vault Transit backend before the SSE-KMS-compatible API phase.
+
+Current status: this RFC is a phase document. The provider interface, Vault Transit backend, provider routing, and SSE-KMS-compatible `aws:kms` API surface are now implemented. It remains useful for rationale and compatibility constraints; use `docs/spec.md` and `docs/ops.md` for current operator-facing behavior.
 
 ---
 
 ## 1) Summary
 
-Seglake already supports SSE-S3 with local KEKs, envelope encryption, KEK rewrap, bucket defaults, require-encryption policy controls, deep encrypted scrub, and replication-aware manifest rewrap. The provider interface makes the local KEK implementation one backend rather than the only crypto integration point.
+Seglake supports SSE-S3 and SSE-KMS-compatible object encryption with local KEKs or Vault Transit behind the same provider interface. It also supports KEK rewrap, bucket defaults, require-encryption policy controls, deep encrypted scrub, replication-aware manifest rewrap, and redacted SSE diagnostics. The provider interface makes the local KEK implementation one backend rather than the only crypto integration point.
 
 Phase 1 should not add Vault, AWS KMS, SSE-KMS request headers, or any new externally visible S3 API. Existing `x-amz-server-side-encryption: AES256`, bucket default encryption, rewrap, scrub, replication, and manifest v3 behavior should remain compatible. The implementation goal is to move local KEK wrapping/unwrapping behind a provider interface that can later support external backends.
 
@@ -57,7 +59,7 @@ type KeyProvider interface {
 }
 ```
 
-`GenerateDataKey` returns a plaintext DEK for immediate AES-GCM payload encryption plus an encrypted DEK blob for manifest storage. The local provider should generate the DEK locally, wrap it with the active local KEK, and return the existing local wrap metadata. A future Vault provider may call Vault data-key APIs or use Vault encrypt/decrypt primitives depending on the final backend design.
+`GenerateDataKey` returns a plaintext DEK for immediate AES-GCM payload encryption plus an encrypted DEK blob for manifest storage. The local provider generates the DEK locally, wraps it with the active local KEK, and returns the existing local wrap metadata. The Vault Transit provider calls Vault data-key APIs and stores Vault ciphertext EDEKs in manifest v3.
 
 `DecryptDataKey` returns a plaintext DEK from manifest EDEK metadata. It is used by GET, range GET, deep scrub, and any read path that needs AES-GCM authentication. If the referenced key is missing, disabled, denied, or unreachable, reads fail closed.
 
@@ -125,13 +127,13 @@ Replication remains provider-agnostic. Peers replicate manifest bytes and cipher
 
 ### S3 API
 
-No public API change in phase 1. SSE-S3 remains exposed as `AES256`. SSE-KMS headers and bucket KMS configs remain `501 NotImplemented`.
+Phase 1 made no public API change: SSE-S3 remained exposed as `AES256` and SSE-KMS headers/bucket KMS configs remained `501 NotImplemented`. The later SSE-KMS-compatible phase now accepts `aws:kms` as an S3 compatibility surface over configured provider key IDs, without AWS KMS network integration.
 
 ---
 
 ## 8) Phase 2: Vault Transit Backend
 
-Vault Transit is available as a backend after the provider interface. The design is still SSE-S3-compatible from the S3 client perspective: clients request `AES256`, while Seglake uses Vault as the key-provider backend. SSE-KMS-compatible API can be considered later as a separate feature.
+Vault Transit is available as a backend after the provider interface. Clients can use either the SSE-S3 `AES256` surface or the SSE-KMS-compatible `aws:kms` surface; both use the same provider-backed envelope encryption path.
 
 Vault config surface:
 - `-sse-s3-provider vault-transit` / `SEGLAKE_SSE_S3_PROVIDER=vault-transit`;
@@ -208,5 +210,5 @@ Implemented design points:
 - Do not add an explicit provider identifier to new manifests in phase 1. Existing and new local-provider key entries continue to imply the local provider. Add explicit provider metadata only when an external backend needs it.
 - Add a small normalized provider error taxonomy for internal handling and redacted diagnostics: missing key, provider unavailable, decrypt failed, invalid envelope, and permission denied.
 - Add fake providers for tests where they materially improve boundary coverage. Keep them local to package tests initially; move them to a shared test helper only if repetition becomes noisy.
-- Design the provider interface so a future Vault backend can use native rewrap without exposing plaintext DEKs during rotation, but do not require or implement Vault behavior in phase 1.
-- Keep Vault-backed encryption under the existing SSE-S3 `AES256` API at first. Treat SSE-KMS-compatible client API as a separate future compatibility feature, useful only if clients need to select KMS key IDs per request or reuse AWS KMS-oriented tooling.
+- Design the provider interface so Vault can use native rewrap where available without exposing plaintext DEKs during same-key rotation.
+- Keep Vault-backed encryption available through the existing SSE-S3 `AES256` API and through the later SSE-KMS-compatible `aws:kms` API when clients need to select provider key IDs per request or reuse AWS KMS-oriented tooling.
