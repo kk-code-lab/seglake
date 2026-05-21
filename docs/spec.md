@@ -248,6 +248,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 4.8 Conflict visibility (MVP)
 - If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.
 - ListObjects V1/V2 and ListObjectVersions include `x-seglake-conflicts: true` when the requested bucket/prefix has at least one conflicting version. The XML response remains S3-compatible; clients should use `/v1/meta/conflicts` or `-mode conflicts` to inspect details.
+- Replication applies last-write-wins across put and delete operations using HLC and site ID. A losing put or delete marker is retained as `CONFLICT`. A losing non-marker delete whose target version is not present locally is retained as a conflict tombstone so delete-vs-put races remain visible. A winning non-marker delete suppresses older current object state without creating an S3 delete marker.
 
 ### 4.9 Errors
 - AWS-compatible XML (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).

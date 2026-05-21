@@ -617,6 +617,13 @@ XML is not extended; use the conflict listing surfaces above for details.
 Both surfaces are read-only. They list conflict metadata only; resolving or
 changing conflict semantics is a separate replication workflow.
 
+Put-vs-delete replication races use the same HLC/site-ID last-write-wins rule
+as put-vs-put. Losing puts and delete markers remain visible as `CONFLICT`.
+When a non-marker delete loses and the deleted version is not present locally,
+Seglake retains a conflict tombstone so the race appears in `/v1/meta/conflicts`
+and `-mode conflicts`. A winning non-marker delete suppresses older current
+object state without creating an S3 delete marker.
+
 ## API keys / policies
 
 Manage keys with `-mode keys`:

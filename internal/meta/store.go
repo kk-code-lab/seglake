@@ -2639,6 +2639,35 @@ WHERE o.bucket=? AND o.key=?`, entry.Bucket, entry.Key).Scan(&currentVersion, &c
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return err
 				}
+				if errors.Is(err, sql.ErrNoRows) {
+					latestHLC, latestSite, ok, err := latestVersionHLC(tx, entry.Bucket, entry.Key)
+					if err != nil {
+						return err
+					}
+					if ok && compareHLC(entry.HLCTS, entry.SiteID, latestHLC, latestSite) < 0 {
+						conflicts++
+						if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+							return err
+						}
+					}
+					break
+				}
+				if currentVersion != entry.VersionID {
+					if affected == 0 {
+						switch compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) {
+						case 1:
+							if _, err := tx.Exec("DELETE FROM objects_current WHERE bucket=? AND key=?", entry.Bucket, entry.Key); err != nil {
+								return err
+							}
+						default:
+							conflicts++
+							if err := markVersionConflictTx(tx, entry.VersionID); err != nil {
+								return err
+							}
+						}
+					}
+					break
+				}
 				if !errors.Is(err, sql.ErrNoRows) && currentVersion == entry.VersionID && compareHLC(entry.HLCTS, entry.SiteID, currentHLC, currentSite) >= 0 {
 					var nextVersion string
 					err = tx.QueryRow(`

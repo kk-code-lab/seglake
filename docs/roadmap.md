@@ -12,10 +12,9 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Now
-- [repl] Decide conflict handling for delete vs put (mark delete conflicts explicitly).
+- [observability][repl] Add conflict metrics per bucket/key to highlight hotspots.
 
 ## Next
-- [observability][repl] Add conflict metrics per bucket/key to highlight hotspots.
 - [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
 - [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).

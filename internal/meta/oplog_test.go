@@ -977,6 +977,93 @@ func TestApplyOplogDeleteVsDelete(t *testing.T) {
 	}
 }
 
+func TestApplyOplogDeleteVsPutConflictVisibility(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		entries       []OplogEntry
+		current       string
+		loser         string
+		conflictCount int64
+	}{
+		{
+			name:          "older delete marker arrives after newer put",
+			entries:       []OplogEntry{makePutEntry("site-b", "0000000000000000110-0000000001", "bucket", "key", "put-new"), makeDeleteMarkerEntry("site-a", "0000000000000000100-0000000001", "bucket", "key", "del-old")},
+			current:       "put-new",
+			loser:         "del-old",
+			conflictCount: 1,
+		},
+		{
+			name:          "older put arrives after newer delete marker",
+			entries:       []OplogEntry{makeDeleteMarkerEntry("site-b", "0000000000000000110-0000000001", "bucket", "key", "del-new"), makePutEntry("site-a", "0000000000000000100-0000000001", "bucket", "key", "put-old")},
+			current:       "del-new",
+			loser:         "put-old",
+			conflictCount: 1,
+		},
+		{
+			name:          "newer delete marker arrives after older put",
+			entries:       []OplogEntry{makePutEntry("site-a", "0000000000000000100-0000000001", "bucket", "key", "put-old"), makeDeleteMarkerEntry("site-b", "0000000000000000110-0000000001", "bucket", "key", "del-new")},
+			current:       "del-new",
+			loser:         "",
+			conflictCount: 0,
+		},
+		{
+			name:          "newer put arrives after older delete marker",
+			entries:       []OplogEntry{makeDeleteMarkerEntry("site-a", "0000000000000000100-0000000001", "bucket", "key", "del-old"), makePutEntry("site-b", "0000000000000000110-0000000001", "bucket", "key", "put-new")},
+			current:       "put-new",
+			loser:         "",
+			conflictCount: 0,
+		},
+		{
+			name:          "older non-marker delete arrives after newer put",
+			entries:       []OplogEntry{makePutEntry("site-b", "0000000000000000210-0000000001", "bucket", "key", "put-new"), makeNonMarkerDeleteEntry("site-a", "0000000000000000200-0000000001", "bucket", "key", "del-old")},
+			current:       "put-new",
+			loser:         "del-old",
+			conflictCount: 1,
+		},
+		{
+			name:          "older put arrives after newer non-marker delete",
+			entries:       []OplogEntry{makeNonMarkerDeleteEntry("site-b", "0000000000000000210-0000000001", "bucket", "key", "del-new"), makePutEntry("site-a", "0000000000000000200-0000000001", "bucket", "key", "put-old")},
+			current:       "",
+			loser:         "put-old",
+			conflictCount: 1,
+		},
+		{
+			name:          "newer non-marker delete arrives after older put",
+			entries:       []OplogEntry{makePutEntry("site-a", "0000000000000000200-0000000001", "bucket", "key", "put-old"), makeNonMarkerDeleteEntry("site-b", "0000000000000000210-0000000001", "bucket", "key", "del-new")},
+			current:       "",
+			loser:         "",
+			conflictCount: 0,
+		},
+		{
+			name:          "newer put arrives after older non-marker delete",
+			entries:       []OplogEntry{makeNonMarkerDeleteEntry("site-a", "0000000000000000200-0000000001", "bucket", "key", "del-old"), makePutEntry("site-b", "0000000000000000210-0000000001", "bucket", "key", "put-new")},
+			current:       "put-new",
+			loser:         "",
+			conflictCount: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := newOplogTestStore(t)
+			if _, err := store.ApplyOplogEntries(context.Background(), tc.entries); err != nil {
+				t.Fatalf("ApplyOplogEntries: %v", err)
+			}
+			assertCurrentVersion(t, store, "bucket", "key", tc.current)
+			stats, err := store.GetStats(context.Background())
+			if err != nil {
+				t.Fatalf("GetStats: %v", err)
+			}
+			if stats.ReplConflicts != tc.conflictCount {
+				t.Fatalf("expected repl conflicts=%d got %d", tc.conflictCount, stats.ReplConflicts)
+			}
+			if tc.loser != "" {
+				assertVersionState(t, store, "bucket", "key", tc.loser, VersionStateConflict)
+			}
+		})
+	}
+}
+
 func TestApplyOplogDeleteThenPutOutOfOrder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1061,6 +1148,10 @@ func makePutEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
 }
 
 func makeDeleteEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
+	return makeDeleteMarkerEntry(siteID, hlc, bucket, key, versionID)
+}
+
+func makeDeleteMarkerEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
 	payload, _ := json.Marshal(oplogDeletePayload{
 		LastModified: "2025-12-22T12:01:00Z",
 		DeleteMarker: true,
@@ -1073,5 +1164,59 @@ func makeDeleteEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
 		Key:       key,
 		VersionID: versionID,
 		Payload:   string(payload),
+	}
+}
+
+func makeNonMarkerDeleteEntry(siteID, hlc, bucket, key, versionID string) OplogEntry {
+	payload, _ := json.Marshal(oplogDeletePayload{
+		LastModified: "2025-12-22T12:01:00Z",
+		DeleteMarker: false,
+	})
+	return OplogEntry{
+		SiteID:    siteID,
+		HLCTS:     hlc,
+		OpType:    "delete",
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Payload:   string(payload),
+	}
+}
+
+func newOplogTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := Open(filepath.Join(t.TempDir(), "meta.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func assertCurrentVersion(t *testing.T, store *Store, bucket, key, wantVersion string) {
+	t.Helper()
+	metaObj, err := store.GetObjectMeta(context.Background(), bucket, key)
+	if wantVersion == "" {
+		if err == nil {
+			t.Fatalf("expected no current object, got version=%s state=%s", metaObj.VersionID, metaObj.State)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if metaObj.VersionID != wantVersion {
+		t.Fatalf("expected current version %s, got %s state=%s", wantVersion, metaObj.VersionID, metaObj.State)
+	}
+}
+
+func assertVersionState(t *testing.T, store *Store, bucket, key, versionID, wantState string) {
+	t.Helper()
+	metaObj, err := store.GetObjectVersion(context.Background(), bucket, key, versionID)
+	if err != nil {
+		t.Fatalf("GetObjectVersion %s: %v", versionID, err)
+	}
+	if metaObj.State != wantState {
+		t.Fatalf("expected version %s state %s, got %s", versionID, wantState, metaObj.State)
 	}
 }
