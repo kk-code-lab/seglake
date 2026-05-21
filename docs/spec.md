@@ -247,6 +247,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 4.8 Conflict visibility (MVP)
 - If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.
+- ListObjects V1/V2 and ListObjectVersions include `x-seglake-conflicts: true` when the requested bucket/prefix has at least one conflicting version. The XML response remains S3-compatible; clients should use `/v1/meta/conflicts` or `-mode conflicts` to inspect details.
 
 ### 4.9 Errors
 - AWS-compatible XML (`Code`, `Message`, `RequestId`, `HostId`, `Resource`).

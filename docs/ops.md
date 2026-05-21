@@ -609,6 +609,11 @@ GET /v1/meta/conflicts?bucket=demo&prefix=photos/&limit=100
 GET /v1/meta/conflicts?limit=100&after_bucket=...&after_key=...&after_version=...
 ```
 
+S3 GET/HEAD on a current conflicting object includes `x-seglake-conflict: true`.
+ListObjects V1/V2 and ListObjectVersions include `x-seglake-conflicts: true`
+when the requested bucket/prefix has at least one conflicting version. The list
+XML is not extended; use the conflict listing surfaces above for details.
+
 Both surfaces are read-only. They list conflict metadata only; resolving or
 changing conflict semantics is a separate replication workflow.
 

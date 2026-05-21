@@ -80,6 +80,9 @@ func (h *Handler) handleListVersions(ctx context.Context, w http.ResponseWriter,
 			MaxKeys:     maxKeys,
 			IsTruncated: false,
 		}
+		if !h.applyConflictListingHeader(ctx, w, bucket, prefix, requestID, r.URL.Path) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
 		_ = xml.NewEncoder(w).Encode(resp)
@@ -146,6 +149,9 @@ func (h *Handler) handleListVersions(ctx context.Context, w http.ResponseWriter,
 				resp.NextVersionIDMarker = encode(lastVersion)
 			}
 		}
+	}
+	if !h.applyConflictListingHeader(ctx, w, bucket, prefix, requestID, r.URL.Path) {
+		return
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)

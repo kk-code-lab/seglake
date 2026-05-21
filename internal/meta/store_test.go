@@ -324,6 +324,21 @@ func TestListConflicts(t *testing.T) {
 	if len(page2) != 1 || page2[0].Bucket != "b2" || page2[0].Key != "a/3" {
 		t.Fatalf("unexpected page2: %+v", page2)
 	}
+
+	has, err := store.HasConflicts(ctx, "b1", "a/")
+	if err != nil {
+		t.Fatalf("HasConflicts b1/a: %v", err)
+	}
+	if !has {
+		t.Fatalf("expected conflicts for b1/a")
+	}
+	has, err = store.HasConflicts(ctx, "b1", "z/")
+	if err != nil {
+		t.Fatalf("HasConflicts b1/z: %v", err)
+	}
+	if has {
+		t.Fatalf("expected no conflicts for b1/z")
+	}
 }
 
 func TestListGCTrends(t *testing.T) {

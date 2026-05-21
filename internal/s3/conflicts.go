@@ -71,3 +71,15 @@ func (h *Handler) handleConflicts(ctx context.Context, w http.ResponseWriter, r 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+func (h *Handler) applyConflictListingHeader(ctx context.Context, w http.ResponseWriter, bucket, prefix, requestID, resource string) bool {
+	hasConflicts, err := h.Meta.HasConflicts(ctx, bucket, prefix)
+	if err != nil {
+		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", err.Error(), requestID, resource)
+		return false
+	}
+	if hasConflicts {
+		w.Header().Set("x-seglake-conflicts", "true")
+	}
+	return true
+}

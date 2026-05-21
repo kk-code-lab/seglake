@@ -94,6 +94,9 @@ func (h *Handler) handleListV2(ctx context.Context, w http.ResponseWriter, r *ht
 	if truncated && lastKey != "" {
 		resp.NextContinuationToken = encodeContinuation(lastKey, lastVersion)
 	}
+	if !h.applyConflictListingHeader(ctx, w, bucket, prefix, requestID, r.URL.Path) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(resp)
@@ -133,6 +136,9 @@ func (h *Handler) handleListV1(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	if truncated && lastKey != "" {
 		resp.NextMarker = lastKey
+	}
+	if !h.applyConflictListingHeader(ctx, w, bucket, prefix, requestID, r.URL.Path) {
+		return
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)

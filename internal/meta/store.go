@@ -3577,6 +3577,27 @@ WHERE state='CONFLICT'`
 	})
 }
 
+// HasConflicts reports whether any object versions in bucket/prefix are marked CONFLICT.
+func (s *Store) HasConflicts(ctx context.Context, bucket, prefix string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("meta: db not initialized")
+	}
+	pattern := escapeLike(prefix) + "%"
+	var one int
+	err := s.db.QueryRowContext(ctx, `
+SELECT 1
+FROM versions
+WHERE bucket=? AND key LIKE ? ESCAPE '\' AND state='CONFLICT'
+LIMIT 1`, bucket, pattern).Scan(&one)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // GetObjectVersion returns metadata for a specific object version.
 func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID string) (*ObjectMeta, error) {
 	if bucket == "" || key == "" || versionID == "" {

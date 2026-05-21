@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -124,6 +125,14 @@ func TestListV2MissingBucket(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "<Code>NoSuchBucket</Code>") {
 		t.Fatalf("expected NoSuchBucket")
 	}
+}
+
+func TestListV2SetsConflictPresenceHeader(t *testing.T) {
+	handler := newListTestHandler(t)
+	listPutObject(t, handler, "conflict/key.txt")
+	listPutObject(t, handler, "other/key.txt")
+	markListConflict(t, handler, "bucket", "conflict/key.txt")
+	assertConflictPresenceHeader(t, handler, "/bucket?list-type=2&prefix=conflict/", "/bucket?list-type=2&prefix=other/", "LIST")
 }
 
 func TestGetBucketLocationMissingBucket(t *testing.T) {
@@ -321,6 +330,14 @@ func TestListVersionsDelimiter(t *testing.T) {
 	assertCommonPrefixGrouped(t, body, "a/")
 }
 
+func TestListVersionsSetsConflictPresenceHeader(t *testing.T) {
+	handler := newListTestHandler(t)
+	listPutObject(t, handler, "conflict/key.txt")
+	listPutObject(t, handler, "other/key.txt")
+	markListConflict(t, handler, "bucket", "conflict/key.txt")
+	assertConflictPresenceHeader(t, handler, "/bucket?versions&prefix=conflict/", "/bucket?versions&prefix=other/", "LIST versions")
+}
+
 func listPutObject(t *testing.T, handler *Handler, key string) {
 	t.Helper()
 	req := httptest.NewRequest("PUT", "/bucket/"+key, strings.NewReader(key))
@@ -328,6 +345,38 @@ func listPutObject(t *testing.T, handler *Handler, key string) {
 	handler.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("PUT status: %d", w.Code)
+	}
+}
+
+func markListConflict(t *testing.T, handler *Handler, bucket, key string) {
+	t.Helper()
+	if err := handler.Meta.WithTx(func(tx *sql.Tx) error {
+		return meta.ExecTx(tx, "UPDATE versions SET state='CONFLICT' WHERE bucket=? AND key=?", bucket, key)
+	}); err != nil {
+		t.Fatalf("mark conflict: %v", err)
+	}
+}
+
+func assertConflictPresenceHeader(t *testing.T, handler *Handler, conflictPath, cleanPath, label string) {
+	t.Helper()
+	req := httptest.NewRequest("GET", conflictPath, nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("%s status: %d", label, w.Code)
+	}
+	if got := w.Header().Get("x-seglake-conflicts"); got != "true" {
+		t.Fatalf("expected conflict listing header, got %q", got)
+	}
+
+	req = httptest.NewRequest("GET", cleanPath, nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("%s status: %d", label, w.Code)
+	}
+	if got := w.Header().Get("x-seglake-conflicts"); got != "" {
+		t.Fatalf("expected no conflict listing header, got %q", got)
 	}
 }
 

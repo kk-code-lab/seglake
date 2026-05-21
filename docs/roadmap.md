@@ -12,7 +12,6 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Now
-- [api][repl] Add API ergonomics to surface conflict presence (response headers or listing hints).
 - [repl] Decide conflict handling for delete vs put (mark delete conflicts explicitly).
 
 ## Next
