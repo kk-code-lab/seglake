@@ -12,7 +12,6 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Now
-- [api][ops][repl] Expose conflict listings via an ops command or refine `/v1/meta/conflicts` UX for reviewing `CONFLICT` versions.
 - [api][repl] Add API ergonomics to surface conflict presence (response headers or listing hints).
 - [repl] Decide conflict handling for delete vs put (mark delete conflicts explicitly).
 

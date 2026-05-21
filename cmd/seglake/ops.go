@@ -426,6 +426,8 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode bucket-policy: manage bucket policies.")
 	case "buckets":
 		fmt.Println("Mode buckets: manage bucket entries (admin).")
+	case "conflicts":
+		fmt.Println("Mode conflicts: list replicated object versions marked CONFLICT.")
 	case "maintenance":
 		fmt.Println("Mode maintenance: toggle read-only maintenance mode.")
 	case "repl-pull":

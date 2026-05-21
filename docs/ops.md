@@ -460,7 +460,7 @@ Safe (no prompt):
 
 | Mode | Note |
 | --- | --- |
-| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `manifest-gc-plan`, `mpu-gc-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `manifest-gc-plan`, `mpu-gc-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `conflicts`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
 
 Unsafe (prompt required, maintenance quiesced):
 
@@ -581,6 +581,36 @@ Manage bucket entries with `-mode buckets` (metadata only, bypasses S3 API):
 ./build/seglake -mode buckets -bucket-action exists -bucket demo
 ./build/seglake -mode buckets -bucket-action delete -bucket demo
 ```
+
+## Replication conflict listings
+
+Review replicated object versions currently marked `CONFLICT` with the local
+ops mode:
+```
+./build/seglake -mode conflicts
+./build/seglake -mode conflicts -conflicts-bucket demo -conflicts-prefix photos/ -conflicts-limit 100
+./build/seglake -mode conflicts -json
+```
+
+The text output is one conflict per line:
+```
+bucket=demo key=photos/a.jpg version=... size=123 last_modified=... etag=...
+```
+
+When the result is exactly the requested limit, the final line prints
+`next_bucket`, `next_key`, and `next_version` markers. Pass them back as
+`-conflicts-after-bucket`, `-conflicts-after-key`, and
+`-conflicts-after-version` to continue. With a bucket filter, the bucket marker
+is still printed for consistency, but pagination is driven by key and version.
+
+The HTTP endpoint is also available:
+```
+GET /v1/meta/conflicts?bucket=demo&prefix=photos/&limit=100
+GET /v1/meta/conflicts?limit=100&after_bucket=...&after_key=...&after_version=...
+```
+
+Both surfaces are read-only. They list conflict metadata only; resolving or
+changing conflict semantics is a separate replication workflow.
 
 ## API keys / policies
 

@@ -254,6 +254,18 @@ type bucketsOptions struct {
 	jsonOut     bool
 }
 
+type conflictsOptions struct {
+	dataDir      string
+	rebuildMeta  string
+	bucket       string
+	prefix       string
+	afterBucket  string
+	afterKey     string
+	afterVersion string
+	limit        int
+	jsonOut      bool
+}
+
 type replPullOptions struct {
 	dataDir      string
 	siteID       string
@@ -477,6 +489,27 @@ func main() {
 		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
 		if err := runBuckets(opts.action, metaPath, opts.bucket, opts.versioning, opts.force, opts.jsonOut); err != nil {
 			exitError("buckets", err)
+		}
+	case global.mode == "conflicts":
+		fs, opts := newConflictsFlagSet()
+		if global.modeHelp {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if help, err := parseModeFlags(fs, remaining); err != nil {
+			exitParseError(err)
+		} else if help {
+			printModeHelp(global.mode, fs)
+			return
+		}
+		if opts.rebuildMeta == "" {
+			if err := requireDataDir(opts.dataDir); err != nil {
+				exitError("data dir", err)
+			}
+		}
+		metaPath := resolveMetaPath(opts.dataDir, opts.rebuildMeta)
+		if err := runConflicts(metaPath, opts.bucket, opts.prefix, opts.afterBucket, opts.afterKey, opts.afterVersion, opts.limit, opts.jsonOut); err != nil {
+			exitError("conflicts", err)
 		}
 	case global.mode == "maintenance":
 		fs, opts := newMaintenanceFlagSet()
@@ -825,6 +858,21 @@ func newBucketsFlagSet() (*flag.FlagSet, *bucketsOptions) {
 	fs.StringVar(&opts.versioning, "bucket-versioning", "", "Bucket versioning for create: enabled|suspended|disabled|unversioned")
 	fs.BoolVar(&opts.force, "bucket-force", false, "Force delete bucket by deleting live objects first")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Output ops report as JSON")
+	return fs, opts
+}
+
+func newConflictsFlagSet() (*flag.FlagSet, *conflictsOptions) {
+	fs := flag.NewFlagSet("conflicts", flag.ContinueOnError)
+	opts := &conflictsOptions{}
+	fs.StringVar(&opts.dataDir, "data-dir", envOrDefault("SEGLAKE_DATA_DIR", "./data"), "Data directory (env SEGLAKE_DATA_DIR)")
+	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db")
+	fs.StringVar(&opts.bucket, "conflicts-bucket", "", "Bucket filter")
+	fs.StringVar(&opts.prefix, "conflicts-prefix", "", "Key prefix filter")
+	fs.StringVar(&opts.afterBucket, "conflicts-after-bucket", "", "Pagination marker bucket")
+	fs.StringVar(&opts.afterKey, "conflicts-after-key", "", "Pagination marker key")
+	fs.StringVar(&opts.afterVersion, "conflicts-after-version", "", "Pagination marker version id")
+	fs.IntVar(&opts.limit, "conflicts-limit", 1000, "Maximum conflicts to return (1-10000)")
+	fs.BoolVar(&opts.jsonOut, "json", false, "Output conflicts as JSON")
 	return fs, opts
 }
 
@@ -1374,6 +1422,7 @@ func printGlobalHelp() {
 		"keys",
 		"bucket-policy",
 		"buckets",
+		"conflicts",
 		"maintenance",
 		"repl-pull",
 		"repl-push",
