@@ -31,6 +31,7 @@ type statsResponse struct {
 	LastMPUGCReclaimed      int64                       `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
 	ReplicationConflicts    int64                       `json:"replication_conflicts,omitempty"`
 	ReplicationBytesInTotal int64                       `json:"replication_bytes_in_total,omitempty"`
+	ConflictHotspots        []meta.ConflictHotspot      `json:"conflict_hotspots,omitempty"`
 	MaintenanceState        string                      `json:"maintenance_state,omitempty"`
 	MaintenanceUpdatedAt    string                      `json:"maintenance_updated_at,omitempty"`
 	WriteInflight           int64                       `json:"write_inflight,omitempty"`
@@ -121,6 +122,7 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		LastMPUGCReclaimed:      stats.LastMPUGCReclaimed,
 		ReplicationConflicts:    stats.ReplConflicts,
 		ReplicationBytesInTotal: stats.ReplBytesInTotal,
+		ConflictHotspots:        stats.ConflictHotspots,
 		MaintenanceState:        maintenanceState.State,
 		MaintenanceUpdatedAt:    maintenanceState.UpdatedAt,
 		WriteInflight:           h.WriteInflight(),

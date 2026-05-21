@@ -3881,25 +3881,34 @@ type ReportOps struct {
 
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
-	Objects            int64          `json:"objects"`
-	Segments           int64          `json:"segments"`
-	BytesLive          int64          `json:"bytes_live"`
-	LastFsckAt         string         `json:"last_fsck_at,omitempty"`
-	LastFsckErrors     int            `json:"last_fsck_errors,omitempty"`
-	LastScrubAt        string         `json:"last_scrub_at,omitempty"`
-	LastScrubErrors    int            `json:"last_scrub_errors,omitempty"`
-	LastGCAt           string         `json:"last_gc_at,omitempty"`
-	LastGCErrors       int            `json:"last_gc_errors,omitempty"`
-	LastGCReclaimed    int64          `json:"last_gc_reclaimed_bytes,omitempty"`
-	LastGCRewritten    int64          `json:"last_gc_rewritten_bytes,omitempty"`
-	LastGCNewSegments  int            `json:"last_gc_new_segments,omitempty"`
-	LastMPUGCAt        string         `json:"last_mpu_gc_at,omitempty"`
-	LastMPUGCErrors    int            `json:"last_mpu_gc_errors,omitempty"`
-	LastMPUGCDeleted   int            `json:"last_mpu_gc_deleted,omitempty"`
-	LastMPUGCReclaimed int64          `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
-	ReplConflicts      int64          `json:"repl_conflicts,omitempty"`
-	ReplBytesInTotal   int64          `json:"repl_bytes_in_total,omitempty"`
-	SSEDiagnostics     SSEDiagnostics `json:"sse_diagnostics"`
+	Objects            int64             `json:"objects"`
+	Segments           int64             `json:"segments"`
+	BytesLive          int64             `json:"bytes_live"`
+	LastFsckAt         string            `json:"last_fsck_at,omitempty"`
+	LastFsckErrors     int               `json:"last_fsck_errors,omitempty"`
+	LastScrubAt        string            `json:"last_scrub_at,omitempty"`
+	LastScrubErrors    int               `json:"last_scrub_errors,omitempty"`
+	LastGCAt           string            `json:"last_gc_at,omitempty"`
+	LastGCErrors       int               `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed    int64             `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten    int64             `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments  int               `json:"last_gc_new_segments,omitempty"`
+	LastMPUGCAt        string            `json:"last_mpu_gc_at,omitempty"`
+	LastMPUGCErrors    int               `json:"last_mpu_gc_errors,omitempty"`
+	LastMPUGCDeleted   int               `json:"last_mpu_gc_deleted,omitempty"`
+	LastMPUGCReclaimed int64             `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
+	ReplConflicts      int64             `json:"repl_conflicts,omitempty"`
+	ReplBytesInTotal   int64             `json:"repl_bytes_in_total,omitempty"`
+	ConflictHotspots   []ConflictHotspot `json:"conflict_hotspots,omitempty"`
+	SSEDiagnostics     SSEDiagnostics    `json:"sse_diagnostics"`
+}
+
+// ConflictHotspot summarizes current conflict concentration for one object key.
+type ConflictHotspot struct {
+	Bucket         string `json:"bucket"`
+	Key            string `json:"key"`
+	Conflicts      int64  `json:"conflicts"`
+	LatestConflict string `json:"latest_conflict_utc,omitempty"`
 }
 
 // SSEDiagnostics summarizes redacted encryption state from metadata only.
@@ -3980,14 +3989,52 @@ WHERE mode='mpu-gc-run'
 ORDER BY finished_at DESC
 LIMIT 1`).Scan(&stats.LastMPUGCAt, &stats.LastMPUGCErrors, &stats.LastMPUGCDeleted, &stats.LastMPUGCReclaimed)
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(conflict_count,0), COALESCE(bytes_in_total,0) FROM repl_metrics WHERE id=1").Scan(&stats.ReplConflicts, &stats.ReplBytesInTotal); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return stats, nil
-		}
-		if !strings.Contains(err.Error(), "no such table") {
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table") {
 			return nil, err
 		}
 	}
+	hotspots, err := s.ListConflictHotspots(ctx, 20)
+	if err != nil {
+		return nil, err
+	}
+	stats.ConflictHotspots = hotspots
 	return stats, nil
+}
+
+// ListConflictHotspots returns the keys with the most current conflict versions.
+func (s *Store) ListConflictHotspots(ctx context.Context, limit int) ([]ConflictHotspot, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("meta: db not initialized")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, key, COUNT(*), COALESCE(MAX(last_modified_utc), '')
+FROM versions
+WHERE state='CONFLICT'
+GROUP BY bucket, key
+ORDER BY COUNT(*) DESC, bucket ASC, key ASC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ConflictHotspot, 0)
+	for rows.Next() {
+		var item ConflictHotspot
+		if err := rows.Scan(&item.Bucket, &item.Key, &item.Conflicts, &item.LatestConflict); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetSSEDiagnostics returns redacted encryption diagnostics from version summaries.

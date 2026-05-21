@@ -293,6 +293,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - replication: per-remote {last_pull_hlc, last_push_hlc, push_backlog, push_backlog_bytes, oplog_bytes_total, last_oplog_hlc, pull_lag_seconds, push_lag_seconds},
 - replication_conflicts: conflict count from apply (LWW),
 - replication_bytes_in_total: total bytes pulled by replication (manifests + chunk data),
+- conflict_hotspots: top current conflict keys derived from `versions WHERE state='CONFLICT'`, ordered by conflict count, then bucket/key,
 - sse_diagnostics: redacted metadata-only summary with plaintext/encrypted active version counts, damaged encrypted version count, counts by encryption mode, algorithm, key ID, and short EDEK fingerprint prefix. It is derived from SQLite version summaries and does not read manifests, decrypt objects, require KEKs/Vault, or expose KEKs, DEKs, raw EDEKs, Vault tokens, or nonce bytes.
 
 ### 5.3 Crash harness

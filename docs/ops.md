@@ -624,6 +624,11 @@ Seglake retains a conflict tombstone so the race appears in `/v1/meta/conflicts`
 and `-mode conflicts`. A winning non-marker delete suppresses older current
 object state without creating an S3 delete marker.
 
+`/v1/meta/stats` includes `conflict_hotspots`, the top current conflict keys
+ordered by conflict count. Each hotspot includes bucket, key, current conflict
+count, and latest conflict timestamp. Use it to find replication conflict
+hotspots before drilling into `/v1/meta/conflicts` or `-mode conflicts`.
+
 ## API keys / policies
 
 Manage keys with `-mode keys`:

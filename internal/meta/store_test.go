@@ -341,6 +341,67 @@ func TestListConflicts(t *testing.T) {
 	}
 }
 
+func TestListConflictHotspots(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	for _, obj := range []struct {
+		bucket  string
+		key     string
+		version string
+	}{
+		{"b1", "hot", "v1"},
+		{"b1", "hot", "v2"},
+		{"b1", "warm", "v3"},
+		{"b2", "hot", "v4"},
+	} {
+		if err := store.RecordPut(ctx, obj.bucket, obj.key, obj.version, "etag", 1, "/tmp/"+obj.version, ""); err != nil {
+			t.Fatalf("RecordPut %s: %v", obj.version, err)
+		}
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return ExecTx(tx, "UPDATE versions SET state='CONFLICT' WHERE version_id IN (?, ?, ?, ?)", "v1", "v2", "v3", "v4")
+	}); err != nil {
+		t.Fatalf("mark conflicts: %v", err)
+	}
+
+	hotspots, err := store.ListConflictHotspots(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListConflictHotspots: %v", err)
+	}
+	if len(hotspots) != 3 {
+		t.Fatalf("expected 3 hotspots, got %+v", hotspots)
+	}
+	if hotspots[0].Bucket != "b1" || hotspots[0].Key != "hot" || hotspots[0].Conflicts != 2 {
+		t.Fatalf("unexpected first hotspot: %+v", hotspots[0])
+	}
+	if hotspots[0].LatestConflict == "" {
+		t.Fatalf("expected latest conflict timestamp")
+	}
+
+	limited, err := store.ListConflictHotspots(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListConflictHotspots limited: %v", err)
+	}
+	if len(limited) != 1 || limited[0].Bucket != "b1" || limited[0].Key != "hot" {
+		t.Fatalf("unexpected limited hotspots: %+v", limited)
+	}
+
+	stats, err := store.GetStats(ctx)
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if len(stats.ConflictHotspots) == 0 || stats.ConflictHotspots[0].Conflicts != 2 {
+		t.Fatalf("expected stats conflict hotspots, got %+v", stats.ConflictHotspots)
+	}
+}
+
 func TestListGCTrends(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "meta.db")

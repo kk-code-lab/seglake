@@ -86,3 +86,40 @@ func TestStatsIncludesRedactedSSEDiagnostics(t *testing.T) {
 		t.Fatalf("stats missing redacted fingerprint prefix: %s", body)
 	}
 }
+
+func TestStatsIncludesConflictHotspots(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	for _, version := range []string{"v1", "v2"} {
+		if err := store.RecordPut(ctx, "bucket", "key", version, "etag", 1, "/tmp/"+version, ""); err != nil {
+			t.Fatalf("RecordPut %s: %v", version, err)
+		}
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return meta.ExecTx(tx, "UPDATE versions SET state='CONFLICT' WHERE version_id IN (?, ?)", "v1", "v2")
+	}); err != nil {
+		t.Fatalf("mark conflicts: %v", err)
+	}
+
+	handler := &Handler{Meta: store, Metrics: NewMetrics()}
+	rec := httptest.NewRecorder()
+	handler.handleStats(ctx, rec, "req-1", "/v1/meta/stats")
+
+	var resp statsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if len(resp.ConflictHotspots) != 1 {
+		t.Fatalf("expected one conflict hotspot, got %+v", resp.ConflictHotspots)
+	}
+	hotspot := resp.ConflictHotspots[0]
+	if hotspot.Bucket != "bucket" || hotspot.Key != "key" || hotspot.Conflicts != 2 {
+		t.Fatalf("unexpected hotspot: %+v", hotspot)
+	}
+}
