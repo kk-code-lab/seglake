@@ -287,12 +287,19 @@ aws s3api delete-object-tagging --bucket demo --key a.txt \
 
 ## Open Questions
 
-- Should `GET/HEAD Object` return `x-amz-tagging-count` in MVP or wait until
-  tag-read authorization semantics are explicit?
-- Should creation-time tags replicate inside the put oplog entry or through a
-  separate tag-set oplog entry in the same transaction?
-- Should rebuild-index preserve tags through a sidecar export/import workflow,
-  or is tag loss during manifest-only rebuild acceptable for now?
-- Should length limits use Go rune counts initially or AWS-like UTF-16 character
-  counts from the start?
+Resolved decisions:
 
+- `GET/HEAD Object` should return `x-amz-tagging-count` in MVP when the caller
+  has tag-read authorization. If the policy engine cannot express that cleanly
+  in the first implementation pass, omit the header rather than leaking tag
+  presence across an authorization boundary.
+- Object creation with `x-amz-tagging` should emit a separate
+  `object_tags_set` oplog entry in the same metadata transaction as the object
+  put. This keeps tag replication behavior uniform across creation-time tags
+  and later `PUT ?tagging` updates.
+- Manifest-only `rebuild-index` may lose tags in MVP because tags are SQLite
+  metadata and are not embedded in manifests. Document this as an operational
+  limitation. A sidecar tag export/import workflow can be added later if tags
+  become critical recovery metadata.
+- Tag length validation should use AWS-like UTF-16 character counts from the
+  start instead of Go rune counts.
