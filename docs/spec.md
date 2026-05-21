@@ -127,6 +127,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
   - `sync_interval` ~100ms
   - `sync_bytes` ~128MiB
 - Order: write segments → fsync segments → write manifest + metadata update in transaction → WAL flush.
+- Replication chunk fetches use the same durable ordering for raw segment ranges:
+  write bytes → fsync segment file → mark the segment `SEALED` in SQLite.
 - Client ACK after barrier completion.
 
 ### 3.7 Read path

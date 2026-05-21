@@ -56,15 +56,16 @@ type Options struct {
 
 // Engine owns the storage read/write path.
 type Engine struct {
-	layout         fs.Layout
-	segmentVersion uint32
-	splitter       chunk.Splitter
-	manifestCodec  manifest.Codec
-	metaStore      *meta.Store
-	clock          clock.Clock
-	segments       *segmentManager
-	barrier        *writeBarrier
-	sse            ssecrypto.KeyProvider
+	layout           fs.Layout
+	segmentVersion   uint32
+	splitter         chunk.Splitter
+	manifestCodec    manifest.Codec
+	metaStore        *meta.Store
+	clock            clock.Clock
+	segments         *segmentManager
+	barrier          *writeBarrier
+	sse              ssecrypto.KeyProvider
+	segmentRangeSync func(*os.File) error
 }
 
 // Layout returns the engine storage layout.
@@ -768,7 +769,7 @@ func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset
 	if _, err := file.WriteAt(data, offset); err != nil {
 		return err
 	}
-	if err := file.Sync(); err != nil {
+	if err := e.syncSegmentRange(file); err != nil {
 		return err
 	}
 	info, err := file.Stat()
@@ -781,6 +782,13 @@ func (e *Engine) WriteSegmentRange(ctx context.Context, segmentID string, offset
 		}
 	}
 	return nil
+}
+
+func (e *Engine) syncSegmentRange(file *os.File) error {
+	if e != nil && e.segmentRangeSync != nil {
+		return e.segmentRangeSync(file)
+	}
+	return file.Sync()
 }
 
 func (e *Engine) ensureDirs() error {

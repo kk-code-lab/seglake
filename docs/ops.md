@@ -569,6 +569,8 @@ Continuous push:
 Notes:
 - Watermarks are stored per-remote (pull and push separately).
 - Replication endpoints are protected by policies (`ReplicationRead` / `ReplicationWrite`).
+- Pulled chunk bytes are fsynced to their segment file before segment metadata
+  is marked `SEALED`.
 - `/v1/meta/stats` includes a `replication` section (lag and backlog).
 - `/v1/meta/stats` also reports `replay_detected` (count of detected replays).
 

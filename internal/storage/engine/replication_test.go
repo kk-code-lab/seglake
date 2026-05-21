@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,5 +103,32 @@ func TestWriteSegmentRangeMetaFailure(t *testing.T) {
 	}
 	if err := eng.WriteSegmentRange(context.Background(), "seg-test", 0, []byte("data")); err == nil {
 		t.Fatalf("expected error from RecordSegment failure")
+	}
+}
+
+func TestWriteSegmentRangeSyncFailureDoesNotSealMetadata(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	syncErr := errors.New("sync failed")
+	eng, err := New(Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	eng.segmentRangeSync = func(*os.File) error {
+		return syncErr
+	}
+	err = eng.WriteSegmentRange(context.Background(), "seg-test", 0, []byte("data"))
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("expected sync error, got %v", err)
+	}
+	if _, err := store.GetSegment(context.Background(), "seg-test"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("segment metadata should not be recorded after sync failure, got %v", err)
 	}
 }

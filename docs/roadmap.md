@@ -12,9 +12,6 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Now
-- [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
-
-## Next
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 
 ## Later / Research
