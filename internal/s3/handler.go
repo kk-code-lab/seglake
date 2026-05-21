@@ -1722,7 +1722,7 @@ func (h *Handler) corsAllowHeaders() string {
 	if len(h.CORSAllowHeaders) > 0 {
 		return strings.Join(h.CORSAllowHeaders, ", ")
 	}
-	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption"
+	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption, x-amz-server-side-encryption-aws-kms-key-id"
 }
 
 func (h *Handler) corsMaxAge() int {

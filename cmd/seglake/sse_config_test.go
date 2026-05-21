@@ -8,6 +8,21 @@ import (
 	ssecrypto "github.com/kk-code-lab/seglake/internal/sse"
 )
 
+func TestServerDefaultCORSHeadersIncludeSSE(t *testing.T) {
+	fs, opts := newServerFlagSet()
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	for _, want := range []string{
+		"x-amz-server-side-encryption",
+		"x-amz-server-side-encryption-aws-kms-key-id",
+	} {
+		if !strings.Contains(opts.corsHeaders, want) {
+			t.Fatalf("default CORS headers %q do not include %q", opts.corsHeaders, want)
+		}
+	}
+}
+
 func TestBuildSSEProviderFromSingleEnv(t *testing.T) {
 	t.Setenv("SEGLAKE_SSE_S3_KEK_B64", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
 	opts := &serverOptions{

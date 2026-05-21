@@ -569,4 +569,13 @@ func TestOptionsCORS(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Methods"); got == "" {
 		t.Fatalf("expected Access-Control-Allow-Methods to be set")
 	}
+	allowedHeaders := w.Header().Get("Access-Control-Allow-Headers")
+	for _, want := range []string{
+		"x-amz-server-side-encryption",
+		"x-amz-server-side-encryption-aws-kms-key-id",
+	} {
+		if !strings.Contains(allowedHeaders, want) {
+			t.Fatalf("expected Access-Control-Allow-Headers %q to include %q", allowedHeaders, want)
+		}
+	}
 }

@@ -705,7 +705,7 @@ func newServerFlagSet() (*flag.FlagSet, *serverOptions) {
 	fs.Int64Var(&opts.maxObjectSize, "max-object-size", 5<<30, "Max object size in bytes (0 = unlimited)")
 	fs.StringVar(&opts.corsOrigins, "cors-origins", "*", "Comma-separated CORS allowed origins (* for all)")
 	fs.StringVar(&opts.corsMethods, "cors-methods", "GET,PUT,HEAD,DELETE", "Comma-separated CORS allowed methods")
-	fs.StringVar(&opts.corsHeaders, "cors-headers", "authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256", "Comma-separated CORS allowed headers")
+	fs.StringVar(&opts.corsHeaders, "cors-headers", "authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256,x-amz-server-side-encryption,x-amz-server-side-encryption-aws-kms-key-id", "Comma-separated CORS allowed headers")
 	fs.IntVar(&opts.corsMaxAge, "cors-max-age", 86400, "CORS preflight max age in seconds")
 	fs.DurationVar(&opts.replayTTL, "replay-ttl", 0, "Replay protection TTL (0 disables)")
 	fs.BoolVar(&opts.replayBlock, "replay-block", false, "Block requests on replay detection (default logs only)")

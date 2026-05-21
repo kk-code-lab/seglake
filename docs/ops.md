@@ -259,6 +259,8 @@ The plan contains version IDs, bucket/key names, manifest paths, key refs, key I
 
 Support bundles include `sse-diagnostics.json`, a shallow metadata-only SSE summary with plaintext/encrypted active version counts, damaged encrypted version counts, mode and algorithm counts, key ID counts, and short EDEK fingerprint prefix counts. This file is safe to generate without local KEKs or Vault access: it does not decrypt manifests and does not include KEKs, DEKs, raw EDEKs, Vault tokens, wrap nonces, nonce prefixes, or provider secret material.
 
+Use `docs/sse-readiness.md` as the release-readiness checklist for validating the full SSE stack before cutting or promoting builds that rely on SSE-S3, SSE-KMS-compatible API behavior, Vault Transit, rewrap, deep scrub, manifest GC, replication, or redacted diagnostics.
+
 Deep encrypted scrub verifies that SSE encrypted object chunks can unwrap their DEKs and pass AES-GCM authentication. Normal `scrub` remains shallow and needs no KEKs or Vault access. Deep scrub is local-only when key-provider config is supplied. With the local provider it uses the same `-sse-s3-kek` / `SEGLAKE_SSE_S3_KEKS` sources as rewrap:
 ```
 ./build/seglake -mode scrub -data-dir ./data \
@@ -801,7 +803,7 @@ Notes:
 - `-replay-block` (default false; block requests on replay detection)
 - `-cors-origins` (default `*`, comma-separated list)
 - `-cors-methods` (default `GET,PUT,HEAD,DELETE`)
-- `-cors-headers` (default `authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256`)
+- `-cors-headers` (default `authorization,content-md5,content-type,x-amz-date,x-amz-content-sha256,x-amz-server-side-encryption,x-amz-server-side-encryption-aws-kms-key-id`)
 - `-cors-max-age` (default 86400)
 - `-replay-ttl` (default 5m, 0 = disable replay protection)
 
