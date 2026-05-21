@@ -436,7 +436,7 @@ Metadata integrity:
 
 Replication (when 2+ nodes are available):
 - Integration: repl pull/push + oplog apply.
-- E2E: repl-validate drift.
+- E2E: repl-validate drift; use `-repl-validate-deep` when validating chunk bytes and hashes.
 - Soak: long runs with conflicts.
 
 Note: `scripts/stress_s3.sh` includes profiles for quickly surfacing contention
@@ -571,6 +571,17 @@ Notes:
 - Replication endpoints are protected by policies (`ReplicationRead` / `ReplicationWrite`).
 - `/v1/meta/stats` includes a `replication` section (lag and backlog).
 - `/v1/meta/stats` also reports `replay_detected` (count of detected replays).
+
+Validate two data directories:
+```
+./build/seglake -mode repl-validate -data-dir /var/lib/seglake-a -repl-compare-dir /var/lib/seglake-b
+./build/seglake -mode repl-validate -data-dir /var/lib/seglake-a -repl-compare-dir /var/lib/seglake-b -repl-validate-deep
+```
+
+`repl-validate` is shallow by default and compares manifest/version presence.
+The deep mode additionally reads chunk bytes referenced by manifests on both
+sides and verifies stored chunk hashes. It works for encrypted objects without
+KEKs because encrypted manifests hash ciphertext bytes.
 
 ## Buckets (admin)
 

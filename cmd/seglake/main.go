@@ -179,6 +179,7 @@ type opsOptions struct {
 	snapshotDir         string
 	rebuildMeta         string
 	replCompareDir      string
+	replValidateDeep    bool
 	fsckAllManifests    bool
 	scrubAllManifests   bool
 	scrubDeepEncrypted  bool
@@ -774,6 +775,7 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.StringVar(&opts.snapshotDir, "snapshot-dir", "", "Snapshot output directory")
 	fs.StringVar(&opts.rebuildMeta, "rebuild-meta", "", "Path to meta.db for rebuild-index")
 	fs.StringVar(&opts.replCompareDir, "repl-compare-dir", "", "Replication validation compare data dir")
+	fs.BoolVar(&opts.replValidateDeep, "repl-validate-deep", false, "Repl-validate also reads chunk bytes and verifies manifest hashes")
 	fs.BoolVar(&opts.fsckAllManifests, "fsck-all-manifests", false, "Fsck scan all manifests instead of live set from meta")
 	fs.BoolVar(&opts.scrubAllManifests, "scrub-all-manifests", false, "Scrub scan all manifests instead of live set from meta")
 	fs.BoolVar(&opts.scrubDeepEncrypted, "scrub-deep-encrypted", false, "Scrub encrypted SSE-S3 chunks by unwrapping DEKs and verifying AEAD tags")

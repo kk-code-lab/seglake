@@ -13,7 +13,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - **metadata in SQLite (WAL, synchronous=FULL)**,
 - **hard durability contract**: fsync segments + WAL commit before an object is visible,
 - **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, conflict listings, GC plan/run, GC rewrite (gc-rewrite + plan/run), manifest GC (plan/run), SSE-S3 KEK rewrap (plan/run),
-- repl-validate (consistency comparison between nodes),
+- repl-validate (consistency comparison between nodes, with optional deep chunk-hash validation),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
 - **SSE-S3 / SSE-KMS-compatible API**: explicit `AES256` or `aws:kms` object writes plus bucket default encryption with local KEKs or Vault Transit behind an internal key-provider interface and envelope encryption. The `aws:kms` mode is an S3-compatible API surface over configured provider key IDs, not AWS KMS network integration.
@@ -22,7 +22,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 1.1 Key decisions
 - **Replication**: multi-site P2P, multi-writer, LWW + tombstone, JSON/HTTP, HLC as event ordering.
 - **Consistency**: no global transactions; local writes visible immediately, eventual consistency.
-- **Consistency validation**: repl-validate compares manifests and version metadata (without comparing chunk contents).
+- **Consistency validation**: repl-validate compares manifests and version metadata; `-repl-validate-deep` also reads referenced chunks and verifies stored chunk hashes.
 - **ACL/IAM**: MVP with policy v1 + bucket policies + conditions; no full ACL/STS.
 
 ### 1.2 Glossary with examples
@@ -268,7 +268,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `snapshot` — copy meta.db(+wal/shm) + report.
 - `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics.
 - `buckets` — manage bucket entries (admin; bypasses S3 API).
-- `repl-validate` — compare manifests and versions (live + all versions) between two data dirs.
+- `repl-validate` — compare manifests and versions (live + all versions) between two data dirs. With `-repl-validate-deep`, also verify that referenced chunk bytes exist and match manifest hashes on both sides.
 - `db-integrity-check` — run SQLite integrity_check on meta.db.
 - `db-reindex` — rebuild SQLite indices in meta.db.
 - `gc-plan`/`gc-run` — removes segments that are 100% dead (gc-run requires `-gc-force`).
@@ -330,7 +330,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ## 7) Known gaps / limitations (current state)
 
  - No full ACL/IAM/policies (per-action JSON policy v1, bucket policies and conditions exist; no per-object ACL/STS/advanced conditions).
- - repl-validate does not compare chunk contents, only manifests and version metadata.
+ - repl-validate is shallow by default; deep chunk-hash validation must be requested with `-repl-validate-deep`.
 
 ---
 

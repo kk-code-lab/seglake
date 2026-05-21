@@ -5,6 +5,7 @@ type OpsRunRequest struct {
 	SnapshotDir        string  `json:"snapshot_dir,omitempty"`
 	RebuildMeta        string  `json:"rebuild_meta,omitempty"`
 	ReplCompareDir     string  `json:"repl_compare_dir,omitempty"`
+	ReplValidateDeep   bool    `json:"repl_validate_deep,omitempty"`
 	DBReindexTable     string  `json:"db_reindex_table,omitempty"`
 	FsckAllManifests   bool    `json:"fsck_all_manifests,omitempty"`
 	ScrubAllManifests  bool    `json:"scrub_all_manifests,omitempty"`

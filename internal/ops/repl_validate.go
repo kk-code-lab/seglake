@@ -4,15 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/kk-code-lab/seglake/internal/meta"
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
+	"github.com/kk-code-lab/seglake/internal/storage/manifest"
+	"github.com/kk-code-lab/seglake/internal/storage/segment"
+)
+
+var (
+	errReplMissingSegment = errors.New("missing segment")
+	errReplOutOfBounds    = errors.New("chunk out of bounds")
+	errReplHashMismatch   = errors.New("hash mismatch")
 )
 
 // ReplValidate compares manifests and live versions between two data directories.
 func ReplValidate(layout fs.Layout, metaPath, compareDir string) (*Report, error) {
+	return ReplValidateWithOptions(layout, metaPath, compareDir, ReplValidateOptions{})
+}
+
+// ReplValidateWithOptions compares replication state and optionally verifies chunk bytes.
+func ReplValidateWithOptions(layout fs.Layout, metaPath, compareDir string, opts ReplValidateOptions) (*Report, error) {
 	if compareDir == "" {
 		return nil, errors.New("ops: repl-validate requires compare dir")
 	}
@@ -104,9 +119,87 @@ func ReplValidate(layout fs.Layout, metaPath, compareDir string) (*Report, error
 	for _, rel := range missingVersions {
 		addError(fmt.Sprintf("version missing locally: %s", rel))
 	}
+	if opts.Deep {
+		validateReplChunkHashes(layout, "local", localManifests, report, addError)
+		validateReplChunkHashes(otherLayout, "remote", remoteManifests, report, addError)
+	}
 
 	report.FinishedAt = now().UTC()
 	return report, nil
+}
+
+func validateReplChunkHashes(layout fs.Layout, label string, manifestPaths []string, report *Report, addError func(string)) {
+	codec := &manifest.BinaryCodec{}
+	for _, path := range manifestPaths {
+		file, err := os.Open(path)
+		if err != nil {
+			report.InvalidManifests++
+			addError(fmt.Sprintf("%s manifest open failed: %s: %v", label, manifestRel(layout, path), err))
+			continue
+		}
+		man, err := codec.Decode(file)
+		_ = file.Close()
+		if err != nil {
+			report.InvalidManifests++
+			addError(fmt.Sprintf("%s manifest invalid: %s: %v", label, manifestRel(layout, path), err))
+			continue
+		}
+		for _, ch := range man.Chunks {
+			report.CompareChunksChecked++
+			if err := validateReplChunk(layout, ch); err != nil {
+				report.CompareChunksInvalid++
+				switch {
+				case errors.Is(err, errReplMissingSegment):
+					report.MissingSegments++
+					if len(report.MissingSegmentIDs) < 20 {
+						report.MissingSegmentIDs = append(report.MissingSegmentIDs, ch.SegmentID)
+					}
+				case errors.Is(err, errReplOutOfBounds):
+					report.OutOfBoundsChunks++
+				}
+				addError(fmt.Sprintf("%s chunk invalid manifest=%s version=%s segment=%s offset=%d len=%d: %v", label, manifestRel(layout, path), man.VersionID, ch.SegmentID, ch.Offset, ch.Len, err))
+			}
+		}
+	}
+}
+
+func validateReplChunk(layout fs.Layout, ch manifest.ChunkRef) error {
+	segPath := layout.SegmentPath(ch.SegmentID)
+	info, err := os.Stat(segPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errReplMissingSegment
+		}
+		return err
+	}
+	if info.Size() < ch.Offset+int64(ch.Len) {
+		return errReplOutOfBounds
+	}
+	file, err := os.Open(segPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, ch.Len)
+	n, err := file.ReadAt(buf, ch.Offset)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if n != int(ch.Len) {
+		return io.ErrUnexpectedEOF
+	}
+	if got := segment.HashChunk(buf); got != ch.Hash {
+		return errReplHashMismatch
+	}
+	return nil
+}
+
+func manifestRel(layout fs.Layout, path string) string {
+	rel, err := filepath.Rel(layout.ManifestsDir, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return filepath.Base(path)
+	}
+	return filepath.Clean(rel)
 }
 
 func normalizePaths(base string, paths []string) map[string]struct{} {

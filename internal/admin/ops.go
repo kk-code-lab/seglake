@@ -29,7 +29,7 @@ func requiresQuiescedOps(mode string) bool {
 	}
 }
 
-func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string) (*ops.Report, error) {
+func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, replValidateDeep bool, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable string) (*ops.Report, error) {
 	var (
 		report *ops.Report
 		err    error
@@ -49,7 +49,7 @@ func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCom
 	case "rebuild-index":
 		report, err = ops.Rebuild(layout, metaPath)
 	case "repl-validate":
-		report, err = ops.ReplValidate(layout, metaPath, replCompareDir)
+		report, err = ops.ReplValidateWithOptions(layout, metaPath, replCompareDir, ops.ReplValidateOptions{Deep: replValidateDeep})
 	case "gc-plan":
 		var candidates []meta.Segment
 		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge, gcGuardrails)

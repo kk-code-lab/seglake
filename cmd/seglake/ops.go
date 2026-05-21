@@ -136,7 +136,7 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 	case "rebuild-index":
 		report, err = ops.Rebuild(layout, metaPath)
 	case "repl-validate":
-		report, err = ops.ReplValidate(layout, metaPath, replCompareDir)
+		report, err = ops.ReplValidateWithOptions(layout, metaPath, replCompareDir, ops.ReplValidateOptions{Deep: opts.replValidateDeep})
 	case "gc-plan":
 		var candidates []meta.Segment
 		report, candidates, err = ops.GCPlan(layout, metaPath, gcMinAge, gcGuardrails)
@@ -325,12 +325,14 @@ func formatReport(report *ops.Report) string {
 		return ""
 	}
 	if report.Mode == "repl-validate" {
-		return fmt.Sprintf("mode=%s local_manifests=%d remote_manifests=%d local_live=%d remote_live=%d errors=%d",
+		return fmt.Sprintf("mode=%s local_manifests=%d remote_manifests=%d local_live=%d remote_live=%d chunks_checked=%d chunks_invalid=%d errors=%d",
 			report.Mode,
 			report.CompareManifestsLocal,
 			report.CompareManifestsRemote,
 			report.CompareLiveLocal,
 			report.CompareLiveRemote,
+			report.CompareChunksChecked,
+			report.CompareChunksInvalid,
 			report.Errors,
 		)
 	}
@@ -435,7 +437,7 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 	case "repl-push":
 		fmt.Println("Mode repl-push: push local oplog to remote.")
 	case "repl-validate":
-		fmt.Println("Mode repl-validate: compare manifests and live versions between data dirs.")
+		fmt.Println("Mode repl-validate: compare manifests and live versions between data dirs; -repl-validate-deep verifies chunk hashes.")
 	case "repl-bootstrap":
 		fmt.Println("Mode repl-bootstrap: download snapshot and catch up oplog.")
 	default:

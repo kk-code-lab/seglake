@@ -58,6 +58,8 @@ type Report struct {
 	CompareVersionsExtra    int             `json:"compare_versions_extra,omitempty"`
 	CompareVersionsLocal    int             `json:"compare_versions_local,omitempty"`
 	CompareVersionsRemote   int             `json:"compare_versions_remote,omitempty"`
+	CompareChunksChecked    int             `json:"compare_chunks_checked,omitempty"`
+	CompareChunksInvalid    int             `json:"compare_chunks_invalid,omitempty"`
 	EncryptedManifests      int             `json:"encrypted_manifests,omitempty"`
 	EncryptedChunks         int             `json:"encrypted_chunks,omitempty"`
 	MissingKEKs             int             `json:"missing_keks,omitempty"`
@@ -99,6 +101,10 @@ type ScrubOptions struct {
 	LiveOnly      bool
 	DeepEncrypted bool
 	SSEProvider   ssecrypto.KeyProvider
+}
+
+type ReplValidateOptions struct {
+	Deep bool
 }
 
 func (r *Report) addWarning(msg string) {

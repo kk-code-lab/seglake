@@ -12,10 +12,9 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Now
-- [integrity][ops][repl] Add repl-validate deep mode (verify chunk hashes) for optional integrity checks.
+- [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 
 ## Next
-- [integrity][repl] Add durable fsync for replication writes (fsync segment file after WriteSegmentRange) and only then mark SEALED in metadata.
 - [api] Add object tagging (Get/Put/DeleteObjectTagging).
 
 ## Later / Research
