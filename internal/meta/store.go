@@ -106,6 +106,12 @@ type BucketEncryptionConfig struct {
 	UpdatedAt string
 }
 
+// ObjectTag describes one key/value tag on an object version.
+type ObjectTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 type oplogPutPayload struct {
 	ETag                   string `json:"etag"`
 	Size                   int64  `json:"size"`
@@ -160,6 +166,14 @@ type oplogBucketEncryptionPayload struct {
 	Algorithm string `json:"algorithm"`
 	KeyID     string `json:"key_id,omitempty"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+type oplogObjectTagsPayload struct {
+	Bucket    string      `json:"bucket"`
+	Key       string      `json:"key"`
+	VersionID string      `json:"version_id"`
+	Tags      []ObjectTag `json:"tags,omitempty"`
+	UpdatedAt string      `json:"updated_at"`
 }
 
 type oplogAPIKeyPayload struct {
@@ -625,6 +639,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 23 {
+		if err = applyV23(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(23, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -1025,6 +1047,25 @@ func applyV22(ctx context.Context, tx *sql.Tx) error {
 			return nil
 		}
 		return err
+	}
+	return nil
+}
+
+func applyV23(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS object_tags (
+			version_id TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY(version_id, key),
+			FOREIGN KEY(version_id) REFERENCES versions(version_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS object_tags_version_idx ON object_tags(version_id)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2263,6 +2304,146 @@ ON CONFLICT(version_id) DO UPDATE SET path=excluded.path`, versionID, manifestPa
 	return err
 }
 
+// GetObjectTags returns tags for an object version ordered by key.
+func (s *Store) GetObjectTags(ctx context.Context, versionID string) ([]ObjectTag, error) {
+	if versionID == "" {
+		return nil, fmt.Errorf("meta: version id required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT key, value
+FROM object_tags
+WHERE version_id=?
+ORDER BY key`, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ObjectTag
+	for rows.Next() {
+		var tag ObjectTag
+		if err := rows.Scan(&tag.Key, &tag.Value); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
+// CountObjectTags returns the number of tags for an object version.
+func (s *Store) CountObjectTags(ctx context.Context, versionID string) (int, error) {
+	if versionID == "" {
+		return 0, fmt.Errorf("meta: version id required")
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_tags WHERE version_id=?", versionID).Scan(&count)
+	return count, err
+}
+
+// SetObjectTags replaces the complete tag set for an object version.
+func (s *Store) SetObjectTags(ctx context.Context, bucket, key, versionID string, tags []ObjectTag) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = s.SetObjectTagsTx(ctx, tx, bucket, key, versionID, tags); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetObjectTagsTx replaces the complete tag set for an object version within tx.
+func (s *Store) SetObjectTagsTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID string, tags []ObjectTag) error {
+	if tx == nil {
+		return fmt.Errorf("meta: transaction required")
+	}
+	if bucket == "" || key == "" || versionID == "" {
+		return fmt.Errorf("meta: bucket, key, and version id required")
+	}
+	if err := replaceObjectTagsTx(ctx, tx, versionID, tags); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogObjectTagsPayload{
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		Tags:      tags,
+		UpdatedAt: s.now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	return s.recordOplogTx(tx, hlcTS, "object_tags_set", bucket, key, versionID, string(payload))
+}
+
+// DeleteObjectTags clears all tags for an object version.
+func (s *Store) DeleteObjectTags(ctx context.Context, bucket, key, versionID string) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = s.DeleteObjectTagsTx(ctx, tx, bucket, key, versionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteObjectTagsTx clears all tags for an object version within tx.
+func (s *Store) DeleteObjectTagsTx(ctx context.Context, tx *sql.Tx, bucket, key, versionID string) error {
+	if tx == nil {
+		return fmt.Errorf("meta: transaction required")
+	}
+	if bucket == "" || key == "" || versionID == "" {
+		return fmt.Errorf("meta: bucket, key, and version id required")
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM object_tags WHERE version_id=?", versionID); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogObjectTagsPayload{
+		Bucket:    bucket,
+		Key:       key,
+		VersionID: versionID,
+		UpdatedAt: s.now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	return s.recordOplogTx(tx, hlcTS, "object_tags_delete", bucket, key, versionID, string(payload))
+}
+
+func replaceObjectTagsTx(ctx context.Context, tx *sql.Tx, versionID string, tags []ObjectTag) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM object_tags WHERE version_id=?", versionID); err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO object_tags(version_id, key, value)
+VALUES(?, ?, ?)`, versionID, tag.Key, tag.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CountObjectTagRows returns aggregate tag diagnostics without exposing values.
+func (s *Store) CountObjectTagRows(ctx context.Context) (versions int64, rows int64, err error) {
+	if err = s.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT version_id), COUNT(*) FROM object_tags").Scan(&versions, &rows); err != nil {
+		return 0, 0, err
+	}
+	return versions, rows, nil
+}
+
 func (s *Store) recordOplogTx(tx *sql.Tx, hlcTS, opType, bucket, key, versionID, payload string) error {
 	siteID := s.siteID
 	if siteID == "" {
@@ -2745,6 +2926,33 @@ ON CONFLICT(bucket) DO UPDATE SET mode=excluded.mode, algorithm=excluded.algorit
 				}
 				_, err := tx.Exec(`DELETE FROM bucket_encryption WHERE bucket=?`, entry.Bucket)
 				if err != nil {
+					return err
+				}
+			case "object_tags_set":
+				if entry.VersionID == "" {
+					return fmt.Errorf("meta: object_tags_set entry requires version id")
+				}
+				var payload oplogObjectTagsPayload
+				if entry.Payload == "" {
+					return fmt.Errorf("meta: object_tags_set payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.VersionID == "" {
+					payload.VersionID = entry.VersionID
+				}
+				if payload.VersionID != entry.VersionID {
+					return fmt.Errorf("meta: object_tags_set version mismatch")
+				}
+				if err := replaceObjectTagsTx(ctx, tx, entry.VersionID, payload.Tags); err != nil {
+					return err
+				}
+			case "object_tags_delete":
+				if entry.VersionID == "" {
+					return fmt.Errorf("meta: object_tags_delete entry requires version id")
+				}
+				if _, err := tx.Exec(`DELETE FROM object_tags WHERE version_id=?`, entry.VersionID); err != nil {
 					return err
 				}
 			case "api_key":

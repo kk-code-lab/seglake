@@ -14,7 +14,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - **hard durability contract**: fsync segments + WAL commit before an object is visible,
 - **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, conflict listings, GC plan/run, GC rewrite (gc-rewrite + plan/run), manifest GC (plan/run), SSE-S3 KEK rewrap (plan/run),
 - repl-validate (consistency comparison between nodes, with optional deep chunk-hash validation),
-- **S3 API**: PUT/GET/HEAD (with `versionId`), LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
+- **S3 API**: PUT/GET/HEAD (with `versionId`), object tagging, LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
 - **SSE-S3 / SSE-KMS-compatible API**: explicit `AES256` or `aws:kms` object writes plus bucket default encryption with local KEKs or Vault Transit behind an internal key-provider interface and envelope encryption. The `aws:kms` mode is an S3-compatible API surface over configured provider key IDs, not AWS KMS network integration.
 - **Server ops**: configurable HTTP timeouts + graceful shutdown; replay protection cache has bounded size.
@@ -60,7 +60,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 
 ### 2.2 Metadata
 - SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) on flush.
-- Tables: schema_migrations, buckets, versions, objects_current, manifests, segments, api_keys,
+- Tables: schema_migrations, buckets, versions, objects_current, object_tags, manifests, segments, api_keys,
   api_key_bucket_allow, bucket_policies, bucket_encryption, multipart_uploads (content_type), multipart_parts,
   rebuild_state, ops_runs, oplog, repl_state, repl_state_remote, repl_metrics.
 
@@ -72,6 +72,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - SigV2 **not supported**.
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
+- Object tagging: `GET/PUT/DELETE ?tagging` stores up to 10 key/value tags per object version. `x-amz-tagging` is supported on PutObject, and CopyObject supports `x-amz-tagging-directive` values `COPY` and `REPLACE`. GET/HEAD return `x-amz-tagging-count` only when the request is authorized for tag reads.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
 - Server-side encryption: explicit `x-amz-server-side-encryption: AES256` stores SSE-S3 objects, and explicit `x-amz-server-side-encryption: aws:kms` stores SSE-KMS-labeled objects using the same envelope encryption path. `x-amz-server-side-encryption-aws-kms-key-id` maps directly to a configured provider key ID; if omitted, writes resolve the bucket default KMS key ID and then the active provider key. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for `AES256` and `aws:kms` with optional `KMSMasterKeyID`. Explicit request headers override bucket defaults. GET/HEAD return `AES256` or `aws:kms` plus the resolved KMS key ID according to object metadata. SSE-C, DSSE-KMS, KMS encryption context, S3 Bucket Keys, and AWS KMS network/policy/grant semantics are unsupported.
 
@@ -120,6 +121,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `versions` stores etag (MD5), size, content_type, last_modified_utc, state, and optional encryption summary fields.
   - state can be `ACTIVE`, `DELETED`, `DAMAGED`, or `CONFLICT` (kept when replication loses LWW).
 - `segments` stores state, size, footer checksum.
+- `object_tags` stores S3 object tags per version ID. Tags are metadata only and do not affect manifests, ETags, object bytes, GC, or scrub.
 - Multipart: `multipart_uploads`, `multipart_parts`.
 
 ### 3.6 Durability / barrier
@@ -192,7 +194,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - DB keys (`api_keys`) support `rw`/`ro` policy plus bucket allow-list.
 - Bucket allow-list: if an access key has one or more allowed buckets, `ListBuckets` returns only those buckets; if the allow-list is empty, `ListBuckets` returns all buckets (subject to policy).
 - Policies are enforced for all operations, including `list_buckets` and `meta`.
-- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, ListBucketVersions, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketVersioning, PutBucketVersioning, GetObject, HeadObject, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport, require_sse_s3, require_encryption). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
+- Policy format: JSON with `statements` (effect allow/deny, actions: ListBuckets, ListBucket, ListBucketVersions, GetBucketLocation, GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketVersioning, PutBucketVersioning, GetObject, HeadObject, GetObjectTagging, PutObjectTagging, DeleteObjectTagging, PutObject, DeleteObject, DeleteBucket, CopyObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListMultipartUploads, ListMultipartParts, GetMetaStats, GetMetaConflicts, *, resources: bucket + prefix, conditions: source_ip CIDR, before/after RFC3339, headers exact match, prefix, delimiter, secure_transport, require_sse_s3, require_encryption). AWS-style policy JSON is accepted as input and mapped to this format (subset: Effect/Action/Resource, Condition: IpAddress aws:SourceIp, DateGreaterThan/DateLessThan aws:CurrentTime, StringEquals/StringLike s3:prefix, StringEquals s3:delimiter, Bool aws:SecureTransport; other elements are rejected). Note: `GET ?location` maps to `ListBucket` action (not `GetBucketLocation`).
 - Native `require_sse_s3: true` policy conditions require effective SSE-S3 on PutObject, CopyObject destination, and CreateMultipartUpload. Native `require_encryption: true` accepts either effective SSE-S3 or SSE-KMS. Effective encryption is satisfied by an explicit request header or bucket default encryption; plaintext writes fail authorization with `AccessDenied`.
 - Enforcement: deny > allow; bucket policy and identity policy are combined (if neither allows, access denied).
 - `X-Forwarded-For` is used only for trusted proxies (`-trusted-proxies`).
@@ -266,9 +268,9 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `status` — count of manifests and segments.
 - `fsck` — consistency of manifests and segment boundaries.
 - `scrub` — verify stored chunk hashes; damaged -> `DAMAGED`. With `-scrub-deep-encrypted`, SSE encrypted chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced local KEKs or Vault provider access.
-- `rebuild-index` — rebuild meta from manifests.
+- `rebuild-index` — rebuild meta from manifests. Object tags are SQLite-only metadata and are not reconstructable from manifests in this MVP.
 - `snapshot` — copy meta.db(+wal/shm) + report.
-- `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics.
+- `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics + aggregate object-tag counts.
 - `buckets` — manage bucket entries (admin; bypasses S3 API).
 - `repl-validate` — compare manifests and versions (live + all versions) between two data dirs. With `-repl-validate-deep`, also verify that referenced chunk bytes exist and match manifest hashes on both sides.
 - `db-integrity-check` — run SQLite integrity_check on meta.db.

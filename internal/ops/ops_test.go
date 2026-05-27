@@ -162,6 +162,41 @@ func TestSupportBundleWritesRedactedSSEDiagnostics(t *testing.T) {
 	}
 }
 
+func TestSupportBundleWritesObjectTagCountsOnly(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, "", ""); err != nil {
+		_ = store.Close()
+		t.Fatalf("RecordPut: %v", err)
+	}
+	if err := store.SetObjectTags(context.Background(), "bucket", "key", "v1", []meta.ObjectTag{{Key: "secret-project", Value: "alpha"}}); err != nil {
+		_ = store.Close()
+		t.Fatalf("SetObjectTags: %v", err)
+	}
+	_ = store.Close()
+
+	layout := fs.NewLayout(filepath.Join(dir, "objects"))
+	outDir := filepath.Join(dir, "bundle")
+	if _, err := SupportBundle(layout, metaPath, outDir); err != nil {
+		t.Fatalf("SupportBundle: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(outDir, "object-tags.json"))
+	if err != nil {
+		t.Fatalf("read object-tags.json: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "tagged_versions") || !strings.Contains(text, "tag_rows") {
+		t.Fatalf("expected aggregate tag counts, got %s", text)
+	}
+	if strings.Contains(text, "secret-project") || strings.Contains(text, "alpha") {
+		t.Fatalf("support bundle leaked tag values: %s", text)
+	}
+}
+
 func TestFsckReportsInvalidFooter(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))

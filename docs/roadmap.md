@@ -11,9 +11,6 @@ Tag legend (order used below):
 - [repl] Replication and conflict handling
 - [research] Exploratory or validation work
 
-## Now
-- [api] Add object tagging (Get/Put/DeleteObjectTagging).
-
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
 - [perf][research] Evaluate variant C further under higher concurrency and on production-like hardware.

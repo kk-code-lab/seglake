@@ -25,7 +25,7 @@ If you need a transparent, robust S3 backend for local/edge/on‑prem setups, Se
 
 ## Key features
 
-- S3 API: PUT/GET/HEAD, ListObjects V1/V2, ListBuckets, Range GET (single and multi‑range)
+- S3 API: PUT/GET/HEAD, object tagging, ListObjects V1/V2, ListBuckets, Range GET (single and multi‑range)
 - SigV4 + presigned URL (SigV2 not supported)
 - SigV4 streaming uploads (`Content-Encoding: aws-chunked`) with chunk/trailer validation
 - aws-chunked parser fuzz tests (SigV4 streaming)

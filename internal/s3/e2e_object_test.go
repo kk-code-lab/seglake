@@ -90,6 +90,102 @@ func TestS3E2ERangeGet(t *testing.T) {
 	}
 }
 
+func TestS3E2EObjectTagging(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	defer store.Close()
+
+	eng, err := engine.New(engine.Options{
+		Layout:    fs.NewLayout(filepath.Join(dir, "objects")),
+		MetaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	handler := &Handler{
+		Engine: eng,
+		Meta:   store,
+		Auth: &AuthConfig{
+			AccessKey:            "test",
+			SecretKey:            "testsecret",
+			Region:               "us-east-1",
+			AllowUnsignedPayload: true,
+			MaxSkew:              5 * time.Minute,
+		},
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	objectURL := server.URL + "/bucket/tagged"
+	putReq, err := http.NewRequest(http.MethodPut, objectURL, strings.NewReader("data"))
+	if err != nil {
+		t.Fatalf("NewRequest PUT: %v", err)
+	}
+	putReq.Header.Set("x-amz-tagging", "project=alpha&env=dev")
+	signRequest(putReq, "test", "testsecret", "us-east-1")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT error: %v", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status: %d", putResp.StatusCode)
+	}
+
+	taggingURL := objectURL + "?tagging"
+	getReq, err := http.NewRequest(http.MethodGet, taggingURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest GET tagging: %v", err)
+	}
+	signRequest(getReq, "test", "testsecret", "us-east-1")
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET tagging error: %v", err)
+	}
+	body, err := io.ReadAll(getResp.Body)
+	getResp.Body.Close()
+	if err != nil {
+		t.Fatalf("ReadAll GET tagging: %v", err)
+	}
+	if getResp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<Key>project</Key>") {
+		t.Fatalf("GET tagging status=%d body=%s", getResp.StatusCode, string(body))
+	}
+
+	replaceBody := `<Tagging><TagSet><Tag><Key>project</Key><Value>beta</Value></Tag></TagSet></Tagging>`
+	putTagsReq, err := http.NewRequest(http.MethodPut, taggingURL, strings.NewReader(replaceBody))
+	if err != nil {
+		t.Fatalf("NewRequest PUT tagging: %v", err)
+	}
+	signRequest(putTagsReq, "test", "testsecret", "us-east-1")
+	putTagsResp, err := http.DefaultClient.Do(putTagsReq)
+	if err != nil {
+		t.Fatalf("PUT tagging error: %v", err)
+	}
+	putTagsResp.Body.Close()
+	if putTagsResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT tagging status: %d", putTagsResp.StatusCode)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, taggingURL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest DELETE tagging: %v", err)
+	}
+	signRequest(delReq, "test", "testsecret", "us-east-1")
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE tagging error: %v", err)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE tagging status: %d", delResp.StatusCode)
+	}
+}
+
 func TestS3E2ESignedHeadersRange(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

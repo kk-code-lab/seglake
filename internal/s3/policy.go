@@ -72,6 +72,9 @@ const (
 	policyActionDeleteBucketEncryption = "deletebucketencryption"
 	policyActionGetObject              = "getobject"
 	policyActionHeadObject             = "headobject"
+	policyActionGetObjectTagging       = "getobjecttagging"
+	policyActionPutObjectTagging       = "putobjecttagging"
+	policyActionDeleteObjectTagging    = "deleteobjecttagging"
 	policyActionPutObject              = "putobject"
 	policyActionDeleteObject           = "deleteobject"
 	policyActionDeleteBucket           = "deletebucket"
@@ -105,6 +108,9 @@ var validPolicyActions = map[string]struct{}{
 	policyActionDeleteBucketEncryption: {},
 	policyActionGetObject:              {},
 	policyActionHeadObject:             {},
+	policyActionGetObjectTagging:       {},
+	policyActionPutObjectTagging:       {},
+	policyActionDeleteObjectTagging:    {},
 	policyActionPutObject:              {},
 	policyActionDeleteObject:           {},
 	policyActionDeleteBucket:           {},
@@ -547,6 +553,12 @@ func policyActionForRequest(op string) string {
 		return policyActionPutBucketEncryption
 	case "delete_bucket_encryption":
 		return policyActionDeleteBucketEncryption
+	case "get_object_tagging":
+		return policyActionGetObjectTagging
+	case "put_object_tagging":
+		return policyActionPutObjectTagging
+	case "delete_object_tagging":
+		return policyActionDeleteObjectTagging
 	case "list_v1", "list_v2":
 		return policyActionListBucket
 	case "list_versions":

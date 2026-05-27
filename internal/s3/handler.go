@@ -516,6 +516,33 @@ func (h *Handler) handleObjectRequests(ctx context.Context, w http.ResponseWrite
 		{
 			method: http.MethodPut,
 			match: func(r *http.Request) bool {
+				return r.URL.Query().Has("tagging")
+			},
+			handler: func() {
+				h.handlePutObjectTagging(ctx, w, r, bucket, key, requestID)
+			},
+		},
+		{
+			method: http.MethodGet,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Has("tagging")
+			},
+			handler: func() {
+				h.handleGetObjectTagging(ctx, w, r, bucket, key, requestID)
+			},
+		},
+		{
+			method: http.MethodDelete,
+			match: func(r *http.Request) bool {
+				return r.URL.Query().Has("tagging")
+			},
+			handler: func() {
+				h.handleDeleteObjectTagging(ctx, w, r, bucket, key, requestID)
+			},
+		},
+		{
+			method: http.MethodPut,
+			match: func(r *http.Request) bool {
 				return r.Header.Get("X-Amz-Copy-Source") != ""
 			},
 			handler: func() {
@@ -982,6 +1009,69 @@ func (h *Handler) authorizeUnsignedRequest(ctx context.Context, r *http.Request)
 	return r, nil
 }
 
+func (h *Handler) authorizedForObjectTaggingRead(ctx context.Context, r *http.Request, bucket, keyName string) bool {
+	if h == nil || h.Meta == nil || r == nil || bucket == "" {
+		return false
+	}
+	action := policyActionGetObjectTagging
+	accessKey := extractAccessKey(r)
+	if accessKey == "" {
+		if h.Auth == nil {
+			return true
+		}
+		if h.Auth.AccessKey == "" && h.Auth.SecretKey == "" {
+			hasKeys, err := h.Meta.HasAPIKeys(ctx)
+			if err == nil && !hasKeys {
+				return true
+			}
+		}
+		if !h.isPublicBucket(bucket) {
+			return false
+		}
+		bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket)
+		if err != nil || strings.TrimSpace(bucketPolicy) == "" {
+			return false
+		}
+		pol, err := ParsePolicy(bucketPolicy)
+		if err != nil {
+			return false
+		}
+		allowed, denied := pol.DecisionWithContext(action, bucket, keyName, h.policyContextFromRequest(r))
+		return allowed && !denied
+	}
+	hasKeys, err := h.Meta.HasAPIKeys(ctx)
+	if err != nil {
+		return false
+	}
+	key, err := h.Meta.GetAPIKey(ctx, accessKey)
+	if err != nil {
+		return !hasKeys
+	}
+	if !key.Enabled {
+		return false
+	}
+	if allowed, err := h.Meta.IsBucketAllowed(ctx, accessKey, bucket); err != nil || !allowed {
+		return false
+	}
+	reqCtx := h.policyContextFromRequest(r)
+	identityAllowed := false
+	identityDenied := false
+	if pol, err := ParsePolicy(key.Policy); err == nil {
+		identityAllowed, identityDenied = pol.DecisionWithContext(action, bucket, keyName, reqCtx)
+	}
+	bucketAllowed := false
+	bucketDenied := false
+	if bucketPolicy, err := h.Meta.GetBucketPolicy(ctx, bucket); err == nil && strings.TrimSpace(bucketPolicy) != "" {
+		if bpol, err := ParsePolicy(bucketPolicy); err == nil {
+			bucketAllowed, bucketDenied = bpol.DecisionWithContext(action, bucket, keyName, reqCtx)
+		}
+	}
+	if identityDenied || bucketDenied {
+		return false
+	}
+	return identityAllowed || bucketAllowed
+}
+
 func (h *Handler) publicBucketForRequest(r *http.Request) (string, bool) {
 	if h == nil || r == nil {
 		return "", false
@@ -1180,6 +1270,14 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 	if verifyPayload || len(expectedMD5) > 0 {
 		reader = newValidatingReader(reader, payloadHash, verifyPayload, expectedMD5)
 	}
+	var objectTags []meta.ObjectTag
+	if rawTags := r.Header.Get("x-amz-tagging"); strings.TrimSpace(rawTags) != "" {
+		objectTags, err = parseTaggingHeader(rawTags)
+		if err != nil {
+			writeErrorWithResource(w, http.StatusBadRequest, "InvalidTag", "invalid object tags", requestID, r.URL.Path)
+			return
+		}
+	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	encrypt, reqErr := h.effectiveEncryptionForWriteCached(ctx, r, bucket)
 	if reqErr != nil {
@@ -1192,12 +1290,18 @@ func (h *Handler) handlePut(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 	var result *engine.PutResult
+	extraCommit := func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+		if len(objectTags) == 0 {
+			return nil
+		}
+		return h.Meta.SetObjectTagsTx(ctx, tx, bucket, key, result.VersionID, objectTags)
+	}
 	if encrypt.SSES3() {
-		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+		_, result, err = h.Engine.PutObjectSSES3WithCommit(ctx, bucket, key, contentType, reader, extraCommit)
 	} else if encrypt.SSEKMS() {
-		_, result, err = h.Engine.PutObjectSSEKMS(ctx, bucket, key, contentType, reader, encrypt.KeyID)
+		_, result, err = h.Engine.PutObjectSSEKMSWithCommit(ctx, bucket, key, contentType, reader, encrypt.KeyID, extraCommit)
 	} else {
-		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+		_, result, err = h.Engine.PutObjectWithCommit(ctx, bucket, key, contentType, reader, extraCommit)
 	}
 	if err != nil {
 		if writeObjectWriteError(w, err, requestID, r.URL.Path) {
@@ -1269,6 +1373,11 @@ func (h *Handler) handleGet(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if versionID, ok := versionIDHeaderForMeta(versioningState, objMeta); ok {
 		w.Header().Set("x-amz-version-id", versionID)
+	}
+	if h.authorizedForObjectTaggingRead(ctx, r, bucket, key) {
+		if count, err := h.Meta.CountObjectTags(ctx, objMeta.VersionID); err == nil && count > 0 {
+			w.Header().Set("x-amz-tagging-count", intToString(int64(count)))
+		}
 	}
 	if objMeta.ContentType != "" {
 		w.Header().Set("Content-Type", objMeta.ContentType)
@@ -1404,6 +1513,15 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 		writeErrorWithResource(w, http.StatusInternalServerError, "InternalError", "object damaged", requestID, r.URL.Path)
 		return
 	}
+	copyTags, applyTags, err := copyObjectTagsForDirective(ctx, h.Meta, srcMeta.VersionID, r.Header.Get("x-amz-tagging-directive"), r.Header.Get("x-amz-tagging"))
+	if err != nil {
+		code := "InvalidTag"
+		if strings.Contains(err.Error(), "tagging directive") {
+			code = "InvalidArgument"
+		}
+		writeErrorWithResource(w, http.StatusBadRequest, code, err.Error(), requestID, r.URL.Path)
+		return
+	}
 	reader, _, err := h.Engine.Get(ctx, srcMeta.VersionID)
 	if err != nil {
 		if writeSSEProviderError(w, err, requestID, r.URL.Path) {
@@ -1426,12 +1544,18 @@ func (h *Handler) handleCopyObject(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	var result *engine.PutResult
+	extraCommit := func(tx *sql.Tx, result *engine.PutResult, manifestPath string) error {
+		if !applyTags {
+			return nil
+		}
+		return h.Meta.SetObjectTagsTx(ctx, tx, bucket, key, result.VersionID, copyTags)
+	}
 	if encrypt.SSES3() {
-		_, result, err = h.Engine.PutObjectSSES3(ctx, bucket, key, contentType, reader)
+		_, result, err = h.Engine.PutObjectSSES3WithCommit(ctx, bucket, key, contentType, reader, extraCommit)
 	} else if encrypt.SSEKMS() {
-		_, result, err = h.Engine.PutObjectSSEKMS(ctx, bucket, key, contentType, reader, encrypt.KeyID)
+		_, result, err = h.Engine.PutObjectSSEKMSWithCommit(ctx, bucket, key, contentType, reader, encrypt.KeyID, extraCommit)
 	} else {
-		_, result, err = h.Engine.PutObject(ctx, bucket, key, contentType, reader)
+		_, result, err = h.Engine.PutObjectWithCommit(ctx, bucket, key, contentType, reader, extraCommit)
 	}
 	if err != nil {
 		if writeObjectWriteError(w, err, requestID, r.URL.Path) {
@@ -1722,7 +1846,7 @@ func (h *Handler) corsAllowHeaders() string {
 	if len(h.CORSAllowHeaders) > 0 {
 		return strings.Join(h.CORSAllowHeaders, ", ")
 	}
-	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption, x-amz-server-side-encryption-aws-kms-key-id"
+	return "authorization, content-md5, content-type, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption, x-amz-server-side-encryption-aws-kms-key-id, x-amz-tagging, x-amz-tagging-directive"
 }
 
 func (h *Handler) corsMaxAge() int {
@@ -1947,6 +2071,19 @@ func (h *Handler) opForRequest(r *http.Request) string {
 			}
 		}
 	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Has("tagging") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if h.hostBucket(r) != "" || strings.Contains(path, "/") {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_object_tagging"
+			case http.MethodPut:
+				return "put_object_tagging"
+			case http.MethodDelete:
+				return "delete_object_tagging"
+			}
+		}
+	}
 	if r.Method == http.MethodGet && r.URL.Query().Has("versions") {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path != "" && !strings.Contains(path, "/") {
@@ -2010,6 +2147,7 @@ func (h *Handler) opForRequest(r *http.Request) string {
 func isWriteOp(op string) bool {
 	switch op {
 	case "put", "delete", "delete_bucket", "copy",
+		"put_object_tagging", "delete_object_tagging",
 		"put_bucket_policy", "delete_bucket_policy", "put_bucket_versioning",
 		"put_bucket_encryption", "delete_bucket_encryption",
 		"mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort",

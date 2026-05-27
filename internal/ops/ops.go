@@ -536,6 +536,12 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 			if sseDiagnostics, err := store.GetSSEDiagnostics(context.Background()); err == nil {
 				_ = writeJSON(filepath.Join(outDir, "sse-diagnostics.json"), sseDiagnostics)
 			}
+			if versions, rows, err := store.CountObjectTagRows(context.Background()); err == nil {
+				_ = writeJSON(filepath.Join(outDir, "object-tags.json"), map[string]any{
+					"tagged_versions": versions,
+					"tag_rows":        rows,
+				})
+			}
 			_ = store.Close()
 		}
 	}

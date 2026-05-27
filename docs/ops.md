@@ -257,7 +257,7 @@ SSE-S3 KEK rewrap rotates EDEKs without rewriting segment ciphertext. Build a re
 
 The plan contains version IDs, bucket/key names, manifest paths, key refs, key IDs, and short EDEK fingerprints only. It does not contain DEKs, KEKs, Vault tokens, or raw EDEKs. By default, all encrypted key entries not already wrapped by the target key are selected; use repeatable `-sse-s3-rewrap-source-key <key-id>` to limit the source keys. `sse-rewrap-run` is local-only and does not route through the admin socket so provider credentials are not sent to the running server process. Peers must have the target local KEK or Vault provider access before they can read rewrapped encrypted objects after replication.
 
-Support bundles include `sse-diagnostics.json`, a shallow metadata-only SSE summary with plaintext/encrypted active version counts, damaged encrypted version counts, mode and algorithm counts, key ID counts, and short EDEK fingerprint prefix counts. This file is safe to generate without local KEKs or Vault access: it does not decrypt manifests and does not include KEKs, DEKs, raw EDEKs, Vault tokens, wrap nonces, nonce prefixes, or provider secret material.
+Support bundles include `sse-diagnostics.json`, a shallow metadata-only SSE summary with plaintext/encrypted active version counts, damaged encrypted version counts, mode and algorithm counts, key ID counts, and short EDEK fingerprint prefix counts. This file is safe to generate without local KEKs or Vault access: it does not decrypt manifests and does not include KEKs, DEKs, raw EDEKs, Vault tokens, wrap nonces, nonce prefixes, or provider secret material. They also include `object-tags.json`, which contains only aggregate tag counts (`tagged_versions`, `tag_rows`) and never dumps tag keys or values.
 
 Use `docs/sse-readiness.md` as the release-readiness checklist for validating the full SSE stack before cutting or promoting builds that rely on SSE-S3, SSE-KMS-compatible API behavior, Vault Transit, rewrap, deep scrub, manifest GC, replication, or redacted diagnostics.
 
@@ -283,6 +283,25 @@ Manifest GC removes orphan manifest files left by operations such as SSE-S3 KEK 
 ```
 
 `manifest-gc-plan` treats current object manifests and active MPU part manifests as live. A run rechecks that each planned file is still orphaned and that size, mtime, and SHA-256 fingerprint still match before deleting it. Missing or changed planned files are skipped, not removed.
+
+Object tagging uses the S3 tagging subresource and stores tags per object version:
+```
+aws s3api put-object --bucket demo --key a.txt --body a.txt \
+  --tagging 'project=alpha&env=dev' \
+  --endpoint-url http://localhost:9000
+
+aws s3api get-object-tagging --bucket demo --key a.txt \
+  --endpoint-url http://localhost:9000
+
+aws s3api put-object-tagging --bucket demo --key a.txt \
+  --tagging 'TagSet=[{Key=project,Value=beta}]' \
+  --endpoint-url http://localhost:9000
+
+aws s3api delete-object-tagging --bucket demo --key a.txt \
+  --endpoint-url http://localhost:9000
+```
+
+CopyObject preserves source tags by default (`x-amz-tagging-directive: COPY`) and replaces them when `x-amz-tagging-directive: REPLACE` is used with `x-amz-tagging`. Tags are SQLite metadata, not manifest content; `rebuild-index` from manifests alone cannot reconstruct tag rows.
 
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
