@@ -61,7 +61,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 ### 2.2 Metadata
 - SQLite WAL + synchronous=FULL + wal_checkpoint(TRUNCATE) on flush.
 - Tables: schema_migrations, buckets, versions, objects_current, object_tags, manifests, segments, api_keys,
-  api_key_bucket_allow, bucket_policies, bucket_encryption, multipart_uploads (content_type), multipart_parts,
+  api_key_bucket_allow, bucket_policies, bucket_encryption, bucket_lifecycle, multipart_uploads (content_type), multipart_parts,
   rebuild_state, ops_runs, oplog, repl_state, repl_state_remote, repl_metrics.
 
 ### 2.3 S3 API
@@ -73,6 +73,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - Object tagging: `GET/PUT/DELETE ?tagging` stores up to 10 key/value tags per object version. `x-amz-tagging` is supported on PutObject, and CopyObject supports `x-amz-tagging-directive` values `COPY` and `REPLACE`. GET/HEAD return `x-amz-tagging-count` only when the request is authorized for tag reads.
+- Bucket lifecycle configuration: `GET/PUT/DELETE ?lifecycle` stores AWS-compatible bucket lifecycle XML in metadata and replicates config changes. MVP supports prefix/tag/And filters, current expiration, noncurrent expiration, and abort incomplete MPU configuration. Lifecycle execution is ops plan/run work and is not automatic yet.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
 - Server-side encryption: explicit `x-amz-server-side-encryption: AES256` stores SSE-S3 objects, and explicit `x-amz-server-side-encryption: aws:kms` stores SSE-KMS-labeled objects using the same envelope encryption path. `x-amz-server-side-encryption-aws-kms-key-id` maps directly to a configured provider key ID; if omitted, writes resolve the bucket default KMS key ID and then the active provider key. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for `AES256` and `aws:kms` with optional `KMSMasterKeyID`. Explicit request headers override bucket defaults. GET/HEAD return `AES256` or `aws:kms` plus the resolved KMS key ID according to object metadata. SSE-C, DSSE-KMS, KMS encryption context, S3 Bucket Keys, and AWS KMS network/policy/grant semantics are unsupported.
 
@@ -157,6 +158,9 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `DELETE /<bucket>?policy` — DeleteBucketPolicy.
 - `GET /<bucket>?versioning` — GetBucketVersioning.
 - `PUT /<bucket>?versioning` — PutBucketVersioning.
+- `GET /<bucket>?lifecycle` — GetBucketLifecycleConfiguration.
+- `PUT /<bucket>?lifecycle` — PutBucketLifecycleConfiguration.
+- `DELETE /<bucket>?lifecycle` — DeleteBucketLifecycle.
 - `PUT /<bucket>` — CreateBucket (idempotent).
   - Nonstandard: `x-seglake-versioning: unversioned|enabled` sets the initial bucket versioning state (default: `enabled`).
 - `PUT /<bucket>/<key>` — PUT object.
@@ -248,6 +252,14 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `DELETE` without `versionId` creates a delete marker as the latest version.
 - `GET`/`HEAD` without `versionId` returns 404 when the latest version is a delete marker.
 - Responses include `x-amz-delete-marker: true` and `x-amz-version-id` for delete markers.
+
+### 4.7.1 Bucket lifecycle configuration
+- `PUT /<bucket>?lifecycle` accepts XML `LifecycleConfiguration` with 1..1000 rules and stores the original XML plus normalized metadata/fingerprint for future lifecycle planning.
+- Supported rule fields: `ID`, `Status`, `Filter` (`Prefix`, `Tag`, `And`), `Expiration` (`Days` or `Date`), `NoncurrentVersionExpiration` (`NoncurrentDays`), and `AbortIncompleteMultipartUpload` (`DaysAfterInitiation`).
+- Unsupported lifecycle features such as transitions, noncurrent transitions, `ExpiredObjectDeleteMarker`, object-size filters, and storage class settings return `NotImplemented`.
+- `AbortIncompleteMultipartUpload` with tag filters returns `InvalidArgument`; prefix-only and unfiltered MPU abort rules are accepted.
+- `GET /<bucket>?lifecycle` returns the stored XML; missing config returns `NoSuchLifecycleConfiguration`.
+- `DELETE /<bucket>?lifecycle` clears the stored config. Lifecycle config changes replicate through oplog; no object data transfer is required.
 
 ### 4.8 Conflict visibility (MVP)
 - If current version state is `CONFLICT`, GET/HEAD include `x-seglake-conflict: true`.

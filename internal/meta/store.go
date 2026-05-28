@@ -106,6 +106,16 @@ type BucketEncryptionConfig struct {
 	UpdatedAt string
 }
 
+// BucketLifecycleConfig describes a bucket-level lifecycle configuration.
+type BucketLifecycleConfig struct {
+	Bucket            string
+	XML               string
+	NormalizedJSON    string
+	ConfigFingerprint string
+	RuleIDs           string
+	UpdatedAt         string
+}
+
 // ObjectTag describes one key/value tag on an object version.
 type ObjectTag struct {
 	Key   string `json:"key"`
@@ -166,6 +176,15 @@ type oplogBucketEncryptionPayload struct {
 	Algorithm string `json:"algorithm"`
 	KeyID     string `json:"key_id,omitempty"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+type oplogBucketLifecyclePayload struct {
+	Bucket            string `json:"bucket"`
+	XML               string `json:"xml"`
+	NormalizedJSON    string `json:"normalized_json"`
+	ConfigFingerprint string `json:"config_fingerprint"`
+	RuleIDs           string `json:"rule_ids"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 type oplogObjectTagsPayload struct {
@@ -647,6 +666,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if version < 24 {
+		if err = applyV24(ctx, tx); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(24, ?)", s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -1061,6 +1088,26 @@ func applyV23(ctx context.Context, tx *sql.Tx) error {
 			FOREIGN KEY(version_id) REFERENCES versions(version_id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS object_tags_version_idx ON object_tags(version_id)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyV24(ctx context.Context, tx *sql.Tx) error {
+	ddl := []string{
+		`CREATE TABLE IF NOT EXISTS bucket_lifecycle (
+			bucket TEXT PRIMARY KEY,
+			xml TEXT NOT NULL,
+			normalized_json TEXT NOT NULL,
+			config_fingerprint TEXT NOT NULL,
+			rule_ids TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS bucket_lifecycle_fingerprint_idx ON bucket_lifecycle(config_fingerprint)`,
 	}
 	for _, stmt := range ddl {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -1882,6 +1929,125 @@ func (s *Store) DeleteBucketEncryption(ctx context.Context, bucket string) (err 
 	}
 	hlcTS, _ := s.nextHLC()
 	if err := s.recordOplogTx(tx, hlcTS, "bucket_encryption_delete", bucket, bucket, "", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetBucketLifecycle sets or replaces a bucket lifecycle configuration.
+func (s *Store) SetBucketLifecycle(ctx context.Context, cfg BucketLifecycleConfig) (err error) {
+	cfg.Bucket = strings.TrimSpace(cfg.Bucket)
+	if cfg.Bucket == "" {
+		return fmt.Errorf("meta: bucket required")
+	}
+	if strings.TrimSpace(cfg.XML) == "" || strings.TrimSpace(cfg.NormalizedJSON) == "" || strings.TrimSpace(cfg.ConfigFingerprint) == "" {
+		return fmt.Errorf("meta: invalid bucket lifecycle config")
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var exists string
+	if err = tx.QueryRowContext(ctx, "SELECT bucket FROM buckets WHERE bucket=? LIMIT 1", cfg.Bucket).Scan(&exists); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `
+INSERT INTO bucket_lifecycle(bucket, xml, normalized_json, config_fingerprint, rule_ids, updated_at)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET
+	xml=excluded.xml,
+	normalized_json=excluded.normalized_json,
+	config_fingerprint=excluded.config_fingerprint,
+	rule_ids=excluded.rule_ids,
+	updated_at=excluded.updated_at`, cfg.Bucket, cfg.XML, cfg.NormalizedJSON, cfg.ConfigFingerprint, cfg.RuleIDs, now); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(oplogBucketLifecyclePayload{
+		Bucket:            cfg.Bucket,
+		XML:               cfg.XML,
+		NormalizedJSON:    cfg.NormalizedJSON,
+		ConfigFingerprint: cfg.ConfigFingerprint,
+		RuleIDs:           cfg.RuleIDs,
+		UpdatedAt:         now,
+	})
+	if err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_lifecycle", cfg.Bucket, cfg.Bucket, "", string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetBucketLifecycle returns a bucket lifecycle configuration.
+func (s *Store) GetBucketLifecycle(ctx context.Context, bucket string) (BucketLifecycleConfig, error) {
+	if bucket == "" {
+		return BucketLifecycleConfig{}, errors.New("meta: bucket required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT bucket, xml, normalized_json, config_fingerprint, rule_ids, updated_at
+FROM bucket_lifecycle
+WHERE bucket=?`, bucket)
+	var cfg BucketLifecycleConfig
+	if err := row.Scan(&cfg.Bucket, &cfg.XML, &cfg.NormalizedJSON, &cfg.ConfigFingerprint, &cfg.RuleIDs, &cfg.UpdatedAt); err != nil {
+		return BucketLifecycleConfig{}, err
+	}
+	return cfg, nil
+}
+
+// ListBucketLifecycle returns lifecycle configurations by bucket name.
+func (s *Store) ListBucketLifecycle(ctx context.Context) (map[string]BucketLifecycleConfig, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, xml, normalized_json, config_fingerprint, rule_ids, updated_at
+FROM bucket_lifecycle
+ORDER BY bucket`)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]BucketLifecycleConfig)
+	if err := scanRows(rows, func(scan func(dest ...any) error) error {
+		var cfg BucketLifecycleConfig
+		if err := scan(&cfg.Bucket, &cfg.XML, &cfg.NormalizedJSON, &cfg.ConfigFingerprint, &cfg.RuleIDs, &cfg.UpdatedAt); err != nil {
+			return err
+		}
+		out[cfg.Bucket] = cfg
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteBucketLifecycle removes a bucket lifecycle configuration.
+func (s *Store) DeleteBucketLifecycle(ctx context.Context, bucket string) (err error) {
+	if bucket == "" {
+		return fmt.Errorf("meta: bucket required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var exists string
+	if err = tx.QueryRowContext(ctx, "SELECT bucket FROM buckets WHERE bucket=? LIMIT 1", bucket).Scan(&exists); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM bucket_lifecycle WHERE bucket=?", bucket); err != nil {
+		return err
+	}
+	hlcTS, _ := s.nextHLC()
+	if err := s.recordOplogTx(tx, hlcTS, "bucket_lifecycle_delete", bucket, bucket, "", ""); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2925,6 +3091,41 @@ ON CONFLICT(bucket) DO UPDATE SET mode=excluded.mode, algorithm=excluded.algorit
 					return fmt.Errorf("meta: bucket required")
 				}
 				_, err := tx.Exec(`DELETE FROM bucket_encryption WHERE bucket=?`, entry.Bucket)
+				if err != nil {
+					return err
+				}
+			case "bucket_lifecycle":
+				var payload oplogBucketLifecyclePayload
+				if entry.Payload == "" {
+					return fmt.Errorf("meta: bucket_lifecycle payload required")
+				}
+				if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+					return err
+				}
+				if payload.Bucket == "" {
+					payload.Bucket = entry.Bucket
+				}
+				if payload.Bucket == "" || strings.TrimSpace(payload.XML) == "" || strings.TrimSpace(payload.NormalizedJSON) == "" || strings.TrimSpace(payload.ConfigFingerprint) == "" {
+					return fmt.Errorf("meta: invalid bucket_lifecycle payload")
+				}
+				_, err := tx.Exec(`
+INSERT INTO bucket_lifecycle(bucket, xml, normalized_json, config_fingerprint, rule_ids, updated_at)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(bucket) DO UPDATE SET
+	xml=excluded.xml,
+	normalized_json=excluded.normalized_json,
+	config_fingerprint=excluded.config_fingerprint,
+	rule_ids=excluded.rule_ids,
+	updated_at=excluded.updated_at`,
+					payload.Bucket, payload.XML, payload.NormalizedJSON, payload.ConfigFingerprint, payload.RuleIDs, payload.UpdatedAt)
+				if err != nil {
+					return err
+				}
+			case "bucket_lifecycle_delete":
+				if entry.Bucket == "" {
+					return fmt.Errorf("meta: bucket required")
+				}
+				_, err := tx.Exec(`DELETE FROM bucket_lifecycle WHERE bucket=?`, entry.Bucket)
 				if err != nil {
 					return err
 				}

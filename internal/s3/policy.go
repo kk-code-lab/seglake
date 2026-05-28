@@ -70,6 +70,9 @@ const (
 	policyActionGetBucketEncryption    = "getbucketencryption"
 	policyActionPutBucketEncryption    = "putbucketencryption"
 	policyActionDeleteBucketEncryption = "deletebucketencryption"
+	policyActionGetBucketLifecycle     = "getbucketlifecycle"
+	policyActionPutBucketLifecycle     = "putbucketlifecycle"
+	policyActionDeleteBucketLifecycle  = "deletebucketlifecycle"
 	policyActionGetObject              = "getobject"
 	policyActionHeadObject             = "headobject"
 	policyActionGetObjectTagging       = "getobjecttagging"
@@ -106,6 +109,9 @@ var validPolicyActions = map[string]struct{}{
 	policyActionGetBucketEncryption:    {},
 	policyActionPutBucketEncryption:    {},
 	policyActionDeleteBucketEncryption: {},
+	policyActionGetBucketLifecycle:     {},
+	policyActionPutBucketLifecycle:     {},
+	policyActionDeleteBucketLifecycle:  {},
 	policyActionGetObject:              {},
 	policyActionHeadObject:             {},
 	policyActionGetObjectTagging:       {},
@@ -162,6 +168,7 @@ func ParsePolicy(raw string) (*Policy, error) {
 				policyActionGetBucketLocation,
 				policyActionGetBucketPolicy,
 				policyActionGetBucketEncryption,
+				policyActionGetBucketLifecycle,
 				policyActionGetObject,
 				policyActionHeadObject,
 				policyActionListMultipartUploads,
@@ -553,6 +560,12 @@ func policyActionForRequest(op string) string {
 		return policyActionPutBucketEncryption
 	case "delete_bucket_encryption":
 		return policyActionDeleteBucketEncryption
+	case "get_bucket_lifecycle":
+		return policyActionGetBucketLifecycle
+	case "put_bucket_lifecycle":
+		return policyActionPutBucketLifecycle
+	case "delete_bucket_lifecycle":
+		return policyActionDeleteBucketLifecycle
 	case "get_object_tagging":
 		return policyActionGetObjectTagging
 	case "put_object_tagging":

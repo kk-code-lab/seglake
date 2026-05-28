@@ -192,14 +192,18 @@ Add bucket lifecycle storage:
 ```sql
 CREATE TABLE bucket_lifecycle (
   bucket TEXT PRIMARY KEY,
-  config_xml TEXT NOT NULL,
-  config_json TEXT NOT NULL,
+  xml TEXT NOT NULL,
+  normalized_json TEXT NOT NULL,
+  config_fingerprint TEXT NOT NULL,
+  rule_ids TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 ```
 
-`config_xml` preserves the API round-trip shape. `config_json` stores normalized
-rules for evaluation without XML parsing during plan scans.
+`xml` preserves the API round-trip shape. `normalized_json` stores normalized
+rules for evaluation without XML parsing during plan scans. `config_fingerprint`
+is derived from `normalized_json` and is used for stale-plan detection.
+`rule_ids` is a redacted summary for diagnostics and support bundles.
 
 Recommended metadata helpers:
 

@@ -42,6 +42,13 @@ func TestMaintenanceModeBlocksWrites(t *testing.T) {
 			body:   `{"version":"v1","statements":[{"effect":"allow","actions":["GetObject"],"resources":[{"bucket":"bucket"}]}]}`,
 		},
 		{name: "bucket_policy_delete", method: http.MethodDelete, path: "/bucket?policy"},
+		{
+			name:   "bucket_lifecycle_put",
+			method: http.MethodPut,
+			path:   "/bucket?lifecycle",
+			body:   `<LifecycleConfiguration><Rule><ID>x</ID><Status>Enabled</Status><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`,
+		},
+		{name: "bucket_lifecycle_delete", method: http.MethodDelete, path: "/bucket?lifecycle"},
 		{name: "mpu_initiate", method: http.MethodPost, path: "/bucket/key?uploads"},
 		{name: "mpu_upload_part", method: http.MethodPut, path: "/bucket/key?uploadId=upload1&partNumber=1", body: "part"},
 		{name: "mpu_complete", method: http.MethodPost, path: "/bucket/key?uploadId=upload1", body: "<CompleteMultipartUpload/>"},

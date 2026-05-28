@@ -287,6 +287,9 @@ const (
 	bucketGetEncryption
 	bucketPutEncryption
 	bucketDeleteEncryption
+	bucketGetLifecycle
+	bucketPutLifecycle
+	bucketDeleteLifecycle
 	bucketHead
 )
 
@@ -337,6 +340,12 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			}
 			return bucketGetEncryption
 		}
+		if r.URL.Query().Has("lifecycle") {
+			if !hasBucketOnly && hostBucket == "" {
+				return bucketListNone
+			}
+			return bucketGetLifecycle
+		}
 		return bucketListNone
 	}
 	if r.Method == http.MethodHead && (hasBucketOnly || hostBucket != "") {
@@ -372,6 +381,17 @@ func bucketListKindForRequest(r *http.Request, hostBucket string, hasBucketOnly 
 			return bucketDeleteEncryption
 		}
 	}
+	if r.URL.Query().Has("lifecycle") {
+		if !hasBucketOnly && hostBucket == "" {
+			return bucketListNone
+		}
+		switch r.Method {
+		case http.MethodPut:
+			return bucketPutLifecycle
+		case http.MethodDelete:
+			return bucketDeleteLifecycle
+		}
+	}
 	return bucketListNone
 }
 
@@ -392,6 +412,9 @@ func isListV1Request(r *http.Request, hasBucketOnly bool) bool {
 		return false
 	}
 	if r.URL.Query().Has("encryption") {
+		return false
+	}
+	if r.URL.Query().Has("lifecycle") {
 		return false
 	}
 	return true
@@ -486,6 +509,27 @@ func (h *Handler) handleBucketLevelRequests(ctx context.Context, w http.Response
 			bucket = hostBucket
 		}
 		h.handleDeleteBucketEncryption(ctx, w, r, bucket, requestID)
+		return true
+	case bucketGetLifecycle:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleGetBucketLifecycle(ctx, w, r, bucket, requestID)
+		return true
+	case bucketPutLifecycle:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handlePutBucketLifecycle(ctx, w, r, bucket, requestID)
+		return true
+	case bucketDeleteLifecycle:
+		bucket := bucketOnly
+		if bucket == "" {
+			bucket = hostBucket
+		}
+		h.handleDeleteBucketLifecycle(ctx, w, r, bucket, requestID)
 		return true
 	case bucketHead:
 		bucket := bucketOnly
@@ -2071,6 +2115,29 @@ func (h *Handler) opForRequest(r *http.Request) string {
 			}
 		}
 	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Has("lifecycle") {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_lifecycle"
+			case http.MethodPut:
+				return "put_bucket_lifecycle"
+			case http.MethodDelete:
+				return "delete_bucket_lifecycle"
+			}
+		}
+		if path == "" && h.hostBucket(r) != "" {
+			switch r.Method {
+			case http.MethodGet:
+				return "get_bucket_lifecycle"
+			case http.MethodPut:
+				return "put_bucket_lifecycle"
+			case http.MethodDelete:
+				return "delete_bucket_lifecycle"
+			}
+		}
+	}
 	if (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Has("tagging") {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if h.hostBucket(r) != "" || strings.Contains(path, "/") {
@@ -2150,6 +2217,7 @@ func isWriteOp(op string) bool {
 		"put_object_tagging", "delete_object_tagging",
 		"put_bucket_policy", "delete_bucket_policy", "put_bucket_versioning",
 		"put_bucket_encryption", "delete_bucket_encryption",
+		"put_bucket_lifecycle", "delete_bucket_lifecycle",
 		"mpu_initiate", "mpu_upload_part", "mpu_complete", "mpu_abort",
 		"repl_oplog_apply":
 		return true

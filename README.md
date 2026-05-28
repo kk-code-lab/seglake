@@ -111,6 +111,7 @@ Notes:
 | HeadObject | Yes | `HEAD /<bucket>/<key>` |
 | DeleteObject | Yes | Idempotent |
 | Versioned GET/HEAD/DELETE | Yes | `?versionId=...` |
+| Bucket lifecycle config | Yes | `GET/PUT/DELETE ?lifecycle`; execution ops pending |
 | Range GET | Yes | Single + multi‑range |
 | CopyObject | Yes | `x-amz-copy-source` |
 | Multipart upload | Yes | init/upload/list/complete/abort/list uploads |

@@ -303,6 +303,37 @@ aws s3api delete-object-tagging --bucket demo --key a.txt \
 
 CopyObject preserves source tags by default (`x-amz-tagging-directive: COPY`) and replaces them when `x-amz-tagging-directive: REPLACE` is used with `x-amz-tagging`. Tags are SQLite metadata, not manifest content; `rebuild-index` from manifests alone cannot reconstruct tag rows.
 
+Bucket lifecycle configuration uses the S3 lifecycle subresource. This phase stores and replicates configuration only; lifecycle execution is not automatic until the lifecycle plan/run ops modes land.
+```
+cat > lifecycle.json <<'JSON'
+{
+  "Rules": [
+    {
+      "ID": "expire-logs",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "logs/" },
+      "Expiration": { "Days": 30 }
+    }
+  ]
+}
+JSON
+
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api put-bucket-lifecycle-configuration \
+  --bucket demo \
+  --lifecycle-configuration file://lifecycle.json \
+  --endpoint-url http://localhost:9000
+
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api get-bucket-lifecycle-configuration \
+  --bucket demo \
+  --endpoint-url http://localhost:9000
+
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-east-1 aws s3api delete-bucket-lifecycle \
+  --bucket demo \
+  --endpoint-url http://localhost:9000
+```
+
+Unsupported lifecycle actions such as transitions, noncurrent transitions, `ExpiredObjectDeleteMarker`, object-size filters, and storage class settings return `NotImplemented`. `AbortIncompleteMultipartUpload` accepts prefix-only or unfiltered rules; tag-filtered MPU abort rules are rejected until MPU tagging exists.
+
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
 - `SEGLAKE_SSE_S3_REWRAP_TARGET_KEY` → `-sse-s3-rewrap-target-key` (modes: `sse-rewrap-plan`, `sse-rewrap-run`)
