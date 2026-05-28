@@ -138,6 +138,11 @@ type oplogDeletePayload struct {
 	DeleteMarker bool   `json:"delete_marker,omitempty"`
 }
 
+type oplogMPUAbortPayload struct {
+	UploadID  string `json:"upload_id"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
 // ReplRemoteState describes replication watermarks per remote.
 type ReplRemoteState struct {
 	Remote      string `json:"remote"`
@@ -2894,6 +2899,23 @@ SET encryption_mode=?, encryption_algorithm=?, encryption_key_ids=?, encryption_
 WHERE version_id=?`, payload.EncryptionMode, payload.EncryptionAlgorithm, payload.EncryptionKeyIDs, payload.EncryptionFingerprints, entry.VersionID); err != nil {
 					return err
 				}
+			case "mpu_abort":
+				var payload oplogMPUAbortPayload
+				if entry.Payload != "" {
+					if err := json.Unmarshal([]byte(entry.Payload), &payload); err != nil {
+						return err
+					}
+				}
+				uploadID := payload.UploadID
+				if uploadID == "" {
+					uploadID = entry.VersionID
+				}
+				if uploadID == "" {
+					return fmt.Errorf("meta: mpu_abort entry requires upload id")
+				}
+				if err := s.abortMultipartUploadTx(ctx, tx, uploadID, false); err != nil {
+					return err
+				}
 			case "delete":
 				if entry.VersionID == "" {
 					return fmt.Errorf("meta: delete entry requires version id")
@@ -3657,10 +3679,7 @@ func (s *Store) AbortMultipartUpload(ctx context.Context, uploadID string) error
 			_ = tx.Rollback()
 		}
 	}()
-	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM multipart_uploads WHERE upload_id=?", uploadID); err != nil {
+	if err = s.abortMultipartUploadTx(ctx, tx, uploadID, true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -3674,11 +3693,40 @@ func (s *Store) AbortMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID
 	if tx == nil {
 		return fmt.Errorf("meta: tx required")
 	}
+	return s.abortMultipartUploadTx(ctx, tx, uploadID, true)
+}
+
+func (s *Store) abortMultipartUploadTx(ctx context.Context, tx *sql.Tx, uploadID string, writeOplog bool) error {
+	if uploadID == "" {
+		return fmt.Errorf("meta: upload id required")
+	}
+	if tx == nil {
+		return fmt.Errorf("meta: tx required")
+	}
+	var bucket string
+	var key string
+	var createdAt string
+	if writeOplog {
+		err := tx.QueryRowContext(ctx, "SELECT bucket, key, created_at FROM multipart_uploads WHERE upload_id=?", uploadID).Scan(&bucket, &key, &createdAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_parts WHERE upload_id=?", uploadID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM multipart_uploads WHERE upload_id=?", uploadID); err != nil {
 		return err
+	}
+	if writeOplog && bucket != "" {
+		hlcTS, _ := s.nextHLC()
+		payload, err := json.Marshal(oplogMPUAbortPayload{UploadID: uploadID, CreatedAt: createdAt})
+		if err != nil {
+			return err
+		}
+		if err := s.recordOplogTx(tx, hlcTS, "mpu_abort", bucket, key, uploadID, string(payload)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

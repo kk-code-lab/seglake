@@ -2,6 +2,9 @@ package meta
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -41,6 +44,67 @@ func TestMultipartUploadLifecycle(t *testing.T) {
 
 	if _, err := store.GetMultipartUpload(ctx, "u1"); err == nil {
 		t.Fatalf("expected upload deleted after abort")
+	}
+}
+
+func TestAbortMultipartUploadWritesAndAppliesOplog(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	source, err := Open(filepath.Join(dir, "source.db"))
+	if err != nil {
+		t.Fatalf("Open source: %v", err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	if err := source.CreateMultipartUpload(ctx, "bucket", "tmp/key", "u1", ""); err != nil {
+		t.Fatalf("CreateMultipartUpload source: %v", err)
+	}
+	if err := source.PutMultipartPart(ctx, "u1", 1, "part-v1", "etag", 100); err != nil {
+		t.Fatalf("PutMultipartPart source: %v", err)
+	}
+	if err := source.AbortMultipartUpload(ctx, "u1"); err != nil {
+		t.Fatalf("AbortMultipartUpload source: %v", err)
+	}
+	entries, err := source.ListOplog(ctx)
+	if err != nil {
+		t.Fatalf("ListOplog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].OpType != "mpu_abort" || entries[0].VersionID != "u1" {
+		t.Fatalf("unexpected oplog entries: %+v", entries)
+	}
+	var payload oplogMPUAbortPayload
+	if err := json.Unmarshal([]byte(entries[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.UploadID != "u1" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+
+	remote, err := Open(filepath.Join(dir, "remote.db"))
+	if err != nil {
+		t.Fatalf("Open remote: %v", err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	if err := remote.CreateMultipartUpload(ctx, "bucket", "tmp/key", "u1", ""); err != nil {
+		t.Fatalf("CreateMultipartUpload remote: %v", err)
+	}
+	if err := remote.PutMultipartPart(ctx, "u1", 1, "part-v1", "etag", 100); err != nil {
+		t.Fatalf("PutMultipartPart remote: %v", err)
+	}
+	if _, err := remote.ApplyOplogEntries(ctx, entries); err != nil {
+		t.Fatalf("ApplyOplogEntries: %v", err)
+	}
+	if _, err := remote.GetMultipartUpload(ctx, "u1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected upload removed, err=%v", err)
+	}
+	parts, err := remote.ListMultipartParts(ctx, "u1")
+	if err != nil {
+		t.Fatalf("ListMultipartParts: %v", err)
+	}
+	if len(parts) != 0 {
+		t.Fatalf("expected parts removed, got %+v", parts)
+	}
+	if _, err := remote.ApplyOplogEntries(ctx, entries); err != nil {
+		t.Fatalf("ApplyOplogEntries idempotent: %v", err)
 	}
 }
 

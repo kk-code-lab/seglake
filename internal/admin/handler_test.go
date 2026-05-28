@@ -63,6 +63,19 @@ func TestOpsRunManifestGCRunRequiresQuiesced(t *testing.T) {
 	}
 }
 
+func TestOpsRunLifecycleRunRequiresQuiesced(t *testing.T) {
+	h := newTestHandler(t)
+	reqBody := []byte(`{"mode":"lifecycle-run","lifecycle_force":true,"lifecycle_from_plan":"/tmp/plan.json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/ops/run", bytes.NewReader(reqBody))
+	req.Header.Set(TokenHeader(), h.AuthToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected maintenance check, got %d", w.Code)
+	}
+}
+
 func TestOpsRunRequiresToken(t *testing.T) {
 	h := newTestHandler(t)
 	if _, err := h.Meta.SetMaintenanceState(context.Background(), "quiesced"); err != nil {

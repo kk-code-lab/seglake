@@ -32,6 +32,8 @@ type OpsRunRequest struct {
 	MPUMaxReclaim      int64   `json:"mpu_max_reclaim_bytes,omitempty"`
 	LifecycleBucket    string  `json:"lifecycle_bucket,omitempty"`
 	LifecyclePlan      string  `json:"lifecycle_plan,omitempty"`
+	LifecycleFromPlan  string  `json:"lifecycle_from_plan,omitempty"`
+	LifecycleForce     bool    `json:"lifecycle_force,omitempty"`
 	LifecycleAsOf      string  `json:"lifecycle_as_of,omitempty"`
 	LifecycleLimit     int     `json:"lifecycle_limit,omitempty"`
 }

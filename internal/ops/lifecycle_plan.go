@@ -2,7 +2,9 @@ package ops
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -172,7 +174,77 @@ func ReadLifecyclePlan(path string) (*LifecyclePlan, error) {
 	if err := json.Unmarshal(data, &plan); err != nil {
 		return nil, err
 	}
+	if plan.SchemaVersion != lifecyclePlanSchemaVersion {
+		return nil, fmt.Errorf("lifecycle-plan: unsupported schema version %d", plan.SchemaVersion)
+	}
 	return &plan, nil
+}
+
+func LifecycleRun(metaPath string, plan *LifecyclePlan, force bool) (*Report, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("lifecycle-run: plan required")
+	}
+	if plan.SchemaVersion != lifecyclePlanSchemaVersion {
+		return nil, fmt.Errorf("lifecycle-run: unsupported plan schema version %d", plan.SchemaVersion)
+	}
+	if !force {
+		return nil, fmt.Errorf("lifecycle-run requires -lifecycle-force")
+	}
+	report := newReport("lifecycle-run")
+	report.Candidates = len(plan.Candidates)
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+
+	candidates := append([]LifecyclePlanCandidate(nil), plan.Candidates...)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return lifecycleActionPriority(candidates[i].Action) < lifecycleActionPriority(candidates[j].Action)
+	})
+	for _, cand := range candidates {
+		report.CandidateIDs = append(report.CandidateIDs, lifecycleCandidateID(cand))
+		applied, skipped, err := runLifecycleCandidate(context.Background(), store, plan, cand)
+		if err != nil {
+			report.Errors++
+			if len(report.ErrorSample) < 5 {
+				report.ErrorSample = append(report.ErrorSample, fmt.Sprintf("%s: %v", lifecycleCandidateID(cand), err))
+			}
+			continue
+		}
+		if skipped {
+			report.Skipped++
+			continue
+		}
+		if applied {
+			report.Deleted++
+			report.Reclaimed += cand.Size
+			switch cand.Action {
+			case LifecycleActionExpireCurrent:
+				report.CurrentExpirations++
+			case LifecycleActionExpireNoncurrent:
+				report.NoncurrentExpirations++
+			case LifecycleActionAbortMPU:
+				report.MPUAborts++
+			}
+		}
+	}
+	report.FinishedAt = now().UTC()
+	_ = store.RecordOpsRun(context.Background(), report.Mode, reportOpsFrom(report))
+	return report, nil
+}
+
+func lifecycleActionPriority(action string) int {
+	switch action {
+	case LifecycleActionExpireNoncurrent:
+		return 0
+	case LifecycleActionExpireCurrent:
+		return 1
+	case LifecycleActionAbortMPU:
+		return 2
+	default:
+		return 3
+	}
 }
 
 func lifecycleConfigsForPlan(ctx context.Context, store *meta.Store, bucket string) ([]meta.BucketLifecycleConfig, error) {
@@ -197,6 +269,186 @@ func lifecycleConfigsForPlan(ctx context.Context, store *meta.Store, bucket stri
 		out = append(out, configMap[bucket])
 	}
 	return out, nil
+}
+
+func runLifecycleCandidate(ctx context.Context, store *meta.Store, plan *LifecyclePlan, cand LifecyclePlanCandidate) (applied bool, skipped bool, err error) {
+	cfg, err := store.GetBucketLifecycle(ctx, cand.Bucket)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	wantFP := cand.ConfigFingerprint
+	if wantFP == "" && plan != nil && plan.ConfigFingerprints != nil {
+		wantFP = plan.ConfigFingerprints[cand.Bucket]
+	}
+	if wantFP == "" || cfg.ConfigFingerprint != wantFP {
+		return false, true, nil
+	}
+	normalized, err := lifecycle.DecodeNormalized(cfg.NormalizedJSON)
+	if err != nil {
+		return false, false, err
+	}
+	switch cand.Action {
+	case LifecycleActionExpireCurrent:
+		return runLifecycleExpireCurrent(ctx, store, normalized, cand)
+	case LifecycleActionExpireNoncurrent:
+		return runLifecycleExpireNoncurrent(ctx, store, normalized, cand)
+	case LifecycleActionAbortMPU:
+		return runLifecycleAbortMPU(ctx, store, normalized, cand)
+	default:
+		return false, false, fmt.Errorf("unknown lifecycle action %q", cand.Action)
+	}
+}
+
+func runLifecycleExpireCurrent(ctx context.Context, store *meta.Store, normalized lifecycle.Configuration, cand LifecyclePlanCandidate) (bool, bool, error) {
+	current, err := store.GetObjectMeta(ctx, cand.Bucket, cand.Key)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	if current.VersionID != cand.VersionID || current.VersionID != cand.CurrentVersionID || current.State != meta.VersionStateActive {
+		return false, true, nil
+	}
+	tags, err := lifecycleTagsForVersion(ctx, store, current.VersionID, map[string]lifecycle.ObjectTags{})
+	if err != nil {
+		return false, false, err
+	}
+	ts, ok := parseMetaTime(current.LastModified)
+	if !ok || !sameLifecycleTime(ts, cand.Timestamp) || !lifecycleCurrentStillEligible(normalized, cand, current.Key, tags, ts) {
+		return false, true, nil
+	}
+	state, err := store.GetBucketVersioningState(ctx, cand.Bucket)
+	if err != nil {
+		return false, false, err
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		if state == meta.BucketVersioningDisabled {
+			_, err := store.DeleteObjectUnversionedTx(ctx, tx, cand.Bucket, cand.Key)
+			return err
+		}
+		_, err := store.DeleteObjectTx(ctx, tx, cand.Bucket, cand.Key)
+		return err
+	}); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
+}
+
+func runLifecycleExpireNoncurrent(ctx context.Context, store *meta.Store, normalized lifecycle.Configuration, cand LifecyclePlanCandidate) (bool, bool, error) {
+	version, err := store.GetObjectVersion(ctx, cand.Bucket, cand.Key, cand.VersionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	if version.State != meta.VersionStateActive {
+		return false, true, nil
+	}
+	current, err := store.GetObjectMeta(ctx, cand.Bucket, cand.Key)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	if current.VersionID == cand.VersionID || (cand.CurrentVersionID != "" && current.VersionID != cand.CurrentVersionID) {
+		return false, true, nil
+	}
+	tags, err := lifecycleTagsForVersion(ctx, store, version.VersionID, map[string]lifecycle.ObjectTags{})
+	if err != nil {
+		return false, false, err
+	}
+	ts, ok := parseMetaTime(version.LastModified)
+	if !ok || !sameLifecycleTime(ts, cand.Timestamp) || !lifecycleNoncurrentStillEligible(normalized, cand, version.Key, tags, ts) {
+		return false, true, nil
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		deleted, err := store.DeleteObjectVersionTx(ctx, tx, cand.Bucket, cand.Key, cand.VersionID)
+		if err != nil {
+			return err
+		}
+		if !deleted {
+			return sql.ErrNoRows
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	return true, false, nil
+}
+
+func runLifecycleAbortMPU(ctx context.Context, store *meta.Store, normalized lifecycle.Configuration, cand LifecyclePlanCandidate) (bool, bool, error) {
+	upload, err := store.GetMultipartUpload(ctx, cand.UploadID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	if upload.Bucket != cand.Bucket || upload.Key != cand.Key || upload.State != "ACTIVE" {
+		return false, true, nil
+	}
+	ts, ok := parseMetaTime(upload.CreatedAt)
+	if !ok || !sameLifecycleTime(ts, cand.Timestamp) || !lifecycleMPUStillEligible(normalized, cand, upload.Key, ts) {
+		return false, true, nil
+	}
+	if err := store.WithTx(func(tx *sql.Tx) error {
+		return store.AbortMultipartUploadTx(ctx, tx, cand.UploadID)
+	}); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
+}
+
+func lifecycleCurrentStillEligible(cfg lifecycle.Configuration, cand LifecyclePlanCandidate, key string, tags lifecycle.ObjectTags, ts time.Time) bool {
+	for _, rule := range cfg.Rules {
+		if cand.RuleID != "" && rule.ID != cand.RuleID {
+			continue
+		}
+		if !lifecycle.RuleEnabled(rule) || rule.Expiration == nil || !lifecycle.RuleMatches(rule, key, tags) {
+			continue
+		}
+		return lifecycle.ExpirationEligible(*rule.Expiration, ts, now().UTC())
+	}
+	return false
+}
+
+func sameLifecycleTime(a, b time.Time) bool {
+	return a.UTC().Equal(b.UTC())
+}
+
+func lifecycleNoncurrentStillEligible(cfg lifecycle.Configuration, cand LifecyclePlanCandidate, key string, tags lifecycle.ObjectTags, ts time.Time) bool {
+	for _, rule := range cfg.Rules {
+		if cand.RuleID != "" && rule.ID != cand.RuleID {
+			continue
+		}
+		if !lifecycle.RuleEnabled(rule) || rule.NoncurrentVersionExpiration == nil || !lifecycle.RuleMatches(rule, key, tags) {
+			continue
+		}
+		return lifecycle.NoncurrentEligible(*rule.NoncurrentVersionExpiration, ts, now().UTC())
+	}
+	return false
+}
+
+func lifecycleMPUStillEligible(cfg lifecycle.Configuration, cand LifecyclePlanCandidate, key string, ts time.Time) bool {
+	for _, rule := range cfg.Rules {
+		if cand.RuleID != "" && rule.ID != cand.RuleID {
+			continue
+		}
+		if !lifecycle.RuleEnabled(rule) || rule.AbortIncompleteMultipartUpload == nil || !lifecycle.RuleMatches(rule, key, nil) {
+			continue
+		}
+		return lifecycle.MPUAbortEligible(*rule.AbortIncompleteMultipartUpload, ts, now().UTC())
+	}
+	return false
 }
 
 func planBucketLifecycle(ctx context.Context, store *meta.Store, cfg meta.BucketLifecycleConfig, normalized lifecycle.Configuration, asOf time.Time, remaining int) ([]LifecyclePlanCandidate, error) {

@@ -12,7 +12,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - **object manifests** as separate files (binary codec),
 - **metadata in SQLite (WAL, synchronous=FULL)**,
 - **hard durability contract**: fsync segments + WAL commit before an object is visible,
-- **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, conflict listings, GC plan/run, GC rewrite (gc-rewrite + plan/run), manifest GC (plan/run), lifecycle plan, SSE-S3 KEK rewrap (plan/run),
+- **ops tooling**: status, fsck, scrub, rebuild-index, snapshot, support-bundle, conflict listings, GC plan/run, GC rewrite (gc-rewrite + plan/run), manifest GC (plan/run), lifecycle plan/run, SSE-S3 KEK rewrap (plan/run),
 - repl-validate (consistency comparison between nodes, with optional deep chunk-hash validation),
 - **S3 API**: PUT/GET/HEAD (with `versionId`), object tagging, LIST (V1/V2), range GET (single and multi-range), SigV4 + presigned, multipart upload.
 - **ACL/IAM (MVP)**: per-action JSON policy v1 + bucket policies + conditions (sufficient for the current development stage).
@@ -73,14 +73,14 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - Presigned GET/PUT (TTL up to 7 days).
 - Multipart: initiate, upload part, list parts, complete, abort, list multipart uploads.
 - Object tagging: `GET/PUT/DELETE ?tagging` stores up to 10 key/value tags per object version. `x-amz-tagging` is supported on PutObject, and CopyObject supports `x-amz-tagging-directive` values `COPY` and `REPLACE`. GET/HEAD return `x-amz-tagging-count` only when the request is authorized for tag reads.
-- Bucket lifecycle configuration: `GET/PUT/DELETE ?lifecycle` stores AWS-compatible bucket lifecycle XML in metadata and replicates config changes. MVP supports prefix/tag/And filters, current expiration, noncurrent expiration, and abort incomplete MPU configuration. `lifecycle-plan` evaluates stored configs and writes a read-only JSON plan; lifecycle execution is not automatic yet.
+- Bucket lifecycle configuration: `GET/PUT/DELETE ?lifecycle` stores AWS-compatible bucket lifecycle XML in metadata and replicates config changes. MVP supports prefix/tag/And filters, current expiration, noncurrent expiration, and abort incomplete MPU configuration. `lifecycle-plan` evaluates stored configs and writes a read-only JSON plan; `lifecycle-run` executes saved plans under maintenance.
 - CORS/OPTIONS: preflight with Access-Control-Allow-* headers.
 - Server-side encryption: explicit `x-amz-server-side-encryption: AES256` stores SSE-S3 objects, and explicit `x-amz-server-side-encryption: aws:kms` stores SSE-KMS-labeled objects using the same envelope encryption path. `x-amz-server-side-encryption-aws-kms-key-id` maps directly to a configured provider key ID; if omitted, writes resolve the bucket default KMS key ID and then the active provider key. Bucket default encryption is supported through `GET/PUT/DELETE ?encryption` for `AES256` and `aws:kms` with optional `KMSMasterKeyID`. Explicit request headers override bucket defaults. GET/HEAD return `AES256` or `aws:kms` plus the resolved KMS key ID according to object metadata. SSE-C, DSSE-KMS, KMS encryption context, S3 Bucket Keys, and AWS KMS network/policy/grant semantics are unsupported.
 
 ### 2.4 Ops and observability
 - Ops: status, fsck, scrub, rebuild-index, snapshot, support-bundle, gc-plan/gc-run,
   gc-rewrite/gc-rewrite-plan/gc-rewrite-run (throttle + pause file), manifest-gc-plan/manifest-gc-run,
-  mpu-gc-plan/mpu-gc-run (TTL), lifecycle-plan,
+  mpu-gc-plan/mpu-gc-run (TTL), lifecycle-plan/lifecycle-run,
   sse-rewrap-plan/sse-rewrap-run, repl-validate.
 - `/v1/meta/stats` with basic counters + traffic and latency.
 - `/v1/meta/conflicts` and `-mode conflicts` list conflicting versions with bucket/prefix filters and marker-based pagination.
@@ -294,7 +294,8 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `manifest-gc-plan`/`manifest-gc-run` — plan + delete orphan manifest files only. Candidates are manifest files not referenced by current versions or active MPU parts and older than `-manifest-gc-ttl` (default 7 days). Run requires `-manifest-gc-force` and a saved plan.
 - `mpu-gc-plan`/`mpu-gc-run` — cleanup stale multipart uploads (TTL; run requires `-mpu-force`).
   - Segment GC treats multipart parts as live.
-- `lifecycle-plan` — read-only evaluation of stored bucket lifecycle configs. Flags: `-lifecycle-plan <path>` required, optional `-lifecycle-bucket`, `-lifecycle-as-of`, and `-lifecycle-limit` (default 10000). Lifecycle execution remains pending.
+- `lifecycle-plan` — read-only evaluation of stored bucket lifecycle configs. Flags: `-lifecycle-plan <path>` required, optional `-lifecycle-bucket`, `-lifecycle-as-of`, and `-lifecycle-limit` (default 10000).
+- `lifecycle-run` — execute a saved lifecycle plan. Requires `-lifecycle-from-plan`, `-lifecycle-force`, and maintenance/quiesced mode. It creates delete markers, deletes eligible object versions, or aborts eligible MPUs through metadata paths; segments and manifests are reclaimed later by GC/manifest-GC.
 - `sse-rewrap-plan`/`sse-rewrap-run` — rotate SSE-S3 EDEKs by rewriting only manifest EDEKs and SQLite encryption summaries. Local→local, Vault→Vault, and whole-manifest local→Vault rewrap are supported. The run writes new manifest paths, preserves object versions, ETags, sizes, Last-Modified values, chunk refs, and segment ciphertext, and records `sse_rewrap` oplog entries so peers fetch the new manifest bytes.
 
 ### 5.2 Stats API

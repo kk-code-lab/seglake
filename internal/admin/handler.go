@@ -124,7 +124,7 @@ func (h *Handler) handleOpsRun(w http.ResponseWriter, r *http.Request) {
 	gcMinAge := time.Duration(req.GCMinAgeNanos)
 	manifestGCTTL := time.Duration(req.ManifestGCTTLNanos)
 	mpuTTL := time.Duration(req.MPUTTLNanos)
-	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.ReplValidateDeep, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, manifestGCTTL, req.ManifestGCPlan, req.ManifestGCFromPlan, req.ManifestGCForce, mpuTTL, req.MPUForce, gcGuard, mpuGuard, req.DBReindexTable, req.LifecycleBucket, req.LifecyclePlan, req.LifecycleAsOf, req.LifecycleLimit)
+	report, err := runOpsRequest(req.Mode, layout, metaPath, req.SnapshotDir, req.ReplCompareDir, req.ReplValidateDeep, req.FsckAllManifests, req.ScrubAllManifests, gcMinAge, req.GCForce, req.GCLiveThreshold, req.GCRewritePlanFile, req.GCRewriteFromPlan, req.GCRewriteBps, req.GCPauseFile, manifestGCTTL, req.ManifestGCPlan, req.ManifestGCFromPlan, req.ManifestGCForce, mpuTTL, req.MPUForce, gcGuard, mpuGuard, req.DBReindexTable, req.LifecycleBucket, req.LifecyclePlan, req.LifecycleFromPlan, req.LifecycleForce, req.LifecycleAsOf, req.LifecycleLimit)
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return

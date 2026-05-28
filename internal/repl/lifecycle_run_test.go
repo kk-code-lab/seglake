@@ -2,7 +2,9 @@ package repl
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -13,7 +15,7 @@ import (
 	"github.com/kk-code-lab/seglake/internal/storage/fs"
 )
 
-func TestReplPullAppliesObjectTagsWithoutDataFetch(t *testing.T) {
+func TestReplPullAppliesMPUAbortWithoutDataFetch(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))
@@ -28,17 +30,15 @@ func TestReplPullAppliesObjectTagsWithoutDataFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	if err := store.RecordPut(context.Background(), "bucket", "key", "v1", "etag", 1, "", ""); err != nil {
-		t.Fatalf("RecordPut: %v", err)
+	if err := store.CreateMultipartUpload(context.Background(), "bucket", "tmp/key", "u1", ""); err != nil {
+		t.Fatalf("CreateMultipartUpload: %v", err)
+	}
+	if err := store.PutMultipartPart(context.Background(), "u1", 1, "part-v1", "etag", 100); err != nil {
+		t.Fatalf("PutMultipartPart: %v", err)
 	}
 	payload, err := json.Marshal(map[string]any{
-		"bucket":     "bucket",
-		"key":        "key",
-		"version_id": "v1",
-		"tags": []map[string]string{
-			{"key": "project", "value": "alpha"},
-		},
-		"updated_at": "2026-01-01T00:00:00Z",
+		"upload_id":  "u1",
+		"created_at": "2026-01-01T00:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -46,10 +46,10 @@ func TestReplPullAppliesObjectTagsWithoutDataFetch(t *testing.T) {
 	server, manifestCalls, chunkCalls := newMetadataOnlyReplServer(t, meta.OplogEntry{
 		SiteID:    "site-a",
 		HLCTS:     "0000000000000000002-0000000001",
-		OpType:    "object_tags_set",
+		OpType:    "mpu_abort",
 		Bucket:    "bucket",
-		Key:       "key",
-		VersionID: "v1",
+		Key:       "tmp/key",
+		VersionID: "u1",
 		Payload:   string(payload),
 	})
 
@@ -57,14 +57,17 @@ func TestReplPullAppliesObjectTagsWithoutDataFetch(t *testing.T) {
 	if _, _, err := runReplPullOnce(context.Background(), client, "", 100, true, store, eng, nil, time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("runReplPullOnce: %v", err)
 	}
-	tags, err := store.GetObjectTags(context.Background(), "v1")
-	if err != nil {
-		t.Fatalf("GetObjectTags: %v", err)
+	if _, err := store.GetMultipartUpload(context.Background(), "u1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected upload removed, err=%v", err)
 	}
-	if len(tags) != 1 || tags[0].Key != "project" || tags[0].Value != "alpha" {
-		t.Fatalf("unexpected replicated tags: %+v", tags)
+	parts, err := store.ListMultipartParts(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("ListMultipartParts: %v", err)
+	}
+	if len(parts) != 0 {
+		t.Fatalf("expected parts removed, got %+v", parts)
 	}
 	if atomic.LoadInt32(manifestCalls) != 0 || atomic.LoadInt32(chunkCalls) != 0 {
-		t.Fatalf("object tag replication fetched data: manifests=%d chunks=%d", atomic.LoadInt32(manifestCalls), atomic.LoadInt32(chunkCalls))
+		t.Fatalf("mpu abort replication fetched data: manifests=%d chunks=%d", atomic.LoadInt32(manifestCalls), atomic.LoadInt32(chunkCalls))
 	}
 }

@@ -34,6 +34,7 @@ type Report struct {
 	Candidates              int             `json:"candidates,omitempty"`
 	CandidateBytes          int64           `json:"candidate_bytes,omitempty"`
 	Deleted                 int             `json:"deleted,omitempty"`
+	Skipped                 int             `json:"skipped,omitempty"`
 	Reclaimed               int64           `json:"reclaimed_bytes,omitempty"`
 	RewrittenSegments       int             `json:"rewritten_segments,omitempty"`
 	RewrittenBytes          int64           `json:"rewritten_bytes,omitempty"`

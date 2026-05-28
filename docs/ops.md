@@ -303,7 +303,7 @@ aws s3api delete-object-tagging --bucket demo --key a.txt \
 
 CopyObject preserves source tags by default (`x-amz-tagging-directive: COPY`) and replaces them when `x-amz-tagging-directive: REPLACE` is used with `x-amz-tagging`. Tags are SQLite metadata, not manifest content; `rebuild-index` from manifests alone cannot reconstruct tag rows.
 
-Bucket lifecycle configuration uses the S3 lifecycle subresource. Configuration is stored and replicated through metadata. `lifecycle-plan` can evaluate stored configs and write a read-only candidate plan; lifecycle execution is not automatic until `lifecycle-run` lands.
+Bucket lifecycle configuration uses the S3 lifecycle subresource. Configuration is stored and replicated through metadata. `lifecycle-plan` evaluates stored configs and writes a read-only candidate plan; `lifecycle-run` executes a saved plan while maintenance is quiesced.
 ```
 cat > lifecycle.json <<'JSON'
 {
@@ -348,6 +348,20 @@ Create a lifecycle plan from stored configs:
 ```
 
 The plan includes only candidate metadata: action type, bucket/key, version or upload ID, matched rule ID, timestamps, size, and the normalized lifecycle config fingerprint. It does not delete objects, create delete markers, abort MPUs, remove tags, or touch manifests/segments. `-lifecycle-as-of` accepts RFC3339 timestamps or `YYYY-MM-DD`; omitting it uses the current time.
+
+Execute a reviewed lifecycle plan:
+
+```bash
+./build/seglake -mode maintenance -data-dir ./data -maintenance-action enable
+
+./build/seglake -mode lifecycle-run -data-dir ./data \
+  -lifecycle-from-plan ./lifecycle-plan.json \
+  -lifecycle-force
+
+./build/seglake -mode maintenance -data-dir ./data -maintenance-action disable
+```
+
+`lifecycle-run` revalidates each candidate before mutating metadata. Stale candidates are skipped when the lifecycle config fingerprint, current version/upload state, tags, or age eligibility no longer match. Current expiration creates delete markers for versioned/suspended buckets and deletes the current null version for disabled buckets. Noncurrent expiration deletes only the exact planned noncurrent version. MPU abort removes the upload and part metadata and emits a replicated `mpu_abort` oplog entry. Segment and manifest files are reclaimed later by existing GC/manifest-GC.
 
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
@@ -531,7 +545,7 @@ Unsafe (prompt required, maintenance quiesced):
 
 | Mode | Note |
 | --- | --- |
-| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `manifest-gc-run`, `mpu-gc-run`, `sse-rewrap-run`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
+| `rebuild-index`, `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `manifest-gc-run`, `mpu-gc-run`, `lifecycle-run`, `sse-rewrap-run`, `db-integrity-check`, `db-reindex` | Touches meta or rewrites data/metadata; use maintenance window. |
 
 Fsck/scrub scope:
 - By default `fsck` and `scrub` scan **live manifests** from `meta.db` (plus active MPU parts) to avoid false “missing segment” reports after GC.
@@ -560,7 +574,7 @@ Notes:
 - Applies to S3 and replication write endpoints (writes only).
 - Read-only operations continue to work.
 - `maintenance-action enable` waits for `quiesced` and `disable` waits for `off` when a server is running (use `-maintenance-no-wait` to return immediately).
-- Unsafe ops allowed without a live prompt when maintenance is `quiesced`: `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `mpu-gc-run`.
+- Unsafe ops allowed without a live prompt when maintenance is `quiesced`: `gc-run`, `gc-rewrite`, `gc-rewrite-run`, `manifest-gc-run`, `mpu-gc-run`, `lifecycle-run`, `sse-rewrap-run`.
 - `maintenance status` reports `write_inflight` when the server is running.
 - `/v1/meta/stats` includes `maintenance_state`, `maintenance_updated_at`, `write_inflight`, and `maintenance_transitions`.
 - `/v1/meta/stats` includes `live_manifests` (count from meta + MPU parts) and `manifests_total` (all manifest files on disk).

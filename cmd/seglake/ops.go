@@ -63,6 +63,8 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 			MPUMaxReclaim:      opts.mpuMaxReclaim,
 			LifecycleBucket:    opts.lifecycleBucket,
 			LifecyclePlan:      opts.lifecyclePlan,
+			LifecycleFromPlan:  opts.lifecycleFromPlan,
+			LifecycleForce:     opts.lifecycleForce,
 			LifecycleAsOf:      opts.lifecycleAsOf,
 			LifecycleLimit:     opts.lifecycleLimit,
 		}
@@ -225,6 +227,18 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 			if err := ops.WriteLifecyclePlan(opts.lifecyclePlan, plan); err != nil {
 				return err
 			}
+		}
+	case "lifecycle-run":
+		if opts == nil {
+			return fmt.Errorf("lifecycle-run requires ops options")
+		}
+		if opts.lifecycleFromPlan == "" {
+			return fmt.Errorf("lifecycle-run requires -lifecycle-from-plan")
+		}
+		var plan *ops.LifecyclePlan
+		plan, err = ops.ReadLifecyclePlan(opts.lifecycleFromPlan)
+		if err == nil {
+			report, err = ops.LifecycleRun(metaPath, plan, opts.lifecycleForce)
 		}
 	case "sse-rewrap-plan", "sse-rewrap-run":
 		return fmt.Errorf("%s is local-only and must be handled before admin dispatch", mode)
@@ -395,6 +409,20 @@ func formatReport(report *ops.Report) string {
 			report.Errors,
 		)
 	}
+	if report.Mode == "lifecycle-run" {
+		return fmt.Sprintf("mode=%s candidates=%d deleted=%d skipped=%d current=%d noncurrent=%d mpu_aborts=%d reclaimed_bytes=%d warnings=%d errors=%d",
+			report.Mode,
+			report.Candidates,
+			report.Deleted,
+			report.Skipped,
+			report.CurrentExpirations,
+			report.NoncurrentExpirations,
+			report.MPUAborts,
+			report.Reclaimed,
+			report.Warnings,
+			report.Errors,
+		)
+	}
 	if report.Mode == "scrub" && report.EncryptedManifests > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d encrypted_manifests=%d encrypted_chunks=%d missing_keks=%d edek_unwrap_failures=%d aead_failures=%d errors=%d",
 			report.Mode,
@@ -455,6 +483,8 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
 	case "lifecycle-plan":
 		fmt.Println("Mode lifecycle-plan: writes a read-only plan for eligible bucket lifecycle actions.")
+	case "lifecycle-run":
+		fmt.Println("Mode lifecycle-run: executes a saved bucket lifecycle plan.")
 	case "sse-rewrap-plan":
 		fmt.Println("Mode sse-rewrap-plan: writes a redacted SSE-S3 KEK rewrap plan.")
 	case "sse-rewrap-run":

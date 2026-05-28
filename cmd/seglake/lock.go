@@ -186,7 +186,7 @@ func formatLockConflict(status heartbeatStatus) error {
 
 func isUnsafeLiveMode(mode string) bool {
 	switch mode {
-	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "sse-rewrap-run", "repl-pull", "repl-push", "repl-bootstrap", "db-integrity-check", "db-reindex":
+	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "lifecycle-run", "sse-rewrap-run", "repl-pull", "repl-push", "repl-bootstrap", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -287,7 +287,7 @@ func maintenanceState(dataDir string) (string, error) {
 
 func allowsUnsafeInMaintenance(mode string) bool {
 	switch mode {
-	case "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "sse-rewrap-run":
+	case "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "lifecycle-run", "sse-rewrap-run":
 		return true
 	default:
 		return false

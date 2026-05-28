@@ -14,7 +14,7 @@ import (
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "lifecycle-plan", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "lifecycle-plan", "lifecycle-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -23,14 +23,14 @@ func isOpsMode(mode string) bool {
 
 func requiresQuiescedOps(mode string) bool {
 	switch mode {
-	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "db-integrity-check", "db-reindex":
+	case "rebuild-index", "gc-run", "gc-rewrite", "gc-rewrite-run", "manifest-gc-run", "mpu-gc-run", "lifecycle-run", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
 	}
 }
 
-func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, replValidateDeep bool, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable, lifecycleBucket, lifecyclePlan, lifecycleAsOf string, lifecycleLimit int) (*ops.Report, error) {
+func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCompareDir string, replValidateDeep bool, fsckAllManifests, scrubAllManifests bool, gcMinAge time.Duration, gcForce bool, gcLiveThreshold float64, gcRewritePlanFile, gcRewriteFromPlan string, gcRewriteBps int64, gcPauseFile string, manifestGCTTL time.Duration, manifestGCPlan, manifestGCFromPlan string, manifestGCForce bool, mpuTTL time.Duration, mpuForce bool, gcGuardrails ops.GCGuardrails, mpuGuardrails ops.MPUGCGuardrails, dbReindexTable, lifecycleBucket, lifecyclePlan, lifecycleFromPlan string, lifecycleForce bool, lifecycleAsOf string, lifecycleLimit int) (*ops.Report, error) {
 	var (
 		report *ops.Report
 		err    error
@@ -133,6 +133,15 @@ func runOpsRequest(mode string, layout fs.Layout, metaPath, snapshotDir, replCom
 			if err := ops.WriteLifecyclePlan(lifecyclePlan, plan); err != nil {
 				return nil, err
 			}
+		}
+	case "lifecycle-run":
+		if lifecycleFromPlan == "" {
+			return nil, fmt.Errorf("lifecycle-run requires lifecycle_from_plan")
+		}
+		var plan *ops.LifecyclePlan
+		plan, err = ops.ReadLifecyclePlan(lifecycleFromPlan)
+		if err == nil {
+			report, err = ops.LifecycleRun(metaPath, plan, lifecycleForce)
 		}
 	case "support-bundle":
 		if snapshotDir == "" {

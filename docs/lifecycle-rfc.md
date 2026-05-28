@@ -135,8 +135,8 @@ Lifecycle execution is implemented as ops tooling first:
 
 - `lifecycle-plan` scans metadata and writes a JSON plan. This phase is
   implemented and is read-only.
-- `lifecycle-run` requires a saved plan plus `-lifecycle-force` and must run
-  only while maintenance is quiesced. Execution remains pending.
+- `lifecycle-run` requires a saved plan plus `-lifecycle-force` and runs only
+  while maintenance is quiesced.
 
 Flags:
 
@@ -145,8 +145,6 @@ Flags:
 - `-lifecycle-as-of <RFC3339>` optional deterministic evaluation time; default
   now.
 - `-lifecycle-limit <n>` optional maximum actions in one plan, default 10000.
-
-Planned run flags:
 
 - `-lifecycle-from-plan <path>` required for run input.
 - `-lifecycle-force` required for run.
@@ -346,8 +344,8 @@ flag can include full lifecycle XML when an operator needs it.
 - Broader: `make check`.
 - E2E smoke with `aws s3api put-bucket-lifecycle-configuration`,
   `get-bucket-lifecycle-configuration`, object writes with tags/prefixes,
-  and `lifecycle-plan`. Add `lifecycle-run` plus `list-object-versions` once
-  execution lands.
+  `lifecycle-plan`, `lifecycle-run`, `list-object-versions`, and
+  `list-multipart-uploads`.
 
 ## MVP Decisions
 

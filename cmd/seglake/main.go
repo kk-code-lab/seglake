@@ -206,6 +206,8 @@ type opsOptions struct {
 	mpuMaxReclaim       int64
 	lifecycleBucket     string
 	lifecyclePlan       string
+	lifecycleFromPlan   string
+	lifecycleForce      bool
 	lifecycleAsOf       string
 	lifecycleLimit      int
 	dbReindexTable      string
@@ -806,6 +808,8 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
 	fs.StringVar(&opts.lifecycleBucket, "lifecycle-bucket", "", "Lifecycle plan bucket filter")
 	fs.StringVar(&opts.lifecyclePlan, "lifecycle-plan", "", "Lifecycle plan output file")
+	fs.StringVar(&opts.lifecycleFromPlan, "lifecycle-from-plan", "", "Lifecycle plan input file")
+	fs.BoolVar(&opts.lifecycleForce, "lifecycle-force", false, "Lifecycle execute plan (required for lifecycle-run)")
 	fs.StringVar(&opts.lifecycleAsOf, "lifecycle-as-of", "", "Lifecycle plan evaluation timestamp (RFC3339, default now)")
 	fs.IntVar(&opts.lifecycleLimit, "lifecycle-limit", 10000, "Lifecycle plan maximum candidates")
 	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
@@ -938,7 +942,7 @@ func newReplBootstrapFlagSet() (*flag.FlagSet, *replBootstrapOptions) {
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "lifecycle-plan", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "lifecycle-plan", "lifecycle-run", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -1427,6 +1431,7 @@ func printGlobalHelp() {
 		"mpu-gc-plan",
 		"mpu-gc-run",
 		"lifecycle-plan",
+		"lifecycle-run",
 		"sse-rewrap-plan",
 		"sse-rewrap-run",
 		"support-bundle",
