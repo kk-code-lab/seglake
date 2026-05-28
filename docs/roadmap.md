@@ -12,7 +12,7 @@ Tag legend (order used below):
 - [research] Exploratory or validation work
 
 ## Later / Research
-- [ops][api] Implement lifecycle execution plan/run for stored bucket lifecycle configs.
+- [ops][api] Implement lifecycle-run execution for stored bucket lifecycle plans.
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
 - [perf][research] Evaluate variant C further under higher concurrency and on production-like hardware.
 - [perf][research] Consider read-path optimizations if virtual manifests increase read latency in real workloads.

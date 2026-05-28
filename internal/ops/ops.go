@@ -66,6 +66,12 @@ type Report struct {
 	EDEKUnwrapFailures      int             `json:"edek_unwrap_failures,omitempty"`
 	AEADFailures            int             `json:"aead_failures,omitempty"`
 	EncryptedMetadataErrors int             `json:"encrypted_metadata_errors,omitempty"`
+	BucketsScanned          int             `json:"buckets_scanned,omitempty"`
+	RulesScanned            int             `json:"rules_scanned,omitempty"`
+	SkippedRules            int             `json:"skipped_rules,omitempty"`
+	CurrentExpirations      int             `json:"current_expirations,omitempty"`
+	NoncurrentExpirations   int             `json:"noncurrent_expirations,omitempty"`
+	MPUAborts               int             `json:"mpu_aborts,omitempty"`
 }
 
 const reportSchemaVersion = 1

@@ -133,19 +133,23 @@ Delete the bucket lifecycle configuration and return `204 No Content`.
 
 Lifecycle execution is implemented as ops tooling first:
 
-- `lifecycle-plan` scans metadata and writes a JSON plan.
+- `lifecycle-plan` scans metadata and writes a JSON plan. This phase is
+  implemented and is read-only.
 - `lifecycle-run` requires a saved plan plus `-lifecycle-force` and must run
-  only while maintenance is quiesced.
+  only while maintenance is quiesced. Execution remains pending.
 
 Flags:
 
 - `-lifecycle-bucket <bucket>` optional bucket scope; default all buckets.
 - `-lifecycle-plan <path>` required for plan output.
-- `-lifecycle-from-plan <path>` required for run input.
 - `-lifecycle-as-of <RFC3339>` optional deterministic evaluation time; default
   now.
-- `-lifecycle-force` required for run.
 - `-lifecycle-limit <n>` optional maximum actions in one plan, default 10000.
+
+Planned run flags:
+
+- `-lifecycle-from-plan <path>` required for run input.
+- `-lifecycle-force` required for run.
 
 Plan JSON stores only metadata needed to revalidate candidates:
 
@@ -304,12 +308,17 @@ flag can include full lifecycle XML when an operator needs it.
 
 ### Planning and Run Tests
 
-- Current object expiration creates delete markers for versioned buckets.
-- Current object expiration removes null/current version for unversioned buckets.
-- Noncurrent version expiration deletes only noncurrent versions.
+- Current object expiration produces candidates for versioned buckets.
+- Current object expiration produces candidates for null/current unversioned
+  objects.
+- Noncurrent version expiration plans only noncurrent active versions.
 - Tag-filtered rules match only versions with matching tags.
 - Prefix-filtered rules match only keys under the prefix.
-- Abort incomplete MPU removes stale uploads and parts.
+- Abort incomplete MPU plans only stale active uploads.
+- `-lifecycle-limit` caps candidates deterministically and warns.
+- Plan JSON round trips with config fingerprints and candidate counts.
+- Plan generation does not mutate object versions, delete markers, MPU state,
+  tags, segments, or manifests.
 - Stale plan skips when config, current version, tags, or upload state changed.
 - Lifecycle run never removes segment files or manifest files directly.
 
@@ -333,11 +342,12 @@ flag can include full lifecycle XML when an operator needs it.
 
 ### Verification
 
-- Focused: `go test ./internal/meta ./internal/s3 ./internal/ops ./internal/repl`.
+- Focused: `go test ./internal/lifecycle ./internal/meta ./internal/s3 ./internal/ops ./internal/repl`.
 - Broader: `make check`.
 - E2E smoke with `aws s3api put-bucket-lifecycle-configuration`,
   `get-bucket-lifecycle-configuration`, object writes with tags/prefixes,
-  `lifecycle-plan`, `lifecycle-run`, then `list-object-versions`.
+  and `lifecycle-plan`. Add `lifecycle-run` plus `list-object-versions` once
+  execution lands.
 
 ## MVP Decisions
 

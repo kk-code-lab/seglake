@@ -204,6 +204,10 @@ type opsOptions struct {
 	mpuWarnReclaim      int64
 	mpuMaxUploads       int
 	mpuMaxReclaim       int64
+	lifecycleBucket     string
+	lifecyclePlan       string
+	lifecycleAsOf       string
+	lifecycleLimit      int
 	dbReindexTable      string
 	sseS3ActiveKey      string
 	sseS3Provider       string
@@ -800,6 +804,10 @@ func newOpsFlagSet() (*flag.FlagSet, *opsOptions) {
 	fs.Int64Var(&opts.mpuWarnReclaim, "mpu-warn-reclaim-bytes", 10<<30, "MPU GC warn when candidate bytes exceed this count (0 disables)")
 	fs.IntVar(&opts.mpuMaxUploads, "mpu-max-uploads", 0, "MPU GC hard limit on uploads (0 disables)")
 	fs.Int64Var(&opts.mpuMaxReclaim, "mpu-max-reclaim-bytes", 0, "MPU GC hard limit on candidate bytes (0 disables)")
+	fs.StringVar(&opts.lifecycleBucket, "lifecycle-bucket", "", "Lifecycle plan bucket filter")
+	fs.StringVar(&opts.lifecyclePlan, "lifecycle-plan", "", "Lifecycle plan output file")
+	fs.StringVar(&opts.lifecycleAsOf, "lifecycle-as-of", "", "Lifecycle plan evaluation timestamp (RFC3339, default now)")
+	fs.IntVar(&opts.lifecycleLimit, "lifecycle-limit", 10000, "Lifecycle plan maximum candidates")
 	fs.StringVar(&opts.dbReindexTable, "db-reindex-table", "", "DB reindex table/index name (optional)")
 	opts.sseS3Provider = envOrDefault("SEGLAKE_SSE_S3_PROVIDER", ssecrypto.ProviderLocal)
 	fs.StringVar(&opts.sseS3Provider, "sse-s3-provider", opts.sseS3Provider, "SSE-S3 key provider: local|vault-transit")
@@ -930,7 +938,7 @@ func newReplBootstrapFlagSet() (*flag.FlagSet, *replBootstrapOptions) {
 
 func isOpsMode(mode string) bool {
 	switch mode {
-	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
+	case "status", "fsck", "scrub", "snapshot", "rebuild-index", "gc-plan", "gc-run", "gc-rewrite", "gc-rewrite-plan", "gc-rewrite-run", "manifest-gc-plan", "manifest-gc-run", "mpu-gc-plan", "mpu-gc-run", "lifecycle-plan", "sse-rewrap-plan", "sse-rewrap-run", "support-bundle", "repl-validate", "db-integrity-check", "db-reindex":
 		return true
 	default:
 		return false
@@ -1418,6 +1426,7 @@ func printGlobalHelp() {
 		"manifest-gc-run",
 		"mpu-gc-plan",
 		"mpu-gc-run",
+		"lifecycle-plan",
 		"sse-rewrap-plan",
 		"sse-rewrap-run",
 		"support-bundle",

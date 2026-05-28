@@ -303,7 +303,7 @@ aws s3api delete-object-tagging --bucket demo --key a.txt \
 
 CopyObject preserves source tags by default (`x-amz-tagging-directive: COPY`) and replaces them when `x-amz-tagging-directive: REPLACE` is used with `x-amz-tagging`. Tags are SQLite metadata, not manifest content; `rebuild-index` from manifests alone cannot reconstruct tag rows.
 
-Bucket lifecycle configuration uses the S3 lifecycle subresource. This phase stores and replicates configuration only; lifecycle execution is not automatic until the lifecycle plan/run ops modes land.
+Bucket lifecycle configuration uses the S3 lifecycle subresource. Configuration is stored and replicated through metadata. `lifecycle-plan` can evaluate stored configs and write a read-only candidate plan; lifecycle execution is not automatic until `lifecycle-run` lands.
 ```
 cat > lifecycle.json <<'JSON'
 {
@@ -333,6 +333,21 @@ AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testsecret AWS_DEFAULT_REGION=us-ea
 ```
 
 Unsupported lifecycle actions such as transitions, noncurrent transitions, `ExpiredObjectDeleteMarker`, object-size filters, and storage class settings return `NotImplemented`. `AbortIncompleteMultipartUpload` accepts prefix-only or unfiltered rules; tag-filtered MPU abort rules are rejected until MPU tagging exists.
+
+Create a lifecycle plan from stored configs:
+
+```bash
+./build/seglake -mode lifecycle-plan -data-dir ./data \
+  -lifecycle-as-of 2026-06-30T00:00:00Z \
+  -lifecycle-plan ./lifecycle-plan.json
+
+./build/seglake -mode lifecycle-plan -data-dir ./data \
+  -lifecycle-bucket demo \
+  -lifecycle-limit 1000 \
+  -lifecycle-plan ./demo-lifecycle-plan.json
+```
+
+The plan includes only candidate metadata: action type, bucket/key, version or upload ID, matched rule ID, timestamps, size, and the normalized lifecycle config fingerprint. It does not delete objects, create delete markers, abort MPUs, remove tags, or touch manifests/segments. `-lifecycle-as-of` accepts RFC3339 timestamps or `YYYY-MM-DD`; omitting it uses the current time.
 
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
@@ -510,7 +525,7 @@ Safe (no prompt):
 
 | Mode | Note |
 | --- | --- |
-| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `manifest-gc-plan`, `mpu-gc-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `conflicts`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
+| `status`, `fsck`, `scrub`, `snapshot`, `gc-plan`, `gc-rewrite-plan`, `manifest-gc-plan`, `mpu-gc-plan`, `lifecycle-plan`, `sse-rewrap-plan`, `support-bundle`, `keys`, `bucket-policy`, `buckets`, `conflicts`, `maintenance`, `repl-validate` | Read-only or metadata changes only. |
 
 Unsafe (prompt required, maintenance quiesced):
 

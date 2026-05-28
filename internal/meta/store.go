@@ -3821,6 +3821,30 @@ ORDER BY created_at`, ts)
 	return out, nil
 }
 
+// ListLifecycleMultipartUploads returns active uploads for lifecycle planning.
+func (s *Store) ListLifecycleMultipartUploads(ctx context.Context, bucket string) (out []MultipartUpload, err error) {
+	if bucket == "" {
+		return nil, errors.New("meta: bucket required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT upload_id, bucket, key, created_at, state, content_type,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
+FROM multipart_uploads
+WHERE bucket=? AND state='ACTIVE'
+ORDER BY key ASC, upload_id ASC`, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var up MultipartUpload
+		if err := scan(&up.UploadID, &up.Bucket, &up.Key, &up.CreatedAt, &up.State, &up.ContentType, &up.EncryptionMode, &up.EncryptionAlgorithm, &up.EncryptionKeyIDs); err != nil {
+			return err
+		}
+		out = append(out, up)
+		return nil
+	})
+}
+
 // MultipartUploadStats returns part count and total bytes for an upload.
 func (s *Store) MultipartUploadStats(ctx context.Context, uploadID string) (int, int64, error) {
 	if uploadID == "" {
@@ -3898,6 +3922,7 @@ WHERE u.state='ACTIVE'`)
 
 // ObjectMeta describes the current object version metadata.
 type ObjectMeta struct {
+	Bucket              string
 	Key                 string
 	VersionID           string
 	ETag                string
@@ -3909,6 +3934,30 @@ type ObjectMeta struct {
 	EncryptionMode      string
 	EncryptionAlgorithm string
 	EncryptionKeyIDs    string
+}
+
+// ListLifecycleObjectVersions returns active planning inputs ordered by key and version recency.
+func (s *Store) ListLifecycleObjectVersions(ctx context.Context, bucket string) (out []ObjectMeta, err error) {
+	if bucket == "" {
+		return nil, errors.New("meta: bucket required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, key, version_id, etag, size, content_type, last_modified_utc, state, is_null,
+	COALESCE(encryption_mode,''), COALESCE(encryption_algorithm,''), COALESCE(encryption_key_ids,'')
+FROM versions
+WHERE bucket=? AND state IN ('ACTIVE','DELETE_MARKER')
+ORDER BY key ASC, hlc_ts DESC, site_id DESC, version_id DESC`, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return out, scanRows(rows, func(scan func(dest ...any) error) error {
+		var meta ObjectMeta
+		if err := scan(&meta.Bucket, &meta.Key, &meta.VersionID, &meta.ETag, &meta.Size, &meta.ContentType, &meta.LastModified, &meta.State, &meta.IsNull, &meta.EncryptionMode, &meta.EncryptionAlgorithm, &meta.EncryptionKeyIDs); err != nil {
+			return err
+		}
+		out = append(out, meta)
+		return nil
+	})
 }
 
 // ConflictMeta describes a conflicting object version.

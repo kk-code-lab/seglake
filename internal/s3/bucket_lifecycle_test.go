@@ -9,30 +9,32 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/kk-code-lab/seglake/internal/lifecycle"
 )
 
 const bucketLifecycleBody = `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>expire-logs</ID><Status>Enabled</Status><Filter><And><Prefix>logs/</Prefix><Tag><Key>env</Key><Value>dev</Value></Tag></And></Filter><Expiration><Days>30</Days></Expiration></Rule><Rule><ID>abort-mpu</ID><Status>Disabled</Status><Filter><Prefix>tmp/</Prefix></Filter><AbortIncompleteMultipartUpload><DaysAfterInitiation>7</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule></LifecycleConfiguration>`
 
 func TestBucketLifecycleParseAndNormalize(t *testing.T) {
 	t.Parallel()
-	xmlText, normalized, fingerprint, ruleIDs, err := parseBucketLifecycleXML(strings.NewReader(bucketLifecycleBody))
+	parsed, err := lifecycle.ParseXML(strings.NewReader(bucketLifecycleBody))
 	if err != nil {
-		t.Fatalf("parseBucketLifecycleXML: %v", err)
+		t.Fatalf("ParseXML: %v", err)
 	}
-	if xmlText != bucketLifecycleBody {
+	if parsed.XMLText != bucketLifecycleBody {
 		t.Fatalf("expected original XML preserved")
 	}
-	if fingerprint == "" || normalized == "" {
+	if parsed.Fingerprint == "" || parsed.NormalizedJSON == "" {
 		t.Fatalf("expected normalized config and fingerprint")
 	}
-	if ruleIDs != `["abort-mpu","expire-logs"]` {
-		t.Fatalf("unexpected rule ids: %s", ruleIDs)
+	if parsed.RuleIDsJSON != `["abort-mpu","expire-logs"]` {
+		t.Fatalf("unexpected rule ids: %s", parsed.RuleIDsJSON)
 	}
-	_, normalized2, fingerprint2, _, err := parseBucketLifecycleXML(strings.NewReader(strings.ReplaceAll(bucketLifecycleBody, "><", ">\n<")))
+	parsed2, err := lifecycle.ParseXML(strings.NewReader(strings.ReplaceAll(bucketLifecycleBody, "><", ">\n<")))
 	if err != nil {
-		t.Fatalf("parseBucketLifecycleXML formatted: %v", err)
+		t.Fatalf("ParseXML formatted: %v", err)
 	}
-	if normalized != normalized2 || fingerprint != fingerprint2 {
+	if parsed.NormalizedJSON != parsed2.NormalizedJSON || parsed.Fingerprint != parsed2.Fingerprint {
 		t.Fatalf("expected stable normalized fingerprint")
 	}
 }
@@ -94,14 +96,14 @@ func TestBucketLifecycleValidation(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, _, err := parseBucketLifecycleXML(strings.NewReader(tc.body))
+			_, err := lifecycle.ParseXML(strings.NewReader(tc.body))
 			if err == nil {
 				t.Fatalf("expected error")
 			}
-			if tc.unsupported && !errors.Is(err, errLifecycleUnsupportedFeature) {
+			if tc.unsupported && !errors.Is(err, lifecycle.ErrUnsupportedFeature) {
 				t.Fatalf("expected unsupported feature error, got %v", err)
 			}
-			if !tc.unsupported && errors.Is(err, errLifecycleUnsupportedFeature) {
+			if !tc.unsupported && errors.Is(err, lifecycle.ErrUnsupportedFeature) {
 				t.Fatalf("expected invalid argument style error, got %v", err)
 			}
 		})
@@ -133,7 +135,7 @@ func TestPutGetDeleteBucketLifecycle(t *testing.T) {
 	if getW.Code != http.StatusOK {
 		t.Fatalf("GET lifecycle status=%d body=%s", getW.Code, getW.Body.String())
 	}
-	var cfg lifecycleConfiguration
+	var cfg lifecycle.Configuration
 	if err := xml.Unmarshal(getW.Body.Bytes(), &cfg); err != nil {
 		t.Fatalf("decode lifecycle: %v", err)
 	}

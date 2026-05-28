@@ -61,6 +61,10 @@ func runOpsWithMode(mode string, opts *opsOptions) error {
 			MPUWarnReclaim:     opts.mpuWarnReclaim,
 			MPUMaxUploads:      opts.mpuMaxUploads,
 			MPUMaxReclaim:      opts.mpuMaxReclaim,
+			LifecycleBucket:    opts.lifecycleBucket,
+			LifecyclePlan:      opts.lifecyclePlan,
+			LifecycleAsOf:      opts.lifecycleAsOf,
+			LifecycleLimit:     opts.lifecycleLimit,
 		}
 		var report ops.Report
 		if err := client.postJSON("/admin/ops/run", req, &report); err != nil {
@@ -200,6 +204,28 @@ func runOps(mode, dataDir, metaPath, snapshotDir, replCompareDir string, fsckAll
 		}
 	case "mpu-gc-run":
 		report, err = ops.MPUGCRun(metaPath, mpuTTL, mpuForce, mpuGuardrails)
+	case "lifecycle-plan":
+		if opts == nil {
+			return fmt.Errorf("lifecycle-plan requires ops options")
+		}
+		if opts.lifecyclePlan == "" {
+			return fmt.Errorf("lifecycle-plan requires -lifecycle-plan")
+		}
+		asOf, parseErr := parseLifecycleAsOf(opts.lifecycleAsOf)
+		if parseErr != nil {
+			return parseErr
+		}
+		var plan *ops.LifecyclePlan
+		plan, report, err = ops.LifecyclePlanBuild(metaPath, ops.LifecyclePlanOptions{
+			Bucket: opts.lifecycleBucket,
+			AsOf:   asOf,
+			Limit:  opts.lifecycleLimit,
+		})
+		if err == nil {
+			if err := ops.WriteLifecyclePlan(opts.lifecyclePlan, plan); err != nil {
+				return err
+			}
+		}
 	case "sse-rewrap-plan", "sse-rewrap-run":
 		return fmt.Errorf("%s is local-only and must be handled before admin dispatch", mode)
 	case "support-bundle":
@@ -354,6 +380,21 @@ func formatReport(report *ops.Report) string {
 	if report.Mode == "manifest-gc-run" {
 		return fmt.Sprintf("mode=%s candidates=%d deleted=%d reclaimed_bytes=%d skipped=%d errors=%d", report.Mode, report.Candidates, report.Deleted, report.Reclaimed, report.SkippedManifests, report.Errors)
 	}
+	if report.Mode == "lifecycle-plan" {
+		return fmt.Sprintf("mode=%s buckets=%d rules=%d skipped_rules=%d candidates=%d current=%d noncurrent=%d mpu_aborts=%d estimated_bytes=%d warnings=%d errors=%d",
+			report.Mode,
+			report.BucketsScanned,
+			report.RulesScanned,
+			report.SkippedRules,
+			report.Candidates,
+			report.CurrentExpirations,
+			report.NoncurrentExpirations,
+			report.MPUAborts,
+			report.CandidateBytes,
+			report.Warnings,
+			report.Errors,
+		)
+	}
 	if report.Mode == "scrub" && report.EncryptedManifests > 0 {
 		return fmt.Sprintf("mode=%s manifests=%d segments=%d encrypted_manifests=%d encrypted_chunks=%d missing_keks=%d edek_unwrap_failures=%d aead_failures=%d errors=%d",
 			report.Mode,
@@ -412,6 +453,8 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 		fmt.Println("Mode mpu-gc-plan: lists multipart uploads eligible for cleanup.")
 	case "mpu-gc-run":
 		fmt.Println("Mode mpu-gc-run: deletes stale multipart uploads and parts.")
+	case "lifecycle-plan":
+		fmt.Println("Mode lifecycle-plan: writes a read-only plan for eligible bucket lifecycle actions.")
 	case "sse-rewrap-plan":
 		fmt.Println("Mode sse-rewrap-plan: writes a redacted SSE-S3 KEK rewrap plan.")
 	case "sse-rewrap-run":
@@ -450,4 +493,17 @@ func printModeHelp(mode string, fs *flag.FlagSet) {
 	fmt.Println("Flags:")
 	fs.SetOutput(os.Stdout)
 	fs.PrintDefaults()
+}
+
+func parseLifecycleAsOf(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return clock.RealClock{}.Now().UTC(), nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid -lifecycle-as-of %q: expected RFC3339 timestamp or YYYY-MM-DD", raw)
 }

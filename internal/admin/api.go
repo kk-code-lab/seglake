@@ -30,6 +30,10 @@ type OpsRunRequest struct {
 	MPUWarnReclaim     int64   `json:"mpu_warn_reclaim_bytes,omitempty"`
 	MPUMaxUploads      int     `json:"mpu_max_uploads,omitempty"`
 	MPUMaxReclaim      int64   `json:"mpu_max_reclaim_bytes,omitempty"`
+	LifecycleBucket    string  `json:"lifecycle_bucket,omitempty"`
+	LifecyclePlan      string  `json:"lifecycle_plan,omitempty"`
+	LifecycleAsOf      string  `json:"lifecycle_as_of,omitempty"`
+	LifecycleLimit     int     `json:"lifecycle_limit,omitempty"`
 }
 
 type KeysRequest struct {
