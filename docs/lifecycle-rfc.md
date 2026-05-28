@@ -100,6 +100,9 @@ Validation:
 - `Expiration` supports either `Days` or `Date`, but not both.
 - `NoncurrentVersionExpiration` supports `NoncurrentDays`.
 - `AbortIncompleteMultipartUpload` supports `DaysAfterInitiation`.
+- `AbortIncompleteMultipartUpload` rules with tag filters return
+  `400 InvalidArgument`; prefix-only and unfiltered MPU abort rules are
+  supported.
 - Unsupported elements such as `Transition`, `NoncurrentVersionTransition`,
   `ExpiredObjectDeleteMarker`, object-size filters, and storage class settings
   return `501 NotImplemented`.
@@ -131,7 +134,8 @@ Delete the bucket lifecycle configuration and return `204 No Content`.
 Lifecycle execution is implemented as ops tooling first:
 
 - `lifecycle-plan` scans metadata and writes a JSON plan.
-- `lifecycle-run` requires a saved plan plus `-lifecycle-force`.
+- `lifecycle-run` requires a saved plan plus `-lifecycle-force` and must run
+  only while maintenance is quiesced.
 
 Flags:
 
@@ -149,12 +153,14 @@ Plan JSON stores only metadata needed to revalidate candidates:
 - candidate action type;
 - bucket, key, version ID or upload ID;
 - rule ID;
+- normalized lifecycle configuration fingerprint;
 - object/version/upload timestamp used for eligibility;
 - current version marker or upload state for stale-plan detection.
 
 Run revalidates each candidate before mutating metadata:
 
-- skip if rule config changed since planning;
+- skip if the normalized lifecycle configuration fingerprint changed since
+  planning;
 - skip if current object/version/upload state changed;
 - skip if object tags no longer match the rule filter;
 - skip if candidate is no longer old enough at run time;
@@ -272,8 +278,8 @@ boundary.
 - errors.
 
 Support bundles may include lifecycle config counts and rule IDs, but should not
-dump tag values by default. A future explicit diagnostic flag can include full
-lifecycle XML when an operator needs it.
+dump full lifecycle XML or tag values by default. A future explicit diagnostic
+flag can include full lifecycle XML when an operator needs it.
 
 ## Test Plan
 
@@ -329,18 +335,20 @@ lifecycle XML when an operator needs it.
   `get-bucket-lifecycle-configuration`, object writes with tags/prefixes,
   `lifecycle-plan`, `lifecycle-run`, then `list-object-versions`.
 
-## Open Questions
+## MVP Decisions
 
-- Should `ExpiredObjectDeleteMarker` be rejected in MVP or accepted as a no-op
-  for SDK compatibility?
-- Should MPU abort support tag-filtered lifecycle rules only after MPU tagging
-  exists, or reject such rules up front?
-- Should lifecycle plans include full rule XML hashes for stale-plan detection
-  or a normalized config fingerprint only?
-- Should lifecycle-run be allowed outside maintenance, or should it require a
-  quiesced maintenance state because it can create many delete mutations?
-- Should support bundles include full lifecycle XML by default, or only counts
-  and rule IDs?
+- `ExpiredObjectDeleteMarker` is unsupported in MVP. Configurations containing
+  it return `501 NotImplemented`; it is not accepted as a no-op.
+- `AbortIncompleteMultipartUpload` with tag filters is rejected with
+  `400 InvalidArgument` until MPU tagging exists. Prefix-only and unfiltered
+  MPU abort rules remain supported.
+- Lifecycle plans store a normalized lifecycle configuration fingerprint for
+  stale-plan detection. The fingerprint is computed from the parsed rule model,
+  not raw XML formatting.
+- `lifecycle-run` is an unsafe live mode and requires maintenance to be
+  quiesced. `lifecycle-plan` remains safe/read-only.
+- Support bundles include only lifecycle counts and rule IDs by default. Full
+  lifecycle XML export is left to a future explicit diagnostic option.
 
 ## Assumptions
 
