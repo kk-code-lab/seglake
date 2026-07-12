@@ -11,6 +11,10 @@ Tag legend (order used below):
 - [repl] Replication and conflict handling
 - [research] Exploratory or validation work
 
+## Next
+
+- [integrity][ops] Implement the online-safe lifecycle executor and designated-site automatic scheduler described in `docs/lifecycle-scheduler-rfc.md`.
+
 ## Later / Research
 - [observability][perf] Add per-stage timing metrics for MPU complete (part manifest fetch, barrier wait, meta tx).
 - [perf][research] Evaluate variant C further under higher concurrency and on production-like hardware.

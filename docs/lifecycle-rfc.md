@@ -8,6 +8,10 @@ as a conservative metadata plan/run workflow. Lifecycle decides which objects,
 versions, and multipart uploads should be logically removed; existing segment
 and manifest GC remains responsible for reclaiming bytes later.
 
+Automatic recurring execution is specified separately in
+`docs/lifecycle-scheduler-rfc.md`. The current plan/run workflow remains the
+manual operational baseline.
+
 ## Source Basis
 
 - AWS S3 `PutBucketLifecycleConfiguration`, `GetBucketLifecycleConfiguration`,
