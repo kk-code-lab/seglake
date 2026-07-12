@@ -363,6 +363,108 @@ Execute a reviewed lifecycle plan:
 
 `lifecycle-run` revalidates each candidate before mutating metadata. Stale candidates are skipped when the lifecycle config fingerprint, current version/upload state, tags, or age eligibility no longer match. Current expiration creates delete markers for versioned/suspended buckets and deletes the current null version for disabled buckets. Noncurrent expiration deletes only the exact planned noncurrent version. MPU abort removes the upload and part metadata and emits a replicated `mpu_abort` oplog entry. Segment and manifest files are reclaimed later by existing GC/manifest-GC.
 
+### Lifecycle operational runbook
+
+Use the following sequence for a production lifecycle execution. Keep the plan,
+snapshot, and command output together as one operation record. Lifecycle plan
+files contain bucket names, object keys, version/upload IDs, rule IDs, sizes, and
+timestamps; protect them as operational metadata.
+
+Preflight:
+
+- Confirm the intended lifecycle config with `get-bucket-lifecycle-configuration`
+  and check `lifecycle_diagnostics` in `/v1/meta/stats`.
+- Confirm replication is healthy and peers are not materially behind. Lifecycle
+  mutations replicate, but the plan itself is local and is never replicated.
+- Ensure enough free space remains to defer physical GC until verification is
+  complete.
+- Optionally generate a live preliminary plan to estimate candidate counts and
+  logical bytes. Do not use that preliminary file for the final run if writes
+  continue afterward.
+
+Quiesce, snapshot, and build the final plan:
+
+```bash
+./build/seglake -mode maintenance -data-dir ./data \
+  -maintenance-action enable
+
+./build/seglake -mode maintenance -data-dir ./data \
+  -maintenance-action status
+
+./build/seglake -mode snapshot -data-dir ./data \
+  -snapshot-dir ./lifecycle-snapshot
+
+./build/seglake -mode lifecycle-plan -data-dir ./data \
+  -lifecycle-plan ./lifecycle-final.json
+```
+
+Do not continue until maintenance reports `quiesced`. Review the final plan's
+config fingerprints, action counts, bucket/key scope, rule IDs, version/upload
+IDs, and estimated logical bytes. An unexpectedly empty, unexpectedly large, or
+limit-truncated plan should be investigated and regenerated rather than run.
+
+Execute and capture the report:
+
+```bash
+./build/seglake -mode lifecycle-run -data-dir ./data \
+  -lifecycle-from-plan ./lifecycle-final.json \
+  -lifecycle-force | tee ./lifecycle-run.txt
+```
+
+Interpret the report as follows:
+
+- `deleted` is the number of lifecycle metadata actions applied, not files or
+  segment bytes physically removed.
+- `current`, `noncurrent`, and `mpu_aborts` show which action classes were
+  applied. Their sum should equal `deleted`.
+- `reclaimed_bytes` is the logical object/part size affected. Disk space is not
+  reclaimed until later GC workflows run.
+- `skipped` means the candidate became stale or no longer qualified: config,
+  current version, tags, timestamp, state, or MPU state changed. A small
+  understood count is safe; unexplained skips require a fresh plan.
+- `errors` are unexpected per-candidate failures. The run continues after such
+  failures, so any nonzero value means the operation was partially executed and
+  must be investigated before maintenance is disabled or GC starts.
+
+Verify before physical cleanup:
+
+- Use `list-object-versions` to confirm expected delete markers, retained current
+  versions, and removal of selected noncurrent versions.
+- Use `list-multipart-uploads` to confirm expected uploads were aborted.
+- Confirm unaffected prefixes and representative objects remain readable.
+- Check replication status and allow peers to apply lifecycle delete/MPU oplog
+  entries before reclaiming physical data.
+- Run `fsck` and normal `scrub`; use deep encrypted scrub only when the relevant
+  key providers are available and encrypted readability must also be verified.
+
+Only after those checks should the existing `gc-plan`/`gc-run` and
+`manifest-gc-plan`/`manifest-gc-run` workflows be used. Review their plans
+independently and retain their normal TTLs and guardrails. Lifecycle never
+authorizes immediate physical cleanup by itself.
+
+Finish the maintenance window:
+
+```bash
+./build/seglake -mode maintenance -data-dir ./data \
+  -maintenance-action disable
+```
+
+Recovery and reruns:
+
+- Changing or deleting the bucket lifecycle configuration prevents future plans
+  from using it but does not undo actions already applied.
+- Do not treat the saved lifecycle plan as a rollback artifact. Seglake has no
+  atomic lifecycle rollback operation.
+- If a run has errors, preserve maintenance and the pre-run snapshot, do not run
+  GC, diagnose the error samples, and generate a fresh plan from current metadata.
+- Re-running the same plan is idempotent for already applied or stale candidates,
+  which are skipped, but a fresh plan is preferred because it makes remaining
+  work explicit.
+- If an unintended action was applied, stop before GC and preserve the complete
+  data directory. Recover using the pre-run metadata/data backup or a verified
+  replica according to the incident procedure; restoring only `meta.db` can
+  create metadata/data or replication-history skew.
+
 Ops/maintenance flags:
 - `SEGLAKE_DATA_DIR` → `-data-dir` (modes: `ops`, `keys`, `bucket-policy`, `buckets`; when the server is running these use the admin socket + token in the data dir)
 - `SEGLAKE_SSE_S3_REWRAP_TARGET_KEY` → `-sse-s3-rewrap-target-key` (modes: `sse-rewrap-plan`, `sse-rewrap-run`)
