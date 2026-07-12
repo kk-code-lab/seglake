@@ -283,9 +283,12 @@ boundary.
 - candidates skipped after revalidation;
 - errors.
 
-Support bundles may include lifecycle config counts and rule IDs, but should not
-dump full lifecycle XML or tag values by default. A future explicit diagnostic
-flag can include full lifecycle XML when an operator needs it.
+Support bundles include `lifecycle-diagnostics.json` with lifecycle config and
+rule counts plus per-bucket rule IDs and update times. `/v1/meta/stats` exposes
+the same redacted summary. Neither output includes lifecycle XML, normalized
+rules, filters, tag values, actions, or configuration fingerprints. A future
+explicit diagnostic flag can include full lifecycle XML when an operator needs
+it.
 
 ## Test Plan
 
@@ -359,8 +362,9 @@ flag can include full lifecycle XML when an operator needs it.
   not raw XML formatting.
 - `lifecycle-run` is an unsafe live mode and requires maintenance to be
   quiesced. `lifecycle-plan` remains safe/read-only.
-- Support bundles include only lifecycle counts and rule IDs by default. Full
-  lifecycle XML export is left to a future explicit diagnostic option.
+- Stats and support bundles include only redacted lifecycle counts, bucket names,
+  rule IDs, and update times by default. Full lifecycle XML export is left to a
+  future explicit diagnostic option.
 
 ## Assumptions
 

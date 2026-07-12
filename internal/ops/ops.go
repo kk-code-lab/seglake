@@ -549,6 +549,9 @@ func SupportBundle(layout fs.Layout, metaPath string, outDir string) (*Report, e
 					"tag_rows":        rows,
 				})
 			}
+			if lifecycleDiagnostics, err := store.GetLifecycleDiagnostics(context.Background()); err == nil {
+				_ = writeJSON(filepath.Join(outDir, "lifecycle-diagnostics.json"), lifecycleDiagnostics)
+			}
 			_ = store.Close()
 		}
 	}

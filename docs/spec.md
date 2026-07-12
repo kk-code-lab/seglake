@@ -283,7 +283,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - `scrub` — verify stored chunk hashes; damaged -> `DAMAGED`. With `-scrub-deep-encrypted`, SSE encrypted chunks are also decrypted far enough to validate DEK unwrap and AEAD tags, requiring the referenced local KEKs or Vault provider access.
 - `rebuild-index` — rebuild meta from manifests. Object tags are SQLite-only metadata and are not reconstructable from manifests in this MVP.
 - `snapshot` — copy meta.db(+wal/shm) + report.
-- `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics + aggregate object-tag counts.
+- `support-bundle` — snapshot + fsck + scrub + shallow redacted SSE diagnostics + aggregate object-tag counts + redacted lifecycle diagnostics.
 - `buckets` — manage bucket entries (admin; bypasses S3 API).
 - `repl-validate` — compare manifests and versions (live + all versions) between two data dirs. With `-repl-validate-deep`, also verify that referenced chunk bytes exist and match manifest hashes on both sides.
 - `db-integrity-check` — run SQLite integrity_check on meta.db.
@@ -314,6 +314,7 @@ Seglake is a simple, S3-compatible (minimum useful for SDK/tooling) object store
 - replication_bytes_in_total: total bytes pulled by replication (manifests + chunk data),
 - conflict_hotspots: top current conflict keys derived from `versions WHERE state='CONFLICT'`, ordered by conflict count, then bucket/key,
 - sse_diagnostics: redacted metadata-only summary with plaintext/encrypted active version counts, damaged encrypted version count, counts by encryption mode, algorithm, key ID, and short EDEK fingerprint prefix. It is derived from SQLite version summaries and does not read manifests, decrypt objects, require KEKs/Vault, or expose KEKs, DEKs, raw EDEKs, Vault tokens, or nonce bytes.
+- lifecycle_diagnostics: metadata-only summary with configured bucket count, total rule count, and per-bucket bucket name, rule count, rule IDs, and update time. It does not expose lifecycle XML, normalized rules, filters, tag values, actions, or configuration fingerprints.
 
 ### 5.3 Crash harness
 - Integration test (optional): `go test -tags crashharness ./internal/ops -run TestCrashHarness`

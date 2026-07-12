@@ -4387,26 +4387,27 @@ type ReportOps struct {
 
 // Stats aggregates minimal metrics for /v1/meta/stats.
 type Stats struct {
-	Objects            int64             `json:"objects"`
-	Segments           int64             `json:"segments"`
-	BytesLive          int64             `json:"bytes_live"`
-	LastFsckAt         string            `json:"last_fsck_at,omitempty"`
-	LastFsckErrors     int               `json:"last_fsck_errors,omitempty"`
-	LastScrubAt        string            `json:"last_scrub_at,omitempty"`
-	LastScrubErrors    int               `json:"last_scrub_errors,omitempty"`
-	LastGCAt           string            `json:"last_gc_at,omitempty"`
-	LastGCErrors       int               `json:"last_gc_errors,omitempty"`
-	LastGCReclaimed    int64             `json:"last_gc_reclaimed_bytes,omitempty"`
-	LastGCRewritten    int64             `json:"last_gc_rewritten_bytes,omitempty"`
-	LastGCNewSegments  int               `json:"last_gc_new_segments,omitempty"`
-	LastMPUGCAt        string            `json:"last_mpu_gc_at,omitempty"`
-	LastMPUGCErrors    int               `json:"last_mpu_gc_errors,omitempty"`
-	LastMPUGCDeleted   int               `json:"last_mpu_gc_deleted,omitempty"`
-	LastMPUGCReclaimed int64             `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
-	ReplConflicts      int64             `json:"repl_conflicts,omitempty"`
-	ReplBytesInTotal   int64             `json:"repl_bytes_in_total,omitempty"`
-	ConflictHotspots   []ConflictHotspot `json:"conflict_hotspots,omitempty"`
-	SSEDiagnostics     SSEDiagnostics    `json:"sse_diagnostics"`
+	Objects              int64                `json:"objects"`
+	Segments             int64                `json:"segments"`
+	BytesLive            int64                `json:"bytes_live"`
+	LastFsckAt           string               `json:"last_fsck_at,omitempty"`
+	LastFsckErrors       int                  `json:"last_fsck_errors,omitempty"`
+	LastScrubAt          string               `json:"last_scrub_at,omitempty"`
+	LastScrubErrors      int                  `json:"last_scrub_errors,omitempty"`
+	LastGCAt             string               `json:"last_gc_at,omitempty"`
+	LastGCErrors         int                  `json:"last_gc_errors,omitempty"`
+	LastGCReclaimed      int64                `json:"last_gc_reclaimed_bytes,omitempty"`
+	LastGCRewritten      int64                `json:"last_gc_rewritten_bytes,omitempty"`
+	LastGCNewSegments    int                  `json:"last_gc_new_segments,omitempty"`
+	LastMPUGCAt          string               `json:"last_mpu_gc_at,omitempty"`
+	LastMPUGCErrors      int                  `json:"last_mpu_gc_errors,omitempty"`
+	LastMPUGCDeleted     int                  `json:"last_mpu_gc_deleted,omitempty"`
+	LastMPUGCReclaimed   int64                `json:"last_mpu_gc_reclaimed_bytes,omitempty"`
+	ReplConflicts        int64                `json:"repl_conflicts,omitempty"`
+	ReplBytesInTotal     int64                `json:"repl_bytes_in_total,omitempty"`
+	ConflictHotspots     []ConflictHotspot    `json:"conflict_hotspots,omitempty"`
+	SSEDiagnostics       SSEDiagnostics       `json:"sse_diagnostics"`
+	LifecycleDiagnostics LifecycleDiagnostics `json:"lifecycle_diagnostics"`
 }
 
 // ConflictHotspot summarizes current conflict concentration for one object key.
@@ -4426,6 +4427,21 @@ type SSEDiagnostics struct {
 	ByAlgorithm              map[string]int64 `json:"by_algorithm,omitempty"`
 	ByKeyID                  map[string]int64 `json:"by_key_id,omitempty"`
 	ByEDEKFingerprintPrefix  map[string]int64 `json:"by_edek_fingerprint_prefix,omitempty"`
+}
+
+// LifecycleDiagnostics summarizes bucket lifecycle configuration without exposing rule filters or actions.
+type LifecycleDiagnostics struct {
+	ConfiguredBuckets int64                       `json:"configured_buckets"`
+	TotalRules        int64                       `json:"total_rules"`
+	Buckets           []BucketLifecycleDiagnostic `json:"buckets,omitempty"`
+}
+
+// BucketLifecycleDiagnostic is the redacted lifecycle summary for one bucket.
+type BucketLifecycleDiagnostic struct {
+	Bucket    string   `json:"bucket"`
+	RuleCount int      `json:"rule_count"`
+	RuleIDs   []string `json:"rule_ids,omitempty"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 // ReplStat describes replication state and lag per remote.
@@ -4470,6 +4486,11 @@ func (s *Store) GetStats(ctx context.Context) (*Stats, error) {
 		return nil, err
 	}
 	stats.SSEDiagnostics = *sseDiagnostics
+	lifecycleDiagnostics, err := s.GetLifecycleDiagnostics(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats.LifecycleDiagnostics = *lifecycleDiagnostics
 	_ = s.db.QueryRowContext(ctx, `
 SELECT finished_at, errors
 FROM ops_runs
@@ -4594,6 +4615,47 @@ WHERE state='ACTIVE' AND COALESCE(encryption_mode,'')<>''`)
 		for _, fingerprint := range splitSummaryCSV(fingerprints) {
 			diag.ByEDEKFingerprintPrefix[edekFingerprintPrefix(fingerprint)]++
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return diag, nil
+}
+
+// GetLifecycleDiagnostics returns lifecycle configuration summaries without XML or normalized rule content.
+func (s *Store) GetLifecycleDiagnostics(ctx context.Context) (*LifecycleDiagnostics, error) {
+	diag := &LifecycleDiagnostics{Buckets: []BucketLifecycleDiagnostic{}}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket, normalized_json, rule_ids, updated_at
+FROM bucket_lifecycle
+ORDER BY bucket`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var bucket, normalizedJSON, ruleIDsJSON, updatedAt string
+		if err := rows.Scan(&bucket, &normalizedJSON, &ruleIDsJSON, &updatedAt); err != nil {
+			return nil, err
+		}
+		var normalized struct {
+			Rules []json.RawMessage `json:"rules"`
+		}
+		if err := json.Unmarshal([]byte(normalizedJSON), &normalized); err != nil {
+			return nil, fmt.Errorf("meta: decode lifecycle diagnostics for bucket %q: %w", bucket, err)
+		}
+		var ruleIDs []string
+		if err := json.Unmarshal([]byte(ruleIDsJSON), &ruleIDs); err != nil {
+			return nil, fmt.Errorf("meta: decode lifecycle rule IDs for bucket %q: %w", bucket, err)
+		}
+		diag.ConfiguredBuckets++
+		diag.TotalRules += int64(len(normalized.Rules))
+		diag.Buckets = append(diag.Buckets, BucketLifecycleDiagnostic{
+			Bucket:    bucket,
+			RuleCount: len(normalized.Rules),
+			RuleIDs:   ruleIDs,
+			UpdatedAt: updatedAt,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

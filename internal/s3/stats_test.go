@@ -87,6 +87,50 @@ func TestStatsIncludesRedactedSSEDiagnostics(t *testing.T) {
 	}
 }
 
+func TestStatsIncludesRedactedLifecycleDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	store, err := meta.Open(filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatalf("Open meta: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	if err := store.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := store.SetBucketLifecycle(ctx, meta.BucketLifecycleConfig{
+		Bucket:            "bucket",
+		XML:               `<LifecycleConfiguration><Rule><ID>expire</ID><Filter><Prefix>secret-prefix/</Prefix></Filter></Rule></LifecycleConfiguration>`,
+		NormalizedJSON:    `{"rules":[{"id":"expire","status":"Enabled","filter":{"prefix":"secret-prefix/"}}]}`,
+		ConfigFingerprint: "full-secret-fingerprint",
+		RuleIDs:           `["expire"]`,
+	}); err != nil {
+		t.Fatalf("SetBucketLifecycle: %v", err)
+	}
+
+	handler := &Handler{Meta: store, Metrics: NewMetrics()}
+	rec := httptest.NewRecorder()
+	handler.handleStats(ctx, rec, "req-1", "/v1/meta/stats")
+
+	body := rec.Body.String()
+	var resp statsResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if resp.LifecycleDiagnostics.ConfiguredBuckets != 1 || resp.LifecycleDiagnostics.TotalRules != 1 {
+		t.Fatalf("unexpected lifecycle diagnostics: %+v", resp.LifecycleDiagnostics)
+	}
+	if len(resp.LifecycleDiagnostics.Buckets) != 1 || resp.LifecycleDiagnostics.Buckets[0].RuleIDs[0] != "expire" {
+		t.Fatalf("unexpected bucket diagnostics: %+v", resp.LifecycleDiagnostics.Buckets)
+	}
+	for _, forbidden := range []string{"secret-prefix/", "full-secret-fingerprint", "LifecycleConfiguration"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("stats leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
 func TestStatsIncludesConflictHotspots(t *testing.T) {
 	dir := t.TempDir()
 	store, err := meta.Open(filepath.Join(dir, "meta.db"))

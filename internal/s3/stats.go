@@ -49,6 +49,7 @@ type statsResponse struct {
 	GCTrends                []meta.GCTrend              `json:"gc_trends,omitempty"`
 	Replication             []meta.ReplStat             `json:"replication,omitempty"`
 	SSEDiagnostics          meta.SSEDiagnostics         `json:"sse_diagnostics"`
+	LifecycleDiagnostics    meta.LifecycleDiagnostics   `json:"lifecycle_diagnostics"`
 }
 
 func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, requestID string, resource string) {
@@ -129,6 +130,7 @@ func (h *Handler) handleStats(ctx context.Context, w http.ResponseWriter, reques
 		GCTrends:                gcTrends,
 		Replication:             replStats,
 		SSEDiagnostics:          stats.SSEDiagnostics,
+		LifecycleDiagnostics:    stats.LifecycleDiagnostics,
 	}
 	if h.Metrics != nil {
 		reqs, inflight, bytesIn, bytesOut, replayDetected, latency, bucketReqs, bucketLatency, keyReqs, keyLatency, maintTransitions := h.Metrics.Snapshot()

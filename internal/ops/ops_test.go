@@ -197,6 +197,57 @@ func TestSupportBundleWritesObjectTagCountsOnly(t *testing.T) {
 	}
 }
 
+func TestSupportBundleWritesRedactedLifecycleDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.db")
+	store, err := meta.Open(metaPath)
+	if err != nil {
+		t.Fatalf("meta.Open: %v", err)
+	}
+	ctx := context.Background()
+	if err := store.CreateBucket(ctx, "bucket"); err != nil {
+		_ = store.Close()
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := store.SetBucketLifecycle(ctx, meta.BucketLifecycleConfig{
+		Bucket:            "bucket",
+		XML:               `<LifecycleConfiguration><Rule><ID>expire</ID><Filter><Prefix>private/</Prefix></Filter></Rule></LifecycleConfiguration>`,
+		NormalizedJSON:    `{"rules":[{"id":"expire","status":"Enabled","filter":{"prefix":"private/"}}]}`,
+		ConfigFingerprint: "raw-fingerprint",
+		RuleIDs:           `["expire"]`,
+	}); err != nil {
+		_ = store.Close()
+		t.Fatalf("SetBucketLifecycle: %v", err)
+	}
+	_ = store.Close()
+
+	layout := fs.NewLayout(filepath.Join(dir, "objects"))
+	outDir := filepath.Join(dir, "bundle")
+	if _, err := SupportBundle(layout, metaPath, outDir); err != nil {
+		t.Fatalf("SupportBundle: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(outDir, "lifecycle-diagnostics.json"))
+	if err != nil {
+		t.Fatalf("read lifecycle-diagnostics.json: %v", err)
+	}
+	var diag meta.LifecycleDiagnostics
+	if err := json.Unmarshal(body, &diag); err != nil {
+		t.Fatalf("decode lifecycle diagnostics: %v", err)
+	}
+	if diag.ConfiguredBuckets != 1 || diag.TotalRules != 1 || len(diag.Buckets) != 1 {
+		t.Fatalf("unexpected lifecycle diagnostics: %+v", diag)
+	}
+	if diag.Buckets[0].Bucket != "bucket" || diag.Buckets[0].RuleIDs[0] != "expire" {
+		t.Fatalf("unexpected bucket diagnostics: %+v", diag.Buckets[0])
+	}
+	text := string(body)
+	for _, forbidden := range []string{"private/", "raw-fingerprint", "LifecycleConfiguration", "normalized_json"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("support bundle leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
 func TestFsckReportsInvalidFooter(t *testing.T) {
 	dir := t.TempDir()
 	layout := fs.NewLayout(filepath.Join(dir, "data"))
